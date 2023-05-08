@@ -3,10 +3,10 @@ use std::time::Duration as TimeDuration;
 use chrono::{Duration, NaiveDateTime, Timelike, Utc};
 use polars::prelude::{Duration as PolarsDuration, *};
 use reqwest::Client;
-use tokio::time::sleep;
+use tokio::time::{sleep};
 
 use super::{
-    constants::{MINUTES_IN_DAY, SECONDS_IN_MIN},
+    constants::{MINUTES_IN_DAY, NANOS_IN_SECOND, SECONDS_IN_MIN},
     errors::Error,
     models::{HttpKlineResponse, TickData, WsKlineResponse},
 };
@@ -23,6 +23,17 @@ pub fn get_symbol_ohlc_cols(symbol: &String) -> (String, String, String, String)
     return (open_col, high_col, close_col, low_col);
 }
 
+pub fn get_symbol_window_ohlc_cols(
+    symbol: &String,
+    window: &String,
+) -> (String, String, String, String) {
+    let open_col = format!("{}_{}_open", symbol, window);
+    let high_col = format!("{}_{}_high", symbol, window);
+    let close_col = format!("{}_{}_close", symbol, window);
+    let low_col = format!("{}_{}_low", symbol, window);
+    return (open_col, high_col, close_col, low_col);
+}
+
 pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
     lfs: L,
     filter_datetime: NaiveDateTime,
@@ -30,7 +41,7 @@ pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
     let result_lf = concat(lfs, true, true)?;
 
     let result_lf = result_lf.filter(
-        col("date")
+        col("start_time")
             .dt()
             .datetime()
             .cast(DataType::Datetime(TimeUnit::Milliseconds, None))
@@ -49,7 +60,7 @@ pub fn consolidate_tick_data_into_lf(
     for symbol in symbols {
         let mut columns: Vec<Series> = vec![];
 
-        let date_col = "date";
+        let date_col = "start_time";
         let (open_col, high_col, close_col, low_col) = get_symbol_ohlc_cols(symbol);
         let mut dates = vec![];
         let mut opens = vec![];
@@ -122,7 +133,7 @@ pub fn resample_tick_data_secs_to_min(
     let mut base_df_series: Vec<Series> = vec![];
     for column in columns_names {
         let series = match column {
-            date_col if date_col == "date" => Series::new(column, &interval_ticks),
+            date_col if date_col == "start_time" => Series::new(column, &interval_ticks),
             _ => Series::new(column, &empty_float_ticks.clone()),
         };
         base_df_series.push(series);
@@ -181,7 +192,7 @@ pub fn resample_tick_data_to_min(
     let resampled_data = tick_data
         .clone()
         .sort(
-            "date",
+            "start_time",
             SortOptions {
                 descending: false,
                 nulls_last: false,
@@ -192,9 +203,9 @@ pub fn resample_tick_data_to_min(
             vec![],
             DynamicGroupOptions {
                 start_by: StartBy::DataPoint,
-                index_column: "date".into(),
-                every: PolarsDuration::new(1_000_000_000 * bar_length_in_seconds),
-                period: PolarsDuration::new(1_000_000_000 * bar_length_in_seconds),
+                index_column: "start_time".into(),
+                every: PolarsDuration::new(NANOS_IN_SECOND * bar_length_in_seconds),
+                period: PolarsDuration::new(NANOS_IN_SECOND * bar_length_in_seconds),
                 offset: PolarsDuration::new(0),
                 truncate: true,
                 include_boundaries: false,
@@ -252,6 +263,12 @@ pub async fn get_historical_tick_data(
 
         if value == timestamp_intervals.last().unwrap() {
             sleep(fetch_offset).await;
+            // let start = Instant::now();
+            // let sleep_duration = Duration::seconds(fetch_offset);
+            // while Instant::now().duration_since(start) < fetch_offset {
+            //     println!("Sleeping...");
+            //     sleep(Duration::from_secs(1)).await;
+            // }
         }
         for symbol in symbols {
             let fetched_klines = fetch_data(http, symbol, &start, &end, limit).await?;

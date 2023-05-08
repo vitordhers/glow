@@ -5,6 +5,7 @@ use serde::{Serialize, Deserialize};
 pub mod strategy;
 pub mod performance;
 pub mod indicator;
+pub mod market_data;
 
 use super::enums::request_method::RequestMethod;
 

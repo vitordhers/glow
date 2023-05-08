@@ -2138,6 +2138,7 @@ dependencies = [
  "futures-util",
  "log",
  "polars",
+ "polars-lazy",
  "reqwest",
  "serde",
  "serde_json",
