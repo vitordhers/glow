@@ -6,6 +6,8 @@ pub mod strategy;
 pub mod performance;
 pub mod indicator;
 pub mod market_data;
+pub mod signal;
+pub mod observer;
 
 use super::enums::request_method::RequestMethod;
 
@@ -63,7 +65,7 @@ pub struct WsKlineResponse {
     pub k: WsKlineResponseData,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TickData {
     pub symbol: String,
     pub date: NaiveDateTime,

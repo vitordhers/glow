@@ -19,11 +19,11 @@ pub struct MarketDataFeed<'a> {
     symbols: &'a [String; 2],
     bar_length: Duration,
     last_bar: NaiveDateTime,
-    tick_data: LazyFrame,
     tick_data_schema: Schema,
     log_level: LogLevel,
     http: Client,
-    fetch_offset: TimeDuration,
+    initial_fetch_delay: TimeDuration,
+    initial_fetch_offset: i64, // offsets number of minutes from indicators, so that we can have information for the full previous day
     socket: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     strategy: &'a mut Strategy,
 }
@@ -32,12 +32,10 @@ impl MarketDataFeed<'_> {
     pub fn new<'a>(
         symbols: &'a [String; 2],
         bar_length: i64,
+        initial_fetch_offset: i64,
         strategy: &'a mut Strategy,
         log_level: LogLevel,
     ) -> MarketDataFeed<'a> {
-        env::set_var("POLARS_FMT_MAX_COLS", "20"); // maximum number of columns shown when formatting DataFrames.
-        env::set_var("POLARS_FMT_MAX_ROWS", "60");
-
         let mut schema_fields: Vec<Field> = vec![];
 
         schema_fields.push(Field::new(
@@ -53,8 +51,7 @@ impl MarketDataFeed<'_> {
             schema_fields.push(Field::new(close_col.as_str(), DataType::Float64));
             schema_fields.push(Field::new(low_col.as_str(), DataType::Float64));
         }
-        let tick_data_schema = Schema::from(schema_fields.into_iter());
-        let tick_data = DataFrame::from(&tick_data_schema).lazy();
+        let tick_data_schema = Schema::from_iter(schema_fields.into_iter());
 
         let bar_length = Duration::seconds(bar_length);
         let current_datetime: NaiveDateTime = current_datetime();
@@ -71,9 +68,9 @@ impl MarketDataFeed<'_> {
             last_bar,
             log_level,
             socket: None,
-            tick_data,
             http: Client::new(),
-            fetch_offset: TimeDuration::from_secs(seconds_to_next_full_minute as u64),
+            initial_fetch_delay: TimeDuration::from_secs(seconds_to_next_full_minute as u64),
+            initial_fetch_offset,
             tick_data_schema,
             strategy,
         }
@@ -142,7 +139,8 @@ impl MarketDataFeed<'_> {
             &self.symbols,
             &self.last_bar,
             limit,
-            self.fetch_offset,
+            self.initial_fetch_delay,
+            self.initial_fetch_offset,
         )
         .await?;
 
@@ -152,17 +150,11 @@ impl MarketDataFeed<'_> {
             &self.tick_data_schema,
         )?;
 
-        self.tick_data = resample_tick_data_to_min(
-            &self.symbols,
-            &self.bar_length,
-            &new_tick_data_lf,
-            ClosedWindow::Left,
-        )?;
+        let mut tick_data_lf =
+            resample_tick_data_to_min(&self.symbols, &self.bar_length, new_tick_data_lf)?;
 
         // let mut strategy = self.strategy.borrow_mut();
-        self.strategy
-            .calculate_initial_positions(&mut self.tick_data, &self.symbols)
-            .unwrap();
+        self.strategy.set_benchmark(tick_data_lf.clone(), &self.last_bar, &self.symbols[1]).unwrap();
 
         println!("Listen events fetch finished {:?}", current_datetime());
 
@@ -202,7 +194,7 @@ impl MarketDataFeed<'_> {
                         )?;
 
                         let filter_datetime = self.last_bar - Duration::days(1);
-                        self.tick_data = concat_and_clean_lazyframes([self.tick_data.clone(), new_tick_data_lf], filter_datetime)?;
+                        tick_data_lf = concat_and_clean_lazyframes([tick_data_lf, new_tick_data_lf], filter_datetime)?;
                         self.last_bar = last_tick_datetime;
                         tick_data_payload = clear_tick_data_to_last_bar(tick_data_payload, &self.last_bar);
                     }

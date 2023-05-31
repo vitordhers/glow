@@ -3,7 +3,8 @@ use std::time::Duration as TimeDuration;
 use chrono::{Duration, NaiveDateTime, Timelike, Utc};
 use polars::prelude::{Duration as PolarsDuration, *};
 use reqwest::Client;
-use tokio::time::{sleep};
+use std::env::{self};
+use tokio::time::sleep;
 
 use super::{
     constants::{MINUTES_IN_DAY, NANOS_IN_SECOND, SECONDS_IN_MIN},
@@ -14,6 +15,27 @@ use super::{
 pub fn current_datetime() -> NaiveDateTime {
     Utc::now().naive_utc().with_nanosecond(0).unwrap()
 }
+
+/// Gets Open, High, Low and Close labels for symbol.
+///
+/// # Arguments
+///
+/// * `symbol` - Columns symbol.
+///
+/// # Examples
+///
+/// ```
+/// let result = get_symbol_ohlc_cols("BTC_USDT");
+/// assert_eq!(result, ("BTCUSDT_open", "BTCUSDT_high", "BTCUSDT_close", "BTCUSDT_low"));
+/// ```
+/// 
+/// # Returns
+///
+/// * `Open symbol` - Open symbol column.
+/// * `High symbol` - High symbol column.
+/// * `Close symbol` - Close symbol column.
+/// * `Low symbol` - Low symbol column.
+///
 
 pub fn get_symbol_ohlc_cols(symbol: &String) -> (String, String, String, String) {
     let open_col = format!("{}_open", symbol);
@@ -56,57 +78,57 @@ pub fn consolidate_tick_data_into_lf(
     tick_data: &Vec<TickData>,
     tick_data_schema: &Schema,
 ) -> Result<LazyFrame, Error> {
-    let mut dfs = vec![];
-    for symbol in symbols {
-        let mut columns: Vec<Series> = vec![];
+    let mut columns: Vec<Series> = vec![];
+    let mut dates = vec![];
+    let mut empty_ticks: Vec<Option<f64>> = vec![];
 
-        let date_col = "start_time";
+    for tick in tick_data {
+        if dates.contains(&tick.date) {
+            continue;
+        };
+        dates.push(tick.date);
+        empty_ticks.push(None::<f64>);
+    }
+
+    let date_col = "start_time";
+    columns.push(Series::new(date_col, &dates));
+
+    for symbol in symbols {
         let (open_col, high_col, close_col, low_col) = get_symbol_ohlc_cols(symbol);
-        let mut dates = vec![];
+
         let mut opens = vec![];
         let mut highs = vec![];
         let mut closes = vec![];
         let mut lows = vec![];
-
-        let mut empty_ticks: Vec<Option<f64>> = vec![];
 
         let symbol_ticks: Vec<TickData> = tick_data
             .iter()
             .filter(|&tick| tick.symbol == symbol.to_string())
             .cloned()
             .collect();
-        // println!("SYMBOL TICKS {:?}", symbol_ticks);
+
         for tick in symbol_ticks {
-            dates.push(tick.date);
             opens.push(tick.open);
             highs.push(tick.high);
             closes.push(tick.close);
             lows.push(tick.low);
-            empty_ticks.push(None::<f64>);
         }
         for (field, _) in tick_data_schema.iter() {
             let result = match field {
-                _date_col if _date_col == date_col => Series::new(field, &dates),
                 _open_col if _open_col == open_col.as_str() => Series::new(field, &opens),
                 _high_col if _high_col == high_col.as_str() => Series::new(field, &highs),
                 _close_col if _close_col == close_col.as_str() => Series::new(field, &closes),
                 _low_col if _low_col == low_col.as_str() => Series::new(field, &lows),
-                _ => Series::new(field, &empty_ticks),
+                _ => continue,
             };
             columns.push(result);
         }
-        let df = DataFrame::new(columns)?;
-        dfs.push(df);
     }
-    let new_df = concat(
-        dfs.iter()
-            .map(|df| df.clone().lazy())
-            .collect::<Vec<LazyFrame>>(),
-        true,
-        true,
-    )?;
 
-    Ok(new_df)
+    let new_df = DataFrame::new(columns)?;
+    let new_lf = new_df.clone().lazy();
+
+    Ok(new_lf)
 }
 
 pub fn resample_tick_data_secs_to_min(
@@ -141,25 +163,8 @@ pub fn resample_tick_data_secs_to_min(
 
     let base_df = DataFrame::new(base_df_series).unwrap();
 
-    let mut agg_expressions = vec![];
-    for symbol in symbols {
-        let (open_col, high_col, close_col, low_col) = get_symbol_ohlc_cols(symbol);
-
-        let open = when(col(&close_col).shift(1).is_null())
-            .then(col(&open_col).drop_nulls().first())
-            .otherwise(col(&close_col).shift(1))
-            .alias(&open_col);
-        let high = col(&high_col).max().alias(&high_col);
-        let close = col(&close_col).drop_nulls().last().alias(&close_col);
-        let low = col(&low_col).min().alias(&low_col);
-        agg_expressions.push(open);
-        agg_expressions.push(high);
-        agg_expressions.push(close);
-        agg_expressions.push(low);
-    }
     let resampled_data = concat(&[tick_data.clone(), base_df.lazy()], true, true)?;
-    let resampled_data =
-        resample_tick_data_to_min(symbols, bar_length, &resampled_data, ClosedWindow::Right)?;
+    let resampled_data = resample_tick_data_to_min(symbols, bar_length, resampled_data)?;
 
     let resampled_data = resampled_data
         .collect()?
@@ -172,8 +177,7 @@ pub fn resample_tick_data_secs_to_min(
 pub fn resample_tick_data_to_min(
     symbols: &[String; 2],
     bar_length: &Duration,
-    tick_data: &LazyFrame,
-    closed_window: ClosedWindow,
+    tick_data: LazyFrame,
 ) -> Result<LazyFrame, Error> {
     let bar_length_in_seconds = bar_length.num_seconds();
     let mut agg_expressions = vec![];
@@ -189,17 +193,11 @@ pub fn resample_tick_data_to_min(
         agg_expressions.push(close);
         agg_expressions.push(low);
     }
+
     let resampled_data = tick_data
         .clone()
-        .sort(
-            "start_time",
-            SortOptions {
-                descending: false,
-                nulls_last: false,
-                multithreaded: true,
-            },
-        )
         .groupby_dynamic(
+            col("start_time"),
             vec![],
             DynamicGroupOptions {
                 start_by: StartBy::DataPoint,
@@ -209,7 +207,7 @@ pub fn resample_tick_data_to_min(
                 offset: PolarsDuration::new(0),
                 truncate: true,
                 include_boundaries: false,
-                closed_window,
+                closed_window: ClosedWindow::Left,
             },
         )
         .agg(agg_expressions);
@@ -249,7 +247,8 @@ pub async fn get_historical_tick_data(
     symbols: &[String; 2],
     last_bar: &NaiveDateTime,
     limit: i64,
-    fetch_offset: TimeDuration,
+    initial_fetch_delay: TimeDuration,
+    initial_fetch_offset: i64, // in minutes
 ) -> Result<Vec<TickData>, Error> {
     let timestamp_intervals =
         timestamp_end_to_daily_timestamp_sec_intervals(last_bar.timestamp(), limit, 1);
@@ -258,11 +257,17 @@ pub async fn get_historical_tick_data(
         if i == 0 {
             continue;
         }
-        let start = &timestamp_intervals[i - 1] * 1000;
+
+        let mut current_limit = limit;
+        let mut start = &timestamp_intervals[i - 1] * 1000;
+        if i == 1 {
+            start = start - (initial_fetch_offset * SECONDS_IN_MIN * 1000);
+            current_limit = current_limit + initial_fetch_offset;
+        }
         let end = &timestamp_intervals[i] * 1000;
 
         if value == timestamp_intervals.last().unwrap() {
-            sleep(fetch_offset).await;
+            sleep(initial_fetch_delay).await;
             // let start = Instant::now();
             // let sleep_duration = Duration::seconds(fetch_offset);
             // while Instant::now().duration_since(start) < fetch_offset {
@@ -271,7 +276,7 @@ pub async fn get_historical_tick_data(
             // }
         }
         for symbol in symbols {
-            let fetched_klines = fetch_data(http, symbol, &start, &end, limit).await?;
+            let fetched_klines = fetch_data(http, symbol, &start, &end, current_limit).await?;
             fetched_klines.iter().for_each(|kline| {
                 let tick = parse_http_kline_into_tick_data(symbol.to_string(), kline).unwrap();
                 tick_data.push(tick);
@@ -284,21 +289,24 @@ pub async fn get_historical_tick_data(
 async fn fetch_data(
     http: &Client,
     symbol: &String,
-    start_time_timestamp: &i64, // ms
-    end_time_timestamp: &i64,   // ms
-    limit: i64,                 //Default 500; max 1000.
+    start_timestamp: &i64, // ms
+    end_timestamp: &i64,   // ms
+    limit: i64,            //Default 500; max 1000.
 ) -> Result<Vec<HttpKlineResponse>, Error> {
+    if limit > 1000 || limit < 0 {
+        panic!("Limit must be less than 1000. Currently is {}", limit);
+    }
     let url = format!(
         "https://api3.binance.com/api/v3/klines?symbol={}&interval={}&startTime={}&endTime={}&limit={}",
-        symbol, "1m", start_time_timestamp, end_time_timestamp, limit
+        symbol, "1m", start_timestamp, end_timestamp, limit
     );
     println!(
         "{:?} | Fetching {} data ({} records) for interval between {} and {}",
         current_datetime(),
         symbol,
         limit,
-        NaiveDateTime::from_timestamp_millis(*start_time_timestamp).unwrap(),
-        NaiveDateTime::from_timestamp_millis(*end_time_timestamp).unwrap()
+        NaiveDateTime::from_timestamp_millis(*start_timestamp).unwrap(),
+        NaiveDateTime::from_timestamp_millis(*end_timestamp).unwrap()
     );
     let result: Vec<HttpKlineResponse> = http.get(url).send().await?.json().await?;
     Ok(result)
@@ -335,4 +343,51 @@ fn timestamp_end_to_daily_timestamp_sec_intervals(
     (timestamp_start..=timestamp_end)
         .step_by(step as usize)
         .collect()
+}
+
+#[allow(dead_code)]
+pub fn print_as_df(
+    lf: &LazyFrame,
+    identifier: String,
+    select: Option<Vec<String>>,
+    cols: Option<u8>,
+    rows: Option<u8>,
+) -> Result<(), Error> {
+    let mut select_exprs: Vec<Expr> = vec![all()];
+    if let Some(strs) = select {
+        let exprs: Vec<Expr> = strs.iter().map(|name| col(name)).collect();
+        select_exprs = exprs;
+    }
+    let mut max_rows = "20".to_string();
+    if let Some(rows) = rows {
+        max_rows = rows.to_string();
+    }
+    env::set_var("POLARS_FMT_MAX_ROWS", max_rows);
+    let mut max_cols = "20".to_string();
+    if let Some(cols) = cols {
+        max_cols = cols.to_string();
+    }
+    env::set_var("POLARS_FMT_MAX_COLS", max_cols);
+
+    let df = lf.clone().select(select_exprs).collect()?;
+    let hr = "-".to_string().repeat(75);
+    println!(
+        "{} \n
+        {} DF: \n
+        {:?} \n
+        {}",
+        hr, identifier, df, hr
+    );
+
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub fn print_names(lf: &LazyFrame, identifier: String) -> Result<(), Error> {
+    println!("PRINT NAMES {}", identifier);
+    for name in lf.schema()?.iter_names() {
+        println!("{:?}", name);
+    }
+
+    Ok(())
 }
