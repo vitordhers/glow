@@ -1,1 +1,4 @@
 /target
+src/signals
+src/indicators
+data/test

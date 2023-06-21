@@ -28,21 +28,21 @@ pub fn current_datetime() -> NaiveDateTime {
 /// let result = get_symbol_ohlc_cols("BTC_USDT");
 /// assert_eq!(result, ("BTCUSDT_open", "BTCUSDT_high", "BTCUSDT_close", "BTCUSDT_low"));
 /// ```
-/// 
+///
 /// # Returns
 ///
 /// * `Open symbol` - Open symbol column.
 /// * `High symbol` - High symbol column.
-/// * `Close symbol` - Close symbol column.
 /// * `Low symbol` - Low symbol column.
+/// * `Close symbol` - Close symbol column.
 ///
 
 pub fn get_symbol_ohlc_cols(symbol: &String) -> (String, String, String, String) {
     let open_col = format!("{}_open", symbol);
     let high_col = format!("{}_high", symbol);
-    let close_col = format!("{}_close", symbol);
     let low_col = format!("{}_low", symbol);
-    return (open_col, high_col, close_col, low_col);
+    let close_col = format!("{}_close", symbol);
+    return (open_col, high_col, low_col, close_col);
 }
 
 pub fn get_symbol_window_ohlc_cols(
@@ -51,9 +51,9 @@ pub fn get_symbol_window_ohlc_cols(
 ) -> (String, String, String, String) {
     let open_col = format!("{}_{}_open", symbol, window);
     let high_col = format!("{}_{}_high", symbol, window);
-    let close_col = format!("{}_{}_close", symbol, window);
     let low_col = format!("{}_{}_low", symbol, window);
-    return (open_col, high_col, close_col, low_col);
+    let close_col = format!("{}_{}_close", symbol, window);
+    return (open_col, high_col, low_col, close_col);
 }
 
 pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
@@ -94,7 +94,7 @@ pub fn consolidate_tick_data_into_lf(
     columns.push(Series::new(date_col, &dates));
 
     for symbol in symbols {
-        let (open_col, high_col, close_col, low_col) = get_symbol_ohlc_cols(symbol);
+        let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(symbol);
 
         let mut opens = vec![];
         let mut highs = vec![];
@@ -182,7 +182,7 @@ pub fn resample_tick_data_to_min(
     let bar_length_in_seconds = bar_length.num_seconds();
     let mut agg_expressions = vec![];
     for symbol in symbols {
-        let (open_col, high_col, close_col, low_col) = get_symbol_ohlc_cols(symbol);
+        let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(symbol);
 
         let open = col(&open_col).drop_nulls().first().alias(&open_col);
         let high = col(&high_col).max().alias(&high_col);
@@ -242,51 +242,52 @@ pub fn clear_tick_data_to_last_bar(
         .collect()
 }
 
-pub async fn get_historical_tick_data(
-    http: &Client,
-    symbols: &[String; 2],
-    last_bar: &NaiveDateTime,
-    limit: i64,
-    initial_fetch_delay: TimeDuration,
-    initial_fetch_offset: i64, // in minutes
-) -> Result<Vec<TickData>, Error> {
-    let timestamp_intervals =
-        timestamp_end_to_daily_timestamp_sec_intervals(last_bar.timestamp(), limit, 1);
-    let mut tick_data = vec![];
-    for (i, value) in timestamp_intervals.iter().enumerate() {
-        if i == 0 {
-            continue;
-        }
+/// DEPRECATE THIS
+// pub async fn get_historical_tick_data(
+//     http: &Client,
+//     symbols: &[String; 2],
+//     last_bar: &NaiveDateTime,
+//     limit: i64,
+//     initial_fetch_delay: TimeDuration,
+//     initial_fetch_offset: i64, // in minutes
+// ) -> Result<Vec<TickData>, Error> {
+//     let timestamp_intervals =
+//         timestamp_end_to_daily_timestamp_sec_intervals(last_bar.timestamp(), limit, 1);
+//     let mut tick_data = vec![];
+//     for (i, value) in timestamp_intervals.iter().enumerate() {
+//         if i == 0 {
+//             continue;
+//         }
 
-        let mut current_limit = limit;
-        let mut start = &timestamp_intervals[i - 1] * 1000;
-        if i == 1 {
-            start = start - (initial_fetch_offset * SECONDS_IN_MIN * 1000);
-            current_limit = current_limit + initial_fetch_offset;
-        }
-        let end = &timestamp_intervals[i] * 1000;
+//         let mut current_limit = limit;
+//         let mut start = &timestamp_intervals[i - 1] * 1000;
+//         if i == 1 {
+//             start = start - (initial_fetch_offset * SECONDS_IN_MIN * 1000);
+//             current_limit = current_limit + initial_fetch_offset;
+//         }
+//         let end = &timestamp_intervals[i] * 1000;
 
-        if value == timestamp_intervals.last().unwrap() {
-            sleep(initial_fetch_delay).await;
-            // let start = Instant::now();
-            // let sleep_duration = Duration::seconds(fetch_offset);
-            // while Instant::now().duration_since(start) < fetch_offset {
-            //     println!("Sleeping...");
-            //     sleep(Duration::from_secs(1)).await;
-            // }
-        }
-        for symbol in symbols {
-            let fetched_klines = fetch_data(http, symbol, &start, &end, current_limit).await?;
-            fetched_klines.iter().for_each(|kline| {
-                let tick = parse_http_kline_into_tick_data(symbol.to_string(), kline).unwrap();
-                tick_data.push(tick);
-            });
-        }
-    }
-    Ok(tick_data)
-}
+//         if value == timestamp_intervals.last().unwrap() {
+//             sleep(initial_fetch_delay).await;
+//             // let start = Instant::now();
+//             // let sleep_duration = Duration::seconds(fetch_offset);
+//             // while Instant::now().duration_since(start) < fetch_offset {
+//             //     println!("Sleeping...");
+//             //     sleep(Duration::from_secs(1)).await;
+//             // }
+//         }
+//         for symbol in symbols {
+//             let fetched_klines = fetch_data(http, symbol, &start, &end, current_limit).await?;
+//             fetched_klines.iter().for_each(|kline| {
+//                 let tick = parse_http_kline_into_tick_data(symbol.to_string(), kline).unwrap();
+//                 tick_data.push(tick);
+//             });
+//         }
+//     }
+//     Ok(tick_data)
+// }
 
-async fn fetch_data(
+pub async fn fetch_data(
     http: &Client,
     symbol: &String,
     start_timestamp: &i64, // ms
@@ -312,7 +313,7 @@ async fn fetch_data(
     Ok(result)
 }
 
-fn parse_http_kline_into_tick_data(
+pub fn parse_http_kline_into_tick_data(
     symbol: String,
     data: &HttpKlineResponse,
 ) -> Result<TickData, Error> {
@@ -332,7 +333,7 @@ fn parse_http_kline_into_tick_data(
     Ok(result)
 }
 
-fn timestamp_end_to_daily_timestamp_sec_intervals(
+pub fn timestamp_end_to_daily_timestamp_sec_intervals(
     timestamp_end: i64, //secs
     limit: i64,
     granularity: i64, // mins

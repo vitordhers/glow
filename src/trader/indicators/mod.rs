@@ -1,7 +1,6 @@
 use polars::prelude::*;
 
 use crate::trader::{
-    constants::{NANOS_IN_SECOND, SECONDS_IN_MIN},
     functions::get_symbol_window_ohlc_cols,
     models::indicator::{forward_fill_lf, get_resampled_ohlc_window_data},
 };
@@ -17,6 +16,7 @@ impl Indicator for StochasticIndicator {
     fn name(&self) -> String {
         self.name.clone()
     }
+
     fn get_indicator_columns(&self) -> Vec<String> {
         let mut columns_names = Vec::new();
         for window in &self.windows {
@@ -78,7 +78,8 @@ impl Indicator for StochasticIndicator {
                     .round(2))
                     .alias(&k_column),
                 )
-                .with_column(col(&k_column).forward_fill(None).keep_name())
+                // TODO: define forward fill with windows
+                // .with_column(col(&k_column).forward_fill(None).keep_name())
                 .with_column(
                     (col(&k_column).rolling_mean(rolling_mean_d_opts).round(2)).alias(&d_column),
                 )
@@ -108,6 +109,14 @@ impl Indicator for StochasticIndicator {
         }
 
         Ok(new_lf)
+    }
+
+    fn clone_box(&self) -> Box<dyn Indicator + Send + Sync> {
+        Box::new(Self {
+            anchor_symbol: self.anchor_symbol.clone(),
+            name: self.name.clone(),
+            windows: self.windows.clone(),
+        })
     }
 }
 
@@ -156,6 +165,15 @@ impl Indicator for StochasticThresholdIndicator {
 
         Ok(lf)
     }
+
+    fn clone_box(&self) -> Box<dyn Indicator + Send + Sync> {
+        Box::new(Self {
+            name: self.name.clone(),
+            upper_threshold: self.upper_threshold.clone(),
+            lower_threshold: self.lower_threshold.clone(),
+            trend_col: self.trend_col.clone(),
+        })
+    }
 }
 
 pub struct ExponentialMovingAverageIndicator {
@@ -185,7 +203,7 @@ impl Indicator for ExponentialMovingAverageIndicator {
 
         let long_span = self.long_span;
         let short_span = self.short_span;
-        let (_, _, close_col, _) = get_symbol_ohlc_cols(&self.anchor_symbol);
+        let (_, _, _, close_col) = get_symbol_ohlc_cols(&self.anchor_symbol);
         let ema_short_col = format!("{}_ema_s", &self.anchor_symbol);
         let ema_long_col = format!("{}_ema_l", &self.anchor_symbol);
         let trend_col = &self.trend_col;
@@ -237,6 +255,16 @@ impl Indicator for ExponentialMovingAverageIndicator {
             ]);
 
         Ok(lf)
+    }
+
+    fn clone_box(&self) -> Box<dyn Indicator + Send + Sync> {
+        Box::new(Self {
+            name: self.name.clone(),
+            anchor_symbol: self.anchor_symbol.clone(),
+            long_span: self.long_span.clone(),
+            short_span: self.long_span.clone(),
+            trend_col: self.trend_col.clone(),
+        })
     }
 }
 

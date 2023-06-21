@@ -9,6 +9,7 @@ pub trait Indicator {
     fn name(&self) -> String;
     fn get_indicator_columns(&self) -> Vec<String>;
     fn compute_indicator_columns(&self, lf: LazyFrame) -> Result<LazyFrame, Error>;
+    fn clone_box(&self) -> Box<dyn Indicator + Send + Sync>;
 }
 
 pub fn get_resampled_ohlc_window_data(
@@ -17,7 +18,7 @@ pub fn get_resampled_ohlc_window_data(
     window_in_mins: &u32,
 ) -> Result<LazyFrame, Error> {
     let mut agg_expressions: Vec<Expr> = Vec::new();
-    let (open_col, high_col, close_col, low_col) = get_symbol_ohlc_cols(anchor_symbol);
+    let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(anchor_symbol);
     let (open_col_alias, high_col_alias, close_col_alias, low_col_alias) =
         get_symbol_window_ohlc_cols(anchor_symbol, &window_in_mins.to_string());
     let open = col(&open_col).drop_nulls().first().alias(&open_col_alias);
@@ -52,11 +53,7 @@ pub fn get_resampled_ohlc_window_data(
     Ok(resampled_data)
 }
 
-pub fn forward_fill_lf(
-    lf: LazyFrame,
-    from_mins: &u32,
-    to_mins: u32,
-) -> Result<LazyFrame, Error> {
+pub fn forward_fill_lf(lf: LazyFrame, from_mins: &u32, to_mins: u32) -> Result<LazyFrame, Error> {
     let period = to_mins as i64 * NANOS_IN_SECOND * SECONDS_IN_MIN;
 
     let schema = lf.schema()?;
@@ -93,4 +90,10 @@ pub fn forward_fill_lf(
         .with_columns(fill_null_cols);
 
     Ok(result)
+}
+
+impl Clone for Box<dyn Indicator + Send + Sync> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
 }

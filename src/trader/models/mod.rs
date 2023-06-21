@@ -8,6 +8,10 @@ pub mod indicator;
 pub mod market_data;
 pub mod signal;
 pub mod observer;
+// pub mod event_bus;
+pub mod order;
+pub mod behavior_subject;
+pub mod async_behavior_subject;
 
 use super::enums::request_method::RequestMethod;
 

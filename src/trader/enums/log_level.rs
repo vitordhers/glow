@@ -1,5 +1,5 @@
 #[allow(dead_code)]
-#[derive(Debug, Eq, PartialEq, PartialOrd)]
+#[derive(Debug, Eq, PartialEq, PartialOrd, Clone)]
 #[repr(u8)]
 pub enum LogLevel {
     Nothing = 0,

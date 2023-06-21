@@ -1,73 +1,110 @@
-use std::collections::HashSet;
-use std::time::Instant;
-
 use super::{
-    super::super::shared::csv::save_csv,
     super::constants::SECONDS_IN_DAY,
     super::errors::Error,
+    async_behavior_subject::AsyncBehaviorSubject,
     // super::functions::print_as_df,
     indicator::Indicator,
     performance::Performance,
+    // market_data::MarketDataFeedDTE,
     signal::{SignalCategory, Signer},
 };
-
 use chrono::NaiveDateTime;
 use polars::prelude::*;
+use std::collections::HashSet;
+use std::time::Instant;
 
+// use std::borrow::BorrowMut;
+// use async_trait::async_trait;
+// use tokio::sync::watch::error::SendError;
+
+// #[derive(Clone)]
 pub struct Strategy {
     pub name: String,
-    pub pre_indicator_cols: Option<Box<dyn Indicator>>,
-    pub indicators: Vec<Box<dyn Indicator>>,
-    pub signals: Vec<Box<dyn Signer>>,
-    // pub performance: Performance,
-    pub data: LazyFrame,
+    pub pre_indicator_cols: Option<Box<dyn Indicator + Send + Sync>>,
+    pub indicators: Vec<Box<dyn Indicator + Send + Sync>>,
+    pub signals: Vec<Box<dyn Signer + Send + Sync>>,
+    pub data: AsyncBehaviorSubject<LazyFrame>,
+    // pub receivers: Vec<StrategyReceiver>,
+    // pub sender: Sender<StrategyDTE>,
 }
+impl Clone for Strategy {
+    fn clone(&self) -> Self {
+        Self::new(
+            self.name.clone(),
+            self.pre_indicator_cols.clone(),
+            self.indicators.clone(),
+            self.signals.clone(),
+        )
+    }
+}
+// #[derive(Clone)]
+// pub enum StrategyReceiver {
+//     MarketDataFeed(Receiver<MarketDataFeedDTE>),
+// }
 
 impl Strategy {
     pub fn new(
         name: String,
-        pre_indicator_cols: Option<Box<dyn Indicator>>,
-        indicators: Vec<Box<dyn Indicator>>,
-        signals: Vec<Box<dyn Signer>>,
+        pre_indicator_cols: Option<Box<dyn Indicator + Send + Sync>>,
+        indicators: Vec<Box<dyn Indicator + Send + Sync>>,
+        signals: Vec<Box<dyn Signer + Send + Sync>>,
+        // sender: Sender<StrategyDTE>,
+        // market_data_feed_receiver: Receiver<MarketDataFeedDTE>,
     ) -> Strategy {
         Strategy {
             name,
             pre_indicator_cols,
             indicators,
             signals,
-            // performance: Performance::default(),
-            data: LazyFrame::default(),
+            data: AsyncBehaviorSubject::new(LazyFrame::default()),
+            // sender,
+            // receivers: vec![StrategyReceiver::MarketDataFeed(market_data_feed_receiver)],
         }
     }
 
+    // pub async fn listen_events(self) -> Result<Result<(), Error>, JoinError> {
+    //     let observed = self.data_feed_arc;
+    //     let handle = tokio::spawn(async move {
+    //         let lf = wait_for_update(&*observed).await;
+    //         let d = NaiveDate::from_ymd_opt(2015, 6, 3).unwrap();
+    //         let t = NaiveTime::from_num_seconds_from_midnight_opt(0, 0).unwrap();
+    //         self.set_benchmark(lf.0, &NaiveDateTime::new(d, t), &"AGIX_USDT".to_string())
+    //     });
+    //     handle.await
+    // }
+
     pub fn set_benchmark(
         &mut self,
+        performance: &mut Performance,
         tick_data: LazyFrame,
         last_bar: &NaiveDateTime,
-        traded_symbol: &String
+        traded_symbol: &String,
+        initial_balance: f64,
     ) -> Result<(), Error> {
+        println!("SET BENCHMARK");
         let tick_data = tick_data.cache();
         let mut lf = self.set_benchmark_data(tick_data)?;
 
         let benchmark_positions = self.compute_benchmark_positions(&lf, true)?;
         lf = lf.left_join(benchmark_positions, "start_time", "start_time");
 
-        let timestamp = last_bar.timestamp() * 1000 - SECONDS_IN_DAY * 1000;
-        self.data = lf.filter(
+        // get only signals from previous day
+        let minus_one_day_timestamp = last_bar.timestamp() * 1000 - SECONDS_IN_DAY * 1000;
+
+        lf = lf.filter(
             col("start_time")
                 .dt()
                 .timestamp(TimeUnit::Milliseconds)
-                .gt_eq(timestamp),
+                .gt_eq(minus_one_day_timestamp),
         );
 
-        let path = "data/test".to_string();
-        let file_name = "BTC_USDT_AGIX_USDT.csv".to_string();
+        // let path = "data/test".to_string();
+        // let file_name = "BTC_USDT_AGIX_USDT.csv".to_string();
 
-        save_csv(path, file_name, &self.data.clone().collect()?, true)?;
+        // save_csv(path, file_name, &self.data.clone().collect()?, true)?;
 
-        // EMIT SELF DATA TO PERFORMANCE
-        // self.performance
-        //     .set_benchmark(&self.data, traded_symbol)?;
+        self.data.next(lf.clone());
+        performance.set_benchmark(&lf, traded_symbol, initial_balance)?;
 
         Ok(())
     }
@@ -190,6 +227,16 @@ impl Strategy {
 
         println!("SIZE {:?}", df.estimated_size());
 
+        let mut signals_categories = HashSet::new();
+
+        for signal in self.signals.clone().into_iter() {
+            signals_categories.insert(signal.signal_category());
+        }
+
+        let contains_long_close = signals_categories.contains(&SignalCategory::CloseLong);
+        let contains_short_close = signals_categories.contains(&SignalCategory::CloseShort);
+        let contains_position_close = signals_categories.contains(&SignalCategory::ClosePosition);
+
         let mut positions = vec![];
 
         for index in 0..df.height() {
@@ -201,7 +248,9 @@ impl Strategy {
             let mut updated_position = current_position;
 
             if current_position == 0 {
+                // TODO: GET df["short"] dynamically
                 let short = df["short"].get(index)?.eq(&AnyValue::Boolean(true));
+                // TODO: GET df["short"] dynamically
                 let long = df["long"].get(index)?.eq(&AnyValue::Boolean(true));
                 if short == true {
                     updated_position = -1;
@@ -209,14 +258,31 @@ impl Strategy {
                     updated_position = 1;
                 }
             } else if current_position == 1 {
-                let long_close = df["long_close"].get(index)?.eq(&AnyValue::Boolean(true));
-
+                let mut long_close = false;
+                if contains_long_close {
+                    long_close = df["long_close"].get(index)?.eq(&AnyValue::Boolean(true));
+                }
+                if contains_position_close {
+                    let position_close = df["position_close"]
+                        .get(index)?
+                        .eq(&AnyValue::Boolean(true));
+                    long_close = long_close || position_close;
+                }
                 if long_close {
                     updated_position = 0;
                 }
             } else if current_position == -1 {
-                let short_close = df["short_close"].get(index)?.eq(&AnyValue::Boolean(true));
-
+                let mut short_close = false;
+                if contains_short_close {
+                    short_close = df["short_close"].get(index)?.eq(&AnyValue::Boolean(true));
+                }
+                if contains_position_close {
+                    let position_close = df["position_close"]
+                        .get(index)?
+                        .eq(&AnyValue::Boolean(true));
+                    short_close = short_close || position_close;
+                }
+                // TODO: implement checks for SignalCategory::ClosePosition
                 if short_close {
                     updated_position = 0;
                 }
@@ -255,14 +321,8 @@ impl Strategy {
             .lazy()
             .select([col("start_time"), col("position")]);
         let elapsed_time = start_time.elapsed();
-        let elapsed_secs = elapsed_time.as_secs();
         let elapsed_millis = elapsed_time.as_millis();
-        let elapsed_micros = elapsed_time.as_micros();
-        let elapsed_nanos = elapsed_time.as_nanos();
-        println!("Elapsed time in seconds: {}", elapsed_secs);
         println!("Elapsed time in milliseconds: {}", elapsed_millis);
-        println!("Elapsed time in microseconds: {}", elapsed_micros);
-        println!("Elapsed time in nanoseconds: {}", elapsed_nanos);
         Ok(result)
     }
 
@@ -276,9 +336,9 @@ impl Strategy {
                 SignalCategory::GoLong => String::from("long"),
                 SignalCategory::CloseShort => String::from("short_close"),
                 SignalCategory::CloseLong => String::from("long_close"),
+                SignalCategory::ClosePosition => String::from("position_close"),
                 SignalCategory::RevertShort => String::from("short_revert"),
                 SignalCategory::RevertLong => String::from("long_revert"),
-                SignalCategory::ClosePosition => String::from("position_close"),
                 SignalCategory::RevertPosition => String::from("position_revert"),
                 SignalCategory::KeepPosition => String::from("position_keep"),
             };
@@ -293,18 +353,70 @@ impl Strategy {
     }
 }
 
-impl Default for Strategy {
-    fn default() -> Self {
-        Strategy {
-            name: "Default Strategy".to_string(),
-            pre_indicator_cols: None,
-            indicators: vec![],
-            signals: vec![],
-            // performance: Performance::default(),
-            data: LazyFrame::default(),
-        }
-    }
+impl Strategy {
+    // pub async fn listen_events(mut self) -> Result<Result<(), Error>, JoinError> {
+    //     // let observed_cloned = self.data_feed_arc.clone();
+
+    //     // let handle = tokio::spawn(async move {
+    //     //     let observed = observed_cloned;
+    //     //     let result = wait_for_update(&*observed).await;
+    //     //     let dto = result.0.clone();
+
+    //     //     self.set_benchmark(dto.lf, &dto.last_bar, &dto.traded_symbol)
+    //     // });
+    //     // handle.await
+    //     Ok(())
+    // }
 }
+
+// impl Default for Strategy<'_> {
+//     fn default() -> Self {
+//         Strategy {
+//             name: "Default Strategy".to_string(),
+//             pre_indicator_cols: None,
+//             indicators: vec![],
+//             signals: vec![],
+//             data_feed_arc: Arc::new(MarketDataFeed::default()),
+//             // performance: Performance::default(),
+//             data: LazyFrame::default(),
+//         }
+//     }
+// }
+
+// #[async_trait]
+// impl Subscriber<StrategyReceiver> for Strategy {
+//     async fn subscribe(&mut self) -> Result<(), SendError<StrategyReceiver>> {
+//         for receiver in self.receivers.clone() {
+//             match receiver {
+//                 StrategyReceiver::MarketDataFeed(mut rx) => match rx.borrow_mut().changed().await {
+//                     Ok(()) => {
+//                         let dte = rx.borrow().clone();
+//                         match dte {
+//                             MarketDataFeedDTE::SetBenchmark(lf, last_bar, traded_symbol) => {
+//                                 let _ = self.set_benchmark(lf, &last_bar, &traded_symbol);
+//                             }
+//                             _ => {}
+//                         }
+//                     }
+//                     Err(err) => println!("STRATEGY SUBSCRIBE ERROR {:?}", err),
+//                 },
+//             }
+//         }
+
+//         Ok(())
+//     }
+// }
+
+// pub enum StrategyDTE {
+//     Nil,
+//     SetBenchmark(LazyFrame, NaiveDateTime, String),
+// }
+
+// impl Default for StrategyDTE {
+//     fn default() -> Self {
+//         StrategyDTE::Nil
+//     }
+// }
 
 fn map_cols_to_clauses(cols: &Vec<String>) -> Vec<ColClause> {
     let mut clauses: Vec<ColClause> = vec![];

@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::num::Wrapping;
@@ -6,50 +7,62 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::task::{Context, Poll, Waker};
 
+use polars_lazy::prelude::LazyFrame;
+use tokio::task::JoinError;
+
 /// Thread-safe observable, intended to be implemented on `&self`
-trait Observable<'a> {
+pub trait Observable<'a> {
     type Item;
     /// (item, epoch)
     type Ref: Deref<Target = (Self::Item, usize)> + 'a;
 
     /// subscriber has to be renewed after the value is updated
-    fn subscribe(self, waker: Waker);
-    fn update(self, item: Self::Item);
+    fn renew(self, waker: Waker);
+    fn next(self, item: Self::Item);
     fn get_observed(self) -> Self::Ref;
     fn get_epoch(self) -> usize;
 }
 
-struct ObservableFuture<'a, T: Observable<'a>> {
+pub struct ObservableFuture<'a, T: Observable<'a>> {
     observable: T,
     epoch: usize,
     phantom: PhantomData<&'a ()>,
 }
-impl<'a, T: Copy + Observable<'a>> ObservableFuture<'a, T> {
+impl<'a, T: Clone + Observable<'a>> ObservableFuture<'a, T> {
     fn new(observable: T) -> Self {
         Self {
-            observable,
+            observable: observable.clone(),
             epoch: observable.get_epoch(),
             phantom: PhantomData,
         }
     }
 }
-impl<'a, T: Copy + Observable<'a>> Future for ObservableFuture<'a, T> {
+impl<'a, T: Clone + Observable<'a>> Future for ObservableFuture<'a, T> {
     type Output = T::Ref;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let observable = &self.observable;
 
-        if self.epoch != observable.get_epoch() {
-            Poll::Ready(observable.get_observed())
+        if self.epoch != observable.clone().get_epoch() {
+            Poll::Ready(observable.clone().get_observed())
         } else {
-            observable.subscribe(cx.waker().clone());
+            observable.clone().renew(cx.waker().clone());
             Poll::Pending
         }
     }
 }
-fn wait_for_update<'a, T: Copy + Observable<'a>>(observable: T) -> ObservableFuture<'a, T> {
+
+pub fn wait_for_update<'a, T: Clone + Observable<'a>>(observable: T) -> ObservableFuture<'a, T> {
     ObservableFuture::new(observable)
 }
+
+// async fn give_number() -> u32 {
+//     100
+// }
+
+// fn give_number() -> impl Future<Output = u32> {
+//     GiveNumberFuture
+// }
 
 struct Observed<T> {
     // If T is a primitive, then you can replace RwLock
@@ -63,6 +76,9 @@ struct Observed<T> {
     // such as crossbeam::queue::SegQueue
     observers: RwLock<Vec<Waker>>,
 }
+
+
+
 impl<T> Observed<T> {
     fn new(item: T) -> Self {
         Self {
@@ -71,15 +87,18 @@ impl<T> Observed<T> {
         }
     }
 }
+
+
+
 impl<'a, T: 'a> Observable<'a> for &'a Observed<T> {
     type Item = T;
     type Ref = RwLockReadGuard<'a, (T, usize)>;
 
-    fn subscribe(self, waker: Waker) {
+    fn renew(self, waker: Waker) {
         self.observers.write().unwrap().push(waker);
     }
 
-    fn update(self, item: Self::Item) {
+    fn next(self, item: Self::Item) {
         let epoch = Wrapping(self.get_epoch());
         let one = Wrapping(1);
         *self.item.write().unwrap() = (item, (epoch + one).0);
@@ -96,4 +115,33 @@ impl<'a, T: 'a> Observable<'a> for &'a Observed<T> {
     fn get_epoch(self) -> usize {
         self.item.read().unwrap().1
     }
+}
+
+#[tokio::test]
+async fn test() {
+    use tokio::time::{sleep, Duration};
+
+    let observed = Arc::new(Observed::new(LazyFrame::default()));
+
+    let observed_cloned = observed.clone();
+    let handle = tokio::spawn(async move {
+        let observed = observed_cloned;
+        let result = wait_for_update(&*observed).await;
+        let payload = &result.0.clone().collect().unwrap();
+        println!("{:#?}", payload);
+    });
+
+    // let observed_cloned = observed.clone();
+    // let handle2 = tokio::spawn(async move {
+    //     let observed = observed_cloned;
+
+    //     println!("{:#?}", *wait_for_update(&*observed).await);
+    // });
+
+    // sleep for 1s to make sure wait_for_update is executed
+    sleep(Duration::from_millis(5000)).await;
+    observed.next(LazyFrame::default());
+
+    handle.await.unwrap();
+    // handle2.await.unwrap();
 }

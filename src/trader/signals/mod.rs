@@ -55,6 +55,13 @@ impl Signer for MultipleStochasticWithThresholdShortSignal {
 
         Ok(signal_lf)
     }
+
+    fn clone_box(&self) -> Box<dyn Signer + Send + Sync> {
+        Box::new(Self {
+            windows: self.windows.clone(),
+            anchor_symbol: self.anchor_symbol.clone(),
+        })
+    }
 }
 
 pub struct MultipleStochasticWithThresholdLongSignal {
@@ -112,6 +119,13 @@ impl Signer for MultipleStochasticWithThresholdLongSignal {
 
         Ok(signal_lf)
     }
+
+    fn clone_box(&self) -> Box<dyn Signer + Send + Sync> {
+        Box::new(Self {
+            windows: self.windows.clone(),
+            anchor_symbol: self.anchor_symbol.clone(),
+        })
+    }
 }
 
 pub struct MultipleStochasticWithThresholdCloseLongSignal {
@@ -154,6 +168,16 @@ impl Signer for MultipleStochasticWithThresholdCloseLongSignal {
             .select([col("start_time"), col("long_close")]);
         Ok(signal_lf)
     }
+
+    fn clone_box(&self) -> Box<dyn Signer + Send + Sync> {
+        Box::new(Self {
+            upper_threshold: self.upper_threshold.clone(),
+            lower_threshold: self.lower_threshold.clone(),
+            windows: self.windows.clone(),
+            anchor_symbol: self.anchor_symbol.clone(),
+            close_window_index: self.close_window_index.clone(),
+        })
+    }
 }
 
 pub struct MultipleStochasticWithThresholdCloseShortSignal {
@@ -195,5 +219,15 @@ impl Signer for MultipleStochasticWithThresholdCloseShortSignal {
             )
             .select([col("start_time"), col("short_close")]);
         Ok(signal_lf)
+    }
+
+    fn clone_box(&self) -> Box<dyn Signer + Send + Sync> {
+        Box::new(Self {
+            upper_threshold: self.upper_threshold.clone(),
+            lower_threshold: self.lower_threshold.clone(),
+            windows: self.windows.clone(),
+            anchor_symbol: self.anchor_symbol.clone(),
+            close_window_index: self.close_window_index.clone(),
+        })
     }
 }

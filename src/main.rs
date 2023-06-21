@@ -1,15 +1,21 @@
 // use tokio::*;
 extern crate dotenv;
+use std::sync::Arc;
+
 use dotenv::dotenv;
-mod trader;
 pub mod shared;
+mod trader;
 use log::*;
+use tokio::sync::watch::channel;
 use trader::{
     enums::log_level::LogLevel,
     indicators::{
         ExponentialMovingAverageIndicator, StochasticIndicator, StochasticThresholdIndicator,
     },
-    models::{indicator::Indicator, signal::Signer, strategy::Strategy},
+    models::{
+        indicator::Indicator, market_data::MarketDataFeed, performance::Performance,
+        signal::Signer, strategy::Strategy,
+    },
     signals::{
         MultipleStochasticWithThresholdCloseLongSignal,
         MultipleStochasticWithThresholdCloseShortSignal, MultipleStochasticWithThresholdLongSignal,
@@ -54,7 +60,7 @@ async fn main() {
         trend_col: trend_col.clone(),
     };
 
-    let indicators: Vec<Box<(dyn Indicator)>> = vec![
+    let indicators: Vec<Box<(dyn Indicator + std::marker::Send + Sync + 'static)>> = vec![
         Box::new(stochastic_indicator),
         Box::new(stochastic_threshold_indicator),
     ];
@@ -79,6 +85,7 @@ async fn main() {
             lower_threshold,
             close_window_index,
         };
+
     let multiple_stochastic_with_threshold_close_long_signal =
         MultipleStochasticWithThresholdCloseLongSignal {
             anchor_symbol: anchor_symbol.clone(),
@@ -88,29 +95,44 @@ async fn main() {
             close_window_index,
         };
 
-    let signals: Vec<Box<dyn Signer>> = vec![
+    let signals: Vec<Box<dyn Signer + std::marker::Send + Sync + 'static>> = vec![
         Box::new(multiple_stochastic_with_threshold_short_signal),
         Box::new(multiple_stochastic_with_threshold_long_signal),
         Box::new(multiple_stochastic_with_threshold_close_short_signal),
         Box::new(multiple_stochastic_with_threshold_close_long_signal),
     ];
-    let mut strategy = Strategy::new(
+
+    let bar_length = 60;
+    let log_level = LogLevel::All;
+    let initial_data_offset = 180; // TODO: create a way to calculate this automatically
+
+    // let (mdf_tx, mdf_rx) = channel(MarketDataFeedDTE::default());
+    // let (strategy_tx, strategy_rx) = channel(StrategyDTE::default());
+
+    let data_feed = MarketDataFeed::new(
+        symbols.clone(),
+        bar_length,
+        initial_data_offset,
+        log_level.clone(),
+        // mdf_tx,
+    );
+
+    let strategy = Strategy::new(
         "Stochastic Strategy".into(),
         Some(Box::new(ewm_preindicator)),
         indicators,
         signals,
+        // strategy_tx,
+        // mdf_rx,
     );
-    let mut trader = Trader::new(&symbols, 60, 0, 50, &mut strategy, LogLevel::All);
 
-    let connection = trader.market_data_feed.connect().await;
+    let performance = Performance::default();
 
-    match connection {
-        Err(e) => {
-            error!("error found {:?}", e);
-        }
-        Ok(()) => {
-            let _ = trader.market_data_feed.subscribe().await;
-            let _events = trader.market_data_feed.listen_events().await;
-        }
-    }
+    let trader = Trader::new(&symbols, 50.0, data_feed, strategy, performance, &log_level);
+
+    let _ = trader.init().await;
+
+    // data_feed.init().await;
+
+    // let _ = strategy.listen_events().await;
 }
