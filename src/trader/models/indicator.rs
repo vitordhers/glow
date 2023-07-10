@@ -49,7 +49,6 @@ pub fn get_resampled_ohlc_window_data(
             },
         )
         .agg(agg_expressions);
-    // print_as_df(&resampled_data, "@@@@ get_resampled_window_data");
     Ok(resampled_data)
 }
 

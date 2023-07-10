@@ -22,15 +22,15 @@ impl Signer for MultipleStochasticWithThresholdShortSignal {
             let stochastic_d_col = format!("D%_{}", suffix);
             let short_threshold_col = "short_threshold";
             let windowed_threshold_col = format!("short_{}", index);
-            col_exprs.push(col(&windowed_threshold_col));
+            col_exprs.push(col(&windowed_threshold_col).eq(lit(1)));
 
             signal_lf = signal_lf.with_column(
                 when(
                     (col(&stochastic_k_col).gt(col(short_threshold_col)))
                         .and(col(&stochastic_d_col).gt(col(&stochastic_k_col))),
                 )
-                .then(true)
-                .otherwise(false)
+                .then(1)
+                .otherwise(0)
                 .alias(&windowed_threshold_col),
             );
         }
@@ -44,13 +44,7 @@ impl Signer for MultipleStochasticWithThresholdShortSignal {
                 Some(curr.clone())
             })
             .unwrap();
-        signal_lf = signal_lf.with_column(
-            when(and_cols_expr)
-                .then(true)
-                .otherwise(false)
-                .alias("short"),
-        );
-
+        signal_lf = signal_lf.with_column(when(and_cols_expr).then(1).otherwise(0).alias("short"));
         signal_lf = signal_lf.select([col("start_time"), col("short")]);
 
         Ok(signal_lf)
@@ -85,15 +79,15 @@ impl Signer for MultipleStochasticWithThresholdLongSignal {
             let stochastic_d_col = format!("D%_{}", suffix);
             let long_threshold_col = "long_threshold";
             let windowed_threshold_col = format!("long_{}", index);
-            col_exprs.push(col(&windowed_threshold_col));
+            col_exprs.push(col(&windowed_threshold_col).eq(lit(1)));
 
             signal_lf = signal_lf.with_column(
                 when(
                     (col(&stochastic_k_col).lt(col(long_threshold_col)))
                         .and(col(&stochastic_d_col).lt(col(&stochastic_k_col))),
                 )
-                .then(true)
-                .otherwise(false)
+                .then(1)
+                .otherwise(0)
                 .alias(&windowed_threshold_col),
             );
         }
@@ -107,14 +101,7 @@ impl Signer for MultipleStochasticWithThresholdLongSignal {
                 Some(curr.clone())
             })
             .unwrap();
-
-        signal_lf = signal_lf.with_column(
-            when(and_cols_expr)
-                .then(true)
-                .otherwise(false)
-                .alias("long"),
-        );
-
+        signal_lf = signal_lf.with_column(when(and_cols_expr).then(1).otherwise(0).alias("long"));
         signal_lf = signal_lf.select(select_columns);
 
         Ok(signal_lf)
@@ -161,8 +148,8 @@ impl Signer for MultipleStochasticWithThresholdCloseLongSignal {
                                 .gt(col(&long_close_d_col).shift(1)),
                         ),
                 )
-                .then(true)
-                .otherwise(false)
+                .then(1)
+                .otherwise(0)
                 .alias("long_close"),
             )
             .select([col("start_time"), col("long_close")]);
@@ -213,8 +200,8 @@ impl Signer for MultipleStochasticWithThresholdCloseShortSignal {
                                 .lt(col(&short_close_d_col).shift(1)),
                         ),
                 )
-                .then(true)
-                .otherwise(false)
+                .then(1)
+                .otherwise(0)
                 .alias("short_close"),
             )
             .select([col("start_time"), col("short_close")]);

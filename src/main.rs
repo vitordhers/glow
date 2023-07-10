@@ -1,20 +1,25 @@
 // use tokio::*;
 extern crate dotenv;
-use std::sync::Arc;
 
+use std::collections::HashMap;
+
+use chrono::Duration;
 use dotenv::dotenv;
 pub mod shared;
 mod trader;
-use log::*;
-use tokio::sync::watch::channel;
 use trader::{
     enums::log_level::LogLevel,
     indicators::{
         ExponentialMovingAverageIndicator, StochasticIndicator, StochasticThresholdIndicator,
     },
     models::{
-        indicator::Indicator, market_data::MarketDataFeed, performance::Performance,
-        signal::Signer, strategy::Strategy,
+        exchange::Exchange,
+        indicator::Indicator,
+        market_data::MarketDataFeed,
+        modifiers::{Leverage, PositionLockModifier, PriceLevelModifier},
+        performance::Performance,
+        signal::Signer,
+        strategy::Strategy,
     },
     signals::{
         MultipleStochasticWithThresholdCloseLongSignal,
@@ -23,6 +28,8 @@ use trader::{
     },
     Trader,
 };
+
+use crate::trader::models::contract::Contract;
 
 #[tokio::main]
 async fn main() {
@@ -38,6 +45,39 @@ async fn main() {
     let upper_threshold = 70;
     let lower_threshold = 30;
     let close_window_index = 2;
+
+    let AGIXUSDT: Contract = Contract::new(
+        String::from("AGIXUSDT"),
+        0.000073,
+        Duration::hours(8),
+        None,
+        0.00005,
+        300000.0,
+        1.0,
+        25.0,
+    );
+
+    let ARBUSDT: Contract = Contract::new(
+        String::from("ARBUSDT"),
+        0.0001,
+        Duration::hours(8),
+        None,
+        0.0001,
+        180000.0,
+        0.1,
+        50.0,
+    );
+
+    let BTCUSDT: Contract = Contract::new(
+        String::from("BTCUSDT"),
+        0.0001,
+        Duration::hours(8),
+        None,
+        0.00005,
+        100.0,
+        0.001,
+        100.0,
+    );
 
     let stochastic_indicator = StochasticIndicator {
         name: "StochasticIndicator".into(),
@@ -102,28 +142,49 @@ async fn main() {
         Box::new(multiple_stochastic_with_threshold_close_long_signal),
     ];
 
+    let exchange = Exchange::new(
+        "Bybit".to_string(),
+        0.0001,
+        0.0006,
+        "https://api.bybit.com/v5".to_string(),
+        "wss://stream.bybit.com/v5/public/option".to_string(),
+    );
+
+    let lock_modifier = PositionLockModifier::Fee;
+
     let bar_length = 60;
     let log_level = LogLevel::All;
     let initial_data_offset = 180; // TODO: create a way to calculate this automatically
+    let initial_balance = 100.00;
 
     // let (mdf_tx, mdf_rx) = channel(MarketDataFeedDTE::default());
     // let (strategy_tx, strategy_rx) = channel(StrategyDTE::default());
 
     let data_feed = MarketDataFeed::new(
-        symbols.clone(),
+        [BTCUSDT, AGIXUSDT],
         bar_length,
         initial_data_offset,
         log_level.clone(),
         // mdf_tx,
     );
 
+    let mut price_level_modifiers = HashMap::new();
+    let stop_loss = PriceLevelModifier::StopLoss(0.44);
+    let take_profit = PriceLevelModifier::TakeProfit(0.8);
+    price_level_modifiers.insert(stop_loss.get_hash_key(), stop_loss);
+    price_level_modifiers.insert(take_profit.get_hash_key(), take_profit);
+
     let strategy = Strategy::new(
         "Stochastic Strategy".into(),
         Some(Box::new(ewm_preindicator)),
         indicators,
         signals,
-        // strategy_tx,
-        // mdf_rx,
+        initial_balance,
+        exchange,
+        Some(Leverage::Isolated(25)),
+        lock_modifier,
+        price_level_modifiers, // strategy_tx,
+                               // mdf_rx,
     );
 
     let performance = Performance::default();

@@ -41,8 +41,6 @@ impl Indicator for StochasticIndicator {
             let (_, high_col, close_col, low_col) =
                 get_symbol_window_ohlc_cols(&self.anchor_symbol, &window.to_string());
 
-            // JOIN -> RESAMPLE?
-
             let suffix = format!("{}_{}", self.anchor_symbol, window);
 
             let k_column = format!("K%_{}", suffix);
@@ -107,7 +105,7 @@ impl Indicator for StochasticIndicator {
         for resampled_lf in resampled_lfs {
             new_lf = new_lf.left_join(resampled_lf, "start_time", "start_time");
         }
-
+        println!("stochastic fn end");
         Ok(new_lf)
     }
 
@@ -148,11 +146,11 @@ impl Indicator for StochasticThresholdIndicator {
         let upper_threshold = self.upper_threshold;
         let lower_threshold = self.lower_threshold;
         let lf = lf.with_columns([
-            when(col(trend_col))
+            when(col(trend_col).eq(1))
                 .then(lit(upper_threshold))
                 .otherwise(lit(lower_threshold))
                 .alias(&short_threshold_col),
-            when(col(trend_col))
+            when(col(trend_col).eq(1))
                 .then(lit(lower_threshold))
                 .otherwise(lit(upper_threshold))
                 .alias(long_threshold_col),
@@ -162,7 +160,7 @@ impl Indicator for StochasticThresholdIndicator {
             col(long_threshold_col),
             col(short_threshold_col),
         ]);
-
+        println!("stochastic threshold fn end");
         Ok(lf)
     }
 
@@ -242,8 +240,8 @@ impl Indicator for ExponentialMovingAverageIndicator {
                 .then(lit(NULL))
                 .otherwise(
                     when(col(&ema_short_col).gt(col(&ema_long_col)))
-                        .then(false)
-                        .otherwise(true),
+                        .then(0)
+                        .otherwise(1),
                 )
                 .alias(trend_col),
             )

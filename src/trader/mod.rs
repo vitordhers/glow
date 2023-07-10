@@ -11,6 +11,7 @@ mod functions;
 pub mod indicators;
 pub mod models;
 pub mod signals;
+pub mod contracts;
 #[derive(Clone)]
 pub struct Trader {
     pub symbols: [String; 2],

@@ -1,6 +1,8 @@
 use polars::prelude::PolarsError;
 use reqwest::Error as ReqwestError;
 use serde_json::Error as SerdeError;
+use std::error::Error as StdError;
+use std::fmt;
 use std::{env::VarError, num::ParseFloatError};
 use tokio_tungstenite::tungstenite::Error as TugsteniteError;
 use url::ParseError as UrlParseError;
@@ -14,8 +16,26 @@ pub enum Error {
     ParseFloatError(ParseFloatError),
     PolarsError(PolarsError),
     ReqwestError(ReqwestError),
+    CustomError(CustomError),
+}
+#[derive(Debug)]
+pub struct CustomError {
+    message: String,
 }
 
+impl CustomError {
+    pub fn new(message: String) -> Self {
+        CustomError { message }
+    }
+}
+
+impl fmt::Display for CustomError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl StdError for CustomError {}
 impl From<VarError> for Error {
     fn from(var_error: VarError) -> Self {
         println!("Var Error = {:?}", var_error.to_string());
@@ -62,5 +82,12 @@ impl From<ReqwestError> for Error {
     fn from(reqwest_error: ReqwestError) -> Self {
         println!("Reqwest Error = {:?}", reqwest_error.to_string());
         Error::ReqwestError(reqwest_error)
+    }
+}
+
+impl From<CustomError> for Error {
+    fn from(custom_error: CustomError) -> Self {
+        println!("Reqwest Error = {:?}", custom_error.to_string());
+        Error::CustomError(custom_error)
     }
 }

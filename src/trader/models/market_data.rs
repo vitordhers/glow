@@ -7,6 +7,7 @@ use super::super::functions::{
     resample_tick_data_secs_to_min, resample_tick_data_to_min,
     timestamp_end_to_daily_timestamp_sec_intervals,
 };
+use super::contract::Contract;
 use super::performance::Performance;
 use super::strategy::Strategy;
 use super::{Request, WsKlineResponse};
@@ -27,7 +28,7 @@ use url::Url;
 
 #[derive(Clone)]
 pub struct MarketDataFeed {
-    symbols: [String; 2],
+    contracts: [Contract; 2],
     bar_length: Duration,
     last_bar: NaiveDateTime,
     tick_data_schema: Schema,
@@ -53,7 +54,7 @@ pub struct MarketDataFeed {
 
 impl MarketDataFeed {
     pub fn new(
-        symbols: [String; 2],
+        contracts: [Contract; 2],
         bar_length: i64,
         initial_fetch_offset: i64,
         log_level: LogLevel,
@@ -66,8 +67,8 @@ impl MarketDataFeed {
             DataType::Datetime(TimeUnit::Milliseconds, None),
         ));
 
-        for symbol in &symbols {
-            let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(symbol);
+        for contract in &contracts {
+            let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(&contract.symbol);
 
             schema_fields.push(Field::new(open_col.as_str(), DataType::Float64));
             schema_fields.push(Field::new(high_col.as_str(), DataType::Float64));
@@ -86,7 +87,7 @@ impl MarketDataFeed {
         );
 
         MarketDataFeed {
-            symbols,
+            contracts,
             bar_length,
             last_bar,
             log_level,
@@ -96,6 +97,10 @@ impl MarketDataFeed {
             tick_data_schema,
             // sender,
         }
+    }
+
+    fn symbols(&self) -> [String; 2] {
+        self.contracts.clone().map(|c| c.symbol)
     }
 
     pub async fn init(
@@ -132,13 +137,7 @@ impl MarketDataFeed {
                 //     self.symbols[1].clone(),
                 // );
                 // let _ = self.send(dte);
-                let _ = strategy.set_benchmark(
-                    performance,
-                    lf,
-                    &self.last_bar,
-                    &self.symbols[1],
-                    initial_balance,
-                );
+                let _ = strategy.set_benchmark(performance, lf, &self.last_bar, &self.contracts[1]);
             }
             Err(e) => error!("get historical data error {:?}", e),
         }
@@ -175,7 +174,7 @@ impl MarketDataFeed {
                 //     sleep(Duration::from_secs(1)).await;
                 // }
             }
-            for symbol in &self.symbols {
+            for symbol in &self.symbols() {
                 println!(
                     "fetching {} data, start= {}, end= {}, limit= {}",
                     symbol, start, end, current_limit
@@ -190,10 +189,10 @@ impl MarketDataFeed {
         }
 
         let new_tick_data_lf =
-            consolidate_tick_data_into_lf(&self.symbols, &tick_data, &self.tick_data_schema)?;
+            consolidate_tick_data_into_lf(&self.symbols(), &tick_data, &self.tick_data_schema)?;
 
         let tick_data_lf =
-            resample_tick_data_to_min(&self.symbols, &self.bar_length, new_tick_data_lf)?;
+            resample_tick_data_to_min(&self.symbols(), &self.bar_length, new_tick_data_lf)?;
 
         Ok(tick_data_lf)
     }
@@ -219,13 +218,14 @@ impl MarketDataFeed {
         wss: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
     ) -> Result<(), Error> {
         let mut ticker_params: Vec<String> = vec![];
-        if self.symbols[0] != self.symbols[1] {
-            for symbol in &self.symbols {
+        let symbols = self.symbols();
+        if symbols[0] != symbols[1] {
+            for symbol in symbols {
                 let kline_param = format!("{}@kline_1m", symbol.to_lowercase());
                 ticker_params.push(kline_param);
             }
         } else {
-            ticker_params.push(format!("{}@kline_1m", self.symbols[0].to_lowercase()));
+            ticker_params.push(format!("{}@kline_1m", symbols[0].to_lowercase()));
         }
 
         let request = Request {
@@ -281,9 +281,9 @@ impl MarketDataFeed {
                     tick_data_payload.push(tick_data);
 
                     if last_tick_datetime - self.last_bar >= self.bar_length {
-                        let new_tick_data_lf = consolidate_tick_data_into_lf(&self.symbols, &tick_data_payload, &self.tick_data_schema)?;
+                        let new_tick_data_lf = consolidate_tick_data_into_lf(&self.symbols(), &tick_data_payload, &self.tick_data_schema)?;
                         let new_tick_data_lf = resample_tick_data_secs_to_min(
-                            &self.symbols,
+                            &self.symbols(),
                             &new_tick_data_lf,
                             &self.tick_data_schema,
                             &self.last_bar,
@@ -311,4 +311,3 @@ impl MarketDataFeed {
 //         Ok(result)
 //     }
 // }
-

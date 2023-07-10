@@ -10,6 +10,9 @@ pub mod signal;
 pub mod observer;
 // pub mod event_bus;
 pub mod order;
+pub mod exchange;
+pub mod modifiers;
+pub mod contract;
 pub mod behavior_subject;
 pub mod async_behavior_subject;
 
