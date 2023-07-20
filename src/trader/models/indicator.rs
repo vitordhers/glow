@@ -8,7 +8,8 @@ use polars::prelude::*;
 pub trait Indicator {
     fn name(&self) -> String;
     fn get_indicator_columns(&self) -> Vec<String>;
-    fn compute_indicator_columns(&self, lf: LazyFrame) -> Result<LazyFrame, Error>;
+    fn set_indicator_columns(&self, lf: LazyFrame) -> Result<LazyFrame, Error>;
+    fn update_indicator_columns(&self, df: &DataFrame) -> Result<DataFrame, Error>;
     fn clone_box(&self) -> Box<dyn Indicator + Send + Sync>;
 }
 

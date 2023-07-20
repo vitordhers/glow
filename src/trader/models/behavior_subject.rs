@@ -1,86 +1,63 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+use futures_util::Stream;
+use futures_util::StreamExt;
+use std::{sync::Arc, time::Duration};
+use tokio::sync::watch::{channel, Receiver, Sender};
+use tokio::time::sleep;
+use tokio_stream::wrappers::WatchStream;
 
-pub struct BehaviorSubject<T: Clone> {
-    value: Arc<Mutex<T>>,
-    subscribers: Arc<Mutex<Vec<Arc<Mutex<dyn FnMut(T) + Send + 'static>>>>>,
+#[derive(Clone)]
+pub struct BehaviorSubject<T> {
+    sender: Arc<Sender<T>>,
+    receiver: Receiver<T>,
 }
 
-impl<T: Clone> BehaviorSubject<T> {
+// unsafe impl<T: Send + Sync> Send for BehaviorSubject<T> {}
+// unsafe impl<T: Send + Sync> Sync for BehaviorSubject<T> {}
+
+impl<T: 'static + Clone + Send + Sync> BehaviorSubject<T> {
     pub fn new(value: T) -> Self {
-        BehaviorSubject {
-            value: Arc::new(Mutex::new(value)),
-            subscribers: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    pub fn subscribe<F>(&self, callback: F)
-    where
-        F: FnMut(T) + Send + 'static,
-    {
-        let subscriber = Arc::new(Mutex::new(callback));
-        self.subscribers.lock().unwrap().push(subscriber.clone());
-        let value = self.value.lock().unwrap().clone();
-        let mut callback = subscriber.lock().unwrap();
-        callback(value);
-    }
-
-    pub fn next(&self, value: T) {
-        *self.value.lock().unwrap() = value;
-        let subscribers = self.subscribers.lock().unwrap();
-        for subscriber in subscribers.iter() {
-            let value = self.value.lock().unwrap().clone();
-            let mut callback = subscriber.lock().unwrap();
-            callback(value);
+        let (sender, receiver) = channel(value);
+        Self {
+            sender: Arc::new(sender),
+            receiver,
         }
     }
 
     pub fn value(&self) -> T {
-        self.value.lock().unwrap().clone()
+        self.receiver.borrow().clone()
+    }
+
+    pub fn next(&self, value: T) {
+        _ = self.sender.send(value)
+    }
+
+    pub fn subscribe(&self) -> WatchStream<T> {
+        let rx = self.sender.subscribe();
+        WatchStream::new(rx)
     }
 }
 
-struct SubscribeFuture<T: Clone> {
-    behavior_subject: Arc<BehaviorSubject<T>>,
-    completed: bool,
-}
+// #[tokio::test]
+// async fn test() {
+//     let test = BehaviorSubject::new(0);
 
-impl<T: Clone> Future for SubscribeFuture<T> {
-    type Output = T;
+//     let mut stream = test.subscribe();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.completed {
-            Poll::Pending
-        } else {
-            self.completed = true;
-            Poll::Ready((*self.behavior_subject.value.lock().unwrap()).clone())
-        }
-    }
-}
+//     tokio::spawn(async move {
+//         while let Some(value) = stream.next().await {
+//             println!("Got {}", value);
+//         }
+//     });
 
-// fn subscribe<T: Clone>(behavior_subject: Arc<BehaviorSubject<T>>) -> SubscribeFuture<T> {
-//     SubscribeFuture {
-//         behavior_subject,
-//         completed: false,
-//     }
+//     test.next(1);
+
+//     sleep(Duration::from_secs(1)).await;
+
+//     println!("TEST GET VALUE {}", test.value());
+
+//     test.next(2);
+//     sleep(Duration::from_secs(2)).await;
+//     test.next(3);
+//     test.next(4);
+//     sleep(Duration::from_secs(4)).await;
 // }
-
-#[tokio::test]
-async fn test() {
-    let behavior_subject = Arc::new(BehaviorSubject::new(0));
-
-    // let initial_value = subscribe(behavior_subject.clone()).await;
-
-    // Print the initial value
-    // println!("Initial value: {:?}", initial_value);
-
-    // Subscribe to the behavior subject
-    behavior_subject.subscribe(|value| {
-        println!("Received value: {:?}", value);
-    });
-
-    // Update the behavior subject's value
-    behavior_subject.next(42);
-}

@@ -1,10 +1,11 @@
+use chrono::Duration;
 use chrono::{Datelike, Local};
 use polars::prelude::*;
 use reqwest::Client;
 use serde::Deserialize;
 use std::fmt::Debug;
-use chrono::Duration;
 
+use crate::trader::functions::round_down_nth_decimal;
 use crate::{
     shared::csv::save_csv,
     trader::{
@@ -21,7 +22,7 @@ pub struct Performance {
     data: DataFrame,
     benchmark_stats: Statistics,
     stats: Statistics,
-    risk_free_daily_rate: Option<f64>,
+    risk_free_returns: f64,
 }
 
 impl Performance {
@@ -45,7 +46,7 @@ impl Performance {
             benchmark_data: DataFrame::default(),
             benchmark_stats: Statistics::default(),
             stats: Statistics::default(),
-            risk_free_daily_rate: None,
+            risk_free_returns: 0.0,
         }
     }
 }
@@ -68,7 +69,8 @@ impl Performance {
         let strategy_df = strategy_lf.clone().collect()?;
         save_csv(path.clone(), file_name, &strategy_df, true)?;
 
-        self.benchmark_data = calculate_benchmark_data(strategy_lf, traded_symbol)?;
+        self.benchmark_data =
+            calculate_benchmark_data(strategy_lf, traded_symbol, self.risk_free_returns)?;
         let file_name = "trades.csv".to_string();
         save_csv(path, file_name, &self.benchmark_data, true)?;
         // self.benchmark_data = strategy_lf.clone().collect()?;
@@ -76,14 +78,15 @@ impl Performance {
         Ok(())
     }
 
-    fn set_risk_free_daily_rate(&mut self, rate: Option<f64>) {
-        self.risk_free_daily_rate = rate;
+    fn set_risk_free_daily_returns(&mut self, returns: f64) {
+        self.risk_free_returns = returns;
     }
 }
 // move to trader
 pub fn calculate_benchmark_data(
     strategy_lf: &LazyFrame,
     traded_symbol: &String,
+    risk_free_returns: f64,
 ) -> Result<DataFrame, Error> {
     let trades_lf = calculate_trades(strategy_lf, traded_symbol)?;
     // let path = "data/test".to_string();
@@ -95,9 +98,9 @@ pub fn calculate_benchmark_data(
 
     let df = trading_lf.collect()?;
 
-    let benchmark_stats = calculate_benchmark_stats(&df)?;
+    let benchmark_stats = calculate_benchmark_stats(&df, risk_free_returns)?;
 
-    println!("SESSIONS DF {:?}", df);
+    println!("Benchmark stats {:?}", benchmark_stats);
 
     Ok(df)
 }
@@ -169,6 +172,8 @@ pub fn calculate_trading_sessions(
         col("action").last().alias("close_signal"),
         col("position").first().alias("position"),
         col("returns").last().keep_name(),
+        col("returns").max().alias("max_returns"),
+        (col("returns").last() / col("returns").max()).alias("returns_seized"),
         col("units").mean().keep_name(),
         col("P&L").last().keep_name(),
         col("balance").last().keep_name(),
@@ -247,7 +252,10 @@ pub fn calculate_trading_sessions(
     Ok(lf)
 }
 
-pub fn calculate_benchmark_stats(benchmark_data: &DataFrame) -> Result<Statistics, Error> {
+pub fn calculate_benchmark_stats(
+    benchmark_data: &DataFrame,
+    risk_free_returns: f64,
+) -> Result<Statistics, Error> {
     let initial_data_filter_mask = benchmark_data.column("position")?.not_equal(0)?;
     let df = benchmark_data.filter(&initial_data_filter_mask)?;
 
@@ -257,27 +265,45 @@ pub fn calculate_benchmark_stats(benchmark_data: &DataFrame) -> Result<Statistic
     let risk_series = df.column("risk")?;
     let downside_risk_series = df.column("downside_risk")?;
     let drawdown_series = df.column("drawdown")?;
+    let balance_series = df.column("balance")?;
 
     let success_rate = calculate_success_rate(returns_series)?;
     let risk = risk_series.mean().unwrap();
     let downside_deviation = downside_risk_series.mean().unwrap();
-    let risk_adjusted_return = calculate_risk_adjusted_returns(returns_series, risk_series)?;
-    let max_drawdown: f64 =
-        calculate_max_drawdown_and_duration(start_series, end_series, drawdown_series)?;
 
-    // max_drawdown_duration: f64,
-    // sharpe_ratio: f64,
-    // sortino_ratio: f64,
-    // calmar_ratio: f64,
-    Ok(Statistics::default())
+    let (max_drawdown, max_drawdown_duration) =
+        calculate_max_drawdown_and_duration(start_series, end_series, drawdown_series)?;
+    let risk_adjusted_return = calculate_risk_adjusted_returns(returns_series, risk_series)?;
+    let sharpe_ratio = calculate_sharpe_ratio(returns_series, risk_series, risk_free_returns)?;
+
+    let sortino_ratio =
+        calculate_sortino_ratio(returns_series, downside_risk_series, risk_free_returns)?;
+    let calmar_ratio = calculate_calmar_ratio(balance_series, max_drawdown)?;
+
+    Ok(Statistics::new(
+        success_rate,
+        risk,
+        downside_deviation,
+        risk_adjusted_return,
+        max_drawdown,
+        max_drawdown_duration,
+        sharpe_ratio,
+        sortino_ratio,
+        calmar_ratio,
+    ))
 }
 
 fn calculate_success_rate(returns_series: &Series) -> Result<f64, Error> {
     let ca = returns_series.f64()?;
     let positive_count = ca.into_no_null_iter().filter(|&x| x > 0.0).count();
     let total_count = ca.into_no_null_iter().len();
+    let success_rate = if total_count != 0 {
+        positive_count as f64 / total_count as f64
+    } else {
+        0.0 as f64
+    };
 
-    Ok(positive_count as f64 / total_count as f64)
+    Ok(round_down_nth_decimal(success_rate, 2))
 }
 
 fn calculate_risk_adjusted_returns(
@@ -291,15 +317,65 @@ fn calculate_risk_adjusted_returns(
         .into_no_null_iter()
         .enumerate()
         .zip(risk_ca.into_no_null_iter())
-        .fold(0.0, |acc, ((_index, returns), risk)| acc + returns / risk);
+        .fold(0.0, |acc, ((_index, returns), risk)| {
+            let iteration = if risk != 0.0 { returns / risk } else { 0.0 };
+            acc + iteration
+        });
     Ok(risk_adjusted_returns)
+}
+
+fn calculate_sharpe_ratio(
+    returns_series: &Series,
+    risk_series: &Series,
+    risk_free_returns: f64,
+) -> Result<f64, Error> {
+    let returns_ca = returns_series.f64()?;
+    let risk_ca = risk_series.f64()?;
+
+    let risk_adjusted_returns = returns_ca
+        .into_no_null_iter()
+        .zip(risk_ca.into_no_null_iter())
+        .fold(-risk_free_returns, |acc, (returns, risk)| {
+            let iteration = if risk != 0.0 { returns / risk } else { 0.0 };
+            acc + iteration
+        });
+    Ok(risk_adjusted_returns)
+}
+
+fn calculate_sortino_ratio(
+    returns_series: &Series,
+    downside_risk_series: &Series,
+    risk_free_returns: f64,
+) -> Result<f64, Error> {
+    let returns_ca = returns_series.f64()?;
+    let downside_risk_ca = downside_risk_series.f64()?;
+
+    let risk_adjusted_returns = returns_ca
+        .into_no_null_iter()
+        .zip(downside_risk_ca.into_no_null_iter())
+        .fold(-risk_free_returns, |acc, (returns, risk)| {
+            let iteration = if risk != 0.0 { returns / risk } else { 0.0 };
+            acc + iteration
+        });
+    Ok(risk_adjusted_returns)
+}
+
+fn calculate_calmar_ratio(balance_series: &Series, max_drawdown: f64) -> Result<f64, Error> {
+    if max_drawdown == 0.0 {
+        Ok(0.0)
+    } else {
+        let balances_vec: Vec<f64> = balance_series.f64()?.into_no_null_iter().collect();
+        let last_balance_index = balances_vec.len() - 1;
+        let last_balance = balances_vec[last_balance_index];
+        Ok(last_balance / max_drawdown)
+    }
 }
 
 fn calculate_max_drawdown_and_duration(
     start_series: &Series,
     end_series: &Series,
     drawdown_series: &Series,
-) -> Result<f64, Error> {
+) -> Result<(f64, Duration), Error> {
     let start_vec = start_series
         .datetime()?
         .into_no_null_iter()
@@ -308,7 +384,7 @@ fn calculate_max_drawdown_and_duration(
         .datetime()?
         .into_no_null_iter()
         .collect::<Vec<_>>();
-    let mut drawdown_vec = drawdown_series
+    let drawdown_vec = drawdown_series
         .f64()
         .unwrap()
         .into_no_null_iter()
@@ -318,7 +394,13 @@ fn calculate_max_drawdown_and_duration(
         .enumerate()
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
     {
+        let max_drawdown = drawdown_vec[max_index];
+        let max_drawdown_duration =
+            Duration::milliseconds(end_vec[max_index] - start_vec[max_index]);
+
+        Ok((max_drawdown, max_drawdown_duration))
     } else {
+        Ok((0.0, Duration::minutes(0)))
     }
 }
 
@@ -353,17 +435,43 @@ pub async fn get_latest_us_treasury_bills_yearly_rate(http: &Client) -> Result<f
 }
 
 #[allow(dead_code)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Statistics {
     success_rate: f64,
     risk: f64,
     downside_deviation: f64,
     risk_adjusted_return: f64,
-    max_drawdown: Option<f64>,
-    max_drawdown_duration: Option<Duration>,
+    max_drawdown: f64,
+    max_drawdown_duration: Duration,
     sharpe_ratio: f64,
     sortino_ratio: f64,
     calmar_ratio: f64,
+}
+
+impl Statistics {
+    fn new(
+        success_rate: f64,
+        risk: f64,
+        downside_deviation: f64,
+        risk_adjusted_return: f64,
+        max_drawdown: f64,
+        max_drawdown_duration: Duration,
+        sharpe_ratio: f64,
+        sortino_ratio: f64,
+        calmar_ratio: f64,
+    ) -> Self {
+        Statistics {
+            success_rate,
+            risk,
+            downside_deviation,
+            risk_adjusted_return,
+            max_drawdown,
+            max_drawdown_duration,
+            sharpe_ratio,
+            sortino_ratio,
+            calmar_ratio,
+        }
+    }
 }
 
 impl Default for Statistics {
@@ -373,8 +481,8 @@ impl Default for Statistics {
             risk: 0.0,
             downside_deviation: 0.0,
             risk_adjusted_return: 0.0,
-            max_drawdown: None,
-            max_drawdown_duration: None,
+            max_drawdown: 0.0,
+            max_drawdown_duration: Duration::minutes(0),
             sharpe_ratio: 0.0,
             sortino_ratio: 0.0,
             calmar_ratio: 0.0,

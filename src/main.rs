@@ -1,25 +1,30 @@
 // use tokio::*;
 extern crate dotenv;
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use chrono::Duration;
 use dotenv::dotenv;
 pub mod shared;
 mod trader;
+use polars::prelude::DataFrame;
 use trader::{
     enums::log_level::LogLevel,
     indicators::{
         ExponentialMovingAverageIndicator, StochasticIndicator, StochasticThresholdIndicator,
     },
     models::{
+        behavior_subject::BehaviorSubject,
         exchange::Exchange,
         indicator::Indicator,
         market_data::MarketDataFeed,
         modifiers::{Leverage, PositionLockModifier, PriceLevelModifier},
         performance::Performance,
-        signal::Signer,
-        strategy::Strategy,
+        signal::{SignalCategory, Signer},
+        strategy::{self, Strategy},
     },
     signals::{
         MultipleStochasticWithThresholdCloseLongSignal,
@@ -41,7 +46,7 @@ async fn main() {
 
     let trend_col = String::from("bullish_market");
 
-    let windows = vec![5, 9, 12];
+    let windows = vec![3, 5, 15]; // 5, 15, 30
     let upper_threshold = 70;
     let lower_threshold = 30;
     let close_window_index = 2;
@@ -100,6 +105,9 @@ async fn main() {
         trend_col: trend_col.clone(),
     };
 
+    let pre_indicators: Vec<Box<(dyn Indicator + std::marker::Send + Sync + 'static)>> =
+        vec![Box::new(ewm_preindicator)];
+
     let indicators: Vec<Box<(dyn Indicator + std::marker::Send + Sync + 'static)>> = vec![
         Box::new(stochastic_indicator),
         Box::new(stochastic_threshold_indicator),
@@ -154,46 +162,53 @@ async fn main() {
 
     let bar_length = 60;
     let log_level = LogLevel::All;
-    let initial_data_offset = 180; // TODO: create a way to calculate this automatically
+    let initial_data_offset = 225; // TODO: create a way to calculate this automatically
     let initial_balance = 100.00;
-
-    // let (mdf_tx, mdf_rx) = channel(MarketDataFeedDTE::default());
-    // let (strategy_tx, strategy_rx) = channel(StrategyDTE::default());
-
-    let data_feed = MarketDataFeed::new(
-        [BTCUSDT, AGIXUSDT],
-        bar_length,
-        initial_data_offset,
-        log_level.clone(),
-        // mdf_tx,
-    );
-
     let mut price_level_modifiers = HashMap::new();
     let stop_loss = PriceLevelModifier::StopLoss(0.44);
-    let take_profit = PriceLevelModifier::TakeProfit(0.8);
+    let take_profit = PriceLevelModifier::TakeProfit(1.0);
     price_level_modifiers.insert(stop_loss.get_hash_key(), stop_loss);
     price_level_modifiers.insert(take_profit.get_hash_key(), take_profit);
 
+    let performance = Performance::default();
+    let performance_arc = Arc::new(Mutex::new(performance));
+
+    let data_subject = BehaviorSubject::new(DataFrame::default());
+
     let strategy = Strategy::new(
-        "Stochastic Strategy".into(),
-        Some(Box::new(ewm_preindicator)),
+        "Stepped Stochastic Strategy".into(),
+        pre_indicators,
         indicators,
         signals,
+        data_subject,
         initial_balance,
         exchange,
         Some(Leverage::Isolated(25)),
         lock_modifier,
-        price_level_modifiers, // strategy_tx,
-                               // mdf_rx,
+        price_level_modifiers,
+        performance_arc.clone(),
+    );
+    let strategy_arc = Arc::new(Mutex::new(strategy));
+
+    let data_feed = MarketDataFeed::new(
+        [BTCUSDT, ARBUSDT],
+        bar_length,
+        initial_data_offset,
+        log_level.clone(),
+        strategy_arc.clone(),
+        performance_arc.clone(),
     );
 
-    let performance = Performance::default();
+    let trader = Trader::new(
+        &symbols,
+        50.0,
+        data_feed,
+        strategy_arc,
+        performance_arc,
+        &log_level,
+    );
 
-    let trader = Trader::new(&symbols, 50.0, data_feed, strategy, performance, &log_level);
+    let signal_subject: BehaviorSubject<Option<SignalCategory>> = BehaviorSubject::new(None);
 
-    let _ = trader.init().await;
-
-    // data_feed.init().await;
-
-    // let _ = strategy.listen_events().await;
+    let _ = trader.init(signal_subject).await;
 }

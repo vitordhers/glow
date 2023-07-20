@@ -2,13 +2,15 @@ use super::super::enums::log_level::LogLevel;
 use super::super::enums::request_method::RequestMethod;
 use super::super::errors::Error;
 use super::super::functions::{
-    clear_tick_data_to_last_bar, consolidate_tick_data_into_lf, current_datetime, fetch_data,
-    get_symbol_ohlc_cols, parse_http_kline_into_tick_data, parse_ws_kline_into_tick_data,
-    resample_tick_data_secs_to_min, resample_tick_data_to_min,
+    clear_tick_data_to_last_bar, consolidate_complete_tick_data_into_lf, current_datetime,
+    fetch_data, get_symbol_ohlc_cols, parse_http_kline_into_tick_data,
+    parse_ws_kline_into_tick_data, resample_tick_data_to_length,
     timestamp_end_to_daily_timestamp_sec_intervals,
 };
+use super::behavior_subject::BehaviorSubject;
 use super::contract::Contract;
 use super::performance::Performance;
+use super::signal::SignalCategory;
 use super::strategy::Strategy;
 use super::{Request, WsKlineResponse};
 use crate::trader::constants::SECONDS_IN_MIN;
@@ -18,11 +20,13 @@ use log::*;
 use polars::prelude::*;
 use reqwest::Client;
 use std::env::{self};
+use std::sync::{Arc, Mutex};
 use std::time::Duration as TimeDuration;
 use tokio::net::TcpStream;
 use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::Url;
+
 // use tokio::sync::watch::error::SendError;
 // use tokio::sync::watch::Sender;
 
@@ -35,9 +39,10 @@ pub struct MarketDataFeed {
     log_level: LogLevel,
     http: Client,
     initial_fetch_delay: TimeDuration,
-    initial_fetch_offset: i64, // offsets number of minutes from indicators, so that we can have information for the full previous day
-                               // socket: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-                               // pub sender: Sender<MarketDataFeedDTE>,
+    initial_fetch_offset: i64,
+    strategy_arc: Arc<Mutex<Strategy>>,
+    // offsets number of minutes from indicators, so that we can have information for the full previous day
+    // socket: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
 }
 
 // #[derive(Clone)]
@@ -58,7 +63,8 @@ impl MarketDataFeed {
         bar_length: i64,
         initial_fetch_offset: i64,
         log_level: LogLevel,
-        // sender: Sender<MarketDataFeedDTE>,
+        strategy_arc: Arc<Mutex<Strategy>>,
+        performance_arc: Arc<Mutex<Performance>>,
     ) -> MarketDataFeed {
         let mut schema_fields: Vec<Field> = vec![];
 
@@ -78,7 +84,7 @@ impl MarketDataFeed {
         let tick_data_schema = Schema::from_iter(schema_fields.into_iter());
 
         let bar_length = Duration::seconds(bar_length);
-        let current_datetime: NaiveDateTime = current_datetime();
+        let current_datetime = current_datetime();
         let seconds_to_next_full_minute = 60 - current_datetime.timestamp() % 60;
         let last_bar = current_datetime + Duration::seconds(seconds_to_next_full_minute);
         println!(
@@ -95,7 +101,7 @@ impl MarketDataFeed {
             initial_fetch_delay: TimeDuration::from_secs(seconds_to_next_full_minute as u64),
             initial_fetch_offset,
             tick_data_schema,
-            // sender,
+            strategy_arc,
         }
     }
 
@@ -103,12 +109,7 @@ impl MarketDataFeed {
         self.contracts.clone().map(|c| c.symbol)
     }
 
-    pub async fn init(
-        &mut self,
-        strategy: &mut Strategy,
-        performance: &mut Performance,
-        initial_balance: f64,
-    ) {
+    pub async fn init(&mut self, subject: BehaviorSubject<Option<SignalCategory>>) {
         let connection = self.connect().await;
         match connection {
             Err(e) => {
@@ -116,28 +117,18 @@ impl MarketDataFeed {
             }
             Ok(mut ws) => match self.listen_to_klines_live_data(&mut ws).await {
                 Ok(()) => {
-                    let _events = self.listen_websocket(&mut ws, strategy).await;
+                    let _events = self.listen_websocket(&mut ws, subject).await;
                 }
                 Err(e) => error!("Klines error {:?}", e),
             },
         }
     }
 
-    pub async fn fetch_benchmark_data(
-        &self,
-        strategy: &mut Strategy,
-        performance: &mut Performance,
-        initial_balance: f64,
-    ) {
+    pub async fn fetch_benchmark_data(&self) {
         match self.fetch_historical_data().await {
             Ok(lf) => {
-                // let dte = MarketDataFeedDTE::SetBenchmark(
-                //     lf.clone(),
-                //     self.last_bar.clone(),
-                //     self.symbols[1].clone(),
-                // );
-                // let _ = self.send(dte);
-                let _ = strategy.set_benchmark(performance, lf, &self.last_bar, &self.contracts[1]);
+                let mut strategy_guard = self.strategy_arc.lock().unwrap();
+                let _ = strategy_guard.set_benchmark(lf, &self.last_bar, &self.contracts[1]);
             }
             Err(e) => error!("get historical data error {:?}", e),
         }
@@ -163,9 +154,18 @@ impl MarketDataFeed {
                 start = &timestamp_intervals[i - 1] * 1000;
             }
 
-            let end = &timestamp_intervals[i] * 1000;
+            let end = (&timestamp_intervals[i] * 1000) - 1;
 
             if value == timestamp_intervals.last().unwrap() {
+                println!(
+                    "{:?} | ⌛ Waiting {:?} secs until last ({}) klines data  are available",
+                    current_datetime(),
+                    self.initial_fetch_delay.as_secs(),
+                    NaiveDateTime::from_timestamp_millis(end)
+                        .unwrap()
+                        .format("%Y-%m-%d %H:%M")
+                        .to_string()
+                );
                 sleep(self.initial_fetch_delay).await;
                 // let start = Instant::now();
                 // let sleep_duration = Duration::seconds(fetch_offset);
@@ -175,10 +175,6 @@ impl MarketDataFeed {
                 // }
             }
             for symbol in &self.symbols() {
-                println!(
-                    "fetching {} data, start= {}, end= {}, limit= {}",
-                    symbol, start, end, current_limit
-                );
                 let fetched_klines =
                     fetch_data(&self.http, symbol, &start, &end, current_limit).await?;
                 fetched_klines.iter().for_each(|kline| {
@@ -188,11 +184,19 @@ impl MarketDataFeed {
             }
         }
 
-        let new_tick_data_lf =
-            consolidate_tick_data_into_lf(&self.symbols(), &tick_data, &self.tick_data_schema)?;
+        let new_tick_data_lf = consolidate_complete_tick_data_into_lf(
+            &self.symbols(),
+            &tick_data,
+            &self.tick_data_schema,
+        )?;
 
-        let tick_data_lf =
-            resample_tick_data_to_min(&self.symbols(), &self.bar_length, new_tick_data_lf)?;
+        let tick_data_lf = resample_tick_data_to_length(
+            &self.symbols(),
+            &self.bar_length,
+            new_tick_data_lf,
+            ClosedWindow::Left,
+            None,
+        )?;
 
         Ok(tick_data_lf)
     }
@@ -253,11 +257,14 @@ impl MarketDataFeed {
     pub async fn listen_websocket(
         &mut self,
         wss: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-        strategy: &mut Strategy,
+        subject: BehaviorSubject<Option<SignalCategory>>,
     ) -> Result<(), Error> {
         // let socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>> = self.socket.as_mut().unwrap();
-        println!("Listen events start {:?}", current_datetime());
-        let mut tick_data_payload = vec![];
+        println!(
+            "{:?} | 🔌 Started to listen to websocket events",
+            current_datetime()
+        );
+        // let mut tick_data_payload = vec![];
         loop {
             tokio::select! {
                 ws_message = wss.next() => {
@@ -271,33 +278,17 @@ impl MarketDataFeed {
                     let last_tick_datetime = tick_data.date;
                     let diff = self.last_bar - tick_data.date;
                     // println!("tickbar diff = {}", diff.num_seconds());
+
                     if diff.num_seconds() > 0 {
                         println!("{:?} | {:?}", tick_data.date, tick_data);
                         continue;
                     }
 
-                    println!("{:?} | + {:?}", tick_data.date, tick_data);
+                    println!("{:?} | ✅ {:?}", tick_data.date, tick_data);
+                    let mut guard = self.strategy_arc.lock().unwrap();
 
-                    tick_data_payload.push(tick_data);
+                    self.last_bar = guard.process_tick_data(tick_data, &self.last_bar, self.bar_length, &self.contracts, subject.clone())?;
 
-                    if last_tick_datetime - self.last_bar >= self.bar_length {
-                        let new_tick_data_lf = consolidate_tick_data_into_lf(&self.symbols(), &tick_data_payload, &self.tick_data_schema)?;
-                        let new_tick_data_lf = resample_tick_data_secs_to_min(
-                            &self.symbols(),
-                            &new_tick_data_lf,
-                            &self.tick_data_schema,
-                            &self.last_bar,
-                            &self.bar_length,
-                        )?;
-
-                        let filter_datetime = self.last_bar - Duration::days(1);
-                        // tick_data_lf = concat_and_clean_lazyframes([tick_data_lf, new_tick_data_lf], filter_datetime)?;
-                        self.last_bar = last_tick_datetime;
-                        tick_data_payload = clear_tick_data_to_last_bar(tick_data_payload, &self.last_bar);
-                        // TODO: this needs to be done in ws instead
-                        // tick_data_payload = clear_tick_data_to_last_bar(tick_data_payload, &previous_bar);
-                        // tick_data_payload.clear();
-                    }
                 },
             }
         }

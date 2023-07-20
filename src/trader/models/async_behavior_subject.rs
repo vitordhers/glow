@@ -2,6 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+// use std::time::Duration;
+// use tokio::time::sleep;
 
 #[derive(Clone)]
 pub struct AsyncBehaviorSubject<T: Clone> {
@@ -82,6 +84,7 @@ impl<T: Clone> Future for SubscribeFuture<T> {
 
 //     // Update the subject value
 //     subject.next(42);
+//     println!("VALUE {}", subject.value());
 
 //     // Wait for a moment to allow async subscribers to execute
 //     sleep(Duration::from_secs(2)).await;

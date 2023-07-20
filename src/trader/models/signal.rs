@@ -2,7 +2,7 @@ use super::super::errors::Error;
 use polars::prelude::*;
 
 #[allow(dead_code)]
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SignalCategory {
     GoShort,
     CloseShort,
@@ -15,8 +15,11 @@ pub enum SignalCategory {
     RevertPosition,
     StopLoss,
     TakeProfit,
-    LeverageBankrupcty
+    LeverageBankrupcty,
 }
+
+unsafe impl Send for SignalCategory {}
+unsafe impl Sync for SignalCategory {}
 
 impl SignalCategory {
     pub fn get_column(&self) -> &str {
@@ -39,7 +42,8 @@ impl SignalCategory {
 
 pub trait Signer {
     fn signal_category(&self) -> SignalCategory;
-    fn compute_signal_column(&self, lf: &LazyFrame) -> Result<LazyFrame, Error>;
+    fn set_signal_column(&self, lf: &LazyFrame) -> Result<LazyFrame, Error>;
+    fn update_signal_column(&self, data: &DataFrame) -> Result<DataFrame, Error>;
     fn clone_box(&self) -> Box<dyn Signer + Send + Sync>;
 }
 
