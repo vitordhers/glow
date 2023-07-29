@@ -35,3 +35,5 @@ tokio = { version = "1.27.0", features = ['full'] }
 tokio-stream = { version = "0.1.14", features = ['sync'] }
 tokio-tungstenite = { version = "0.18", features = ["native-tls"] }
 url = "2.3.1"
+hmac = "0.12.1"
+sha2 = "0.10.7"

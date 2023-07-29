@@ -2,18 +2,17 @@ use super::super::enums::log_level::LogLevel;
 use super::super::enums::request_method::RequestMethod;
 use super::super::errors::Error;
 use super::super::functions::{
-    clear_tick_data_to_last_bar, consolidate_complete_tick_data_into_lf, current_datetime,
-    fetch_data, get_symbol_ohlc_cols, parse_http_kline_into_tick_data,
-    parse_ws_kline_into_tick_data, resample_tick_data_to_length,
+    consolidate_complete_tick_data_into_lf, current_datetime, fetch_data, get_symbol_ohlc_cols,
+    parse_http_kline_into_tick_data, parse_ws_kline_into_tick_data, resample_tick_data_to_length,
     timestamp_end_to_daily_timestamp_sec_intervals,
 };
 use super::behavior_subject::BehaviorSubject;
-use super::contract::Contract;
-use super::performance::Performance;
-use super::signal::SignalCategory;
+use super::exchange::{Exchange, WsProcesser};
 use super::strategy::Strategy;
 use super::{Request, WsKlineResponse};
 use crate::trader::constants::SECONDS_IN_MIN;
+use crate::trader::models::exchange::ProcesserAction;
+use crate::trader::Order;
 use chrono::{Duration, NaiveDateTime};
 use futures_util::{SinkExt, StreamExt};
 use log::*;
@@ -27,12 +26,9 @@ use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
-// use tokio::sync::watch::error::SendError;
-// use tokio::sync::watch::Sender;
-
 #[derive(Clone)]
 pub struct MarketDataFeed {
-    contracts: [Contract; 2],
+    exchange: BehaviorSubject<Box<dyn Exchange + Send + Sync>>,
     bar_length: Duration,
     last_bar: NaiveDateTime,
     tick_data_schema: Schema,
@@ -41,8 +37,9 @@ pub struct MarketDataFeed {
     initial_fetch_delay: TimeDuration,
     initial_fetch_offset: i64,
     strategy_arc: Arc<Mutex<Strategy>>,
+    current_balance: BehaviorSubject<f64>,
+    staging_order: BehaviorSubject<Order>,
     // offsets number of minutes from indicators, so that we can have information for the full previous day
-    // socket: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
 }
 
 // #[derive(Clone)]
@@ -59,12 +56,13 @@ pub struct MarketDataFeed {
 
 impl MarketDataFeed {
     pub fn new(
-        contracts: [Contract; 2],
+        exchange: BehaviorSubject<Box<dyn Exchange + Send + Sync>>,
         bar_length: i64,
         initial_fetch_offset: i64,
         log_level: LogLevel,
         strategy_arc: Arc<Mutex<Strategy>>,
-        performance_arc: Arc<Mutex<Performance>>,
+        current_balance: BehaviorSubject<f64>,
+        staging_order: BehaviorSubject<Order>,
     ) -> MarketDataFeed {
         let mut schema_fields: Vec<Field> = vec![];
 
@@ -72,9 +70,10 @@ impl MarketDataFeed {
             "start_time",
             DataType::Datetime(TimeUnit::Milliseconds, None),
         ));
-
-        for contract in &contracts {
-            let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(&contract.symbol);
+        let biding = exchange.value();
+        let symbols = biding.get_current_symbols();
+        for symbol in symbols {
+            let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(&symbol);
 
             schema_fields.push(Field::new(open_col.as_str(), DataType::Float64));
             schema_fields.push(Field::new(high_col.as_str(), DataType::Float64));
@@ -93,7 +92,7 @@ impl MarketDataFeed {
         );
 
         MarketDataFeed {
-            contracts,
+            exchange,
             bar_length,
             last_bar,
             log_level,
@@ -102,36 +101,42 @@ impl MarketDataFeed {
             initial_fetch_offset,
             tick_data_schema,
             strategy_arc,
+            current_balance,
+            staging_order,
         }
     }
 
-    fn symbols(&self) -> [String; 2] {
-        self.contracts.clone().map(|c| c.symbol)
-    }
+    pub async fn init_binance_ws(&mut self) -> Result<(), Error> {
+        let mut binance_wss = self
+            .connect_to_binance_ws()
+            .await
+            .expect("Binance ws stream connection error");
+        self.listen_to_binance_klines(&mut binance_wss)
+            .await
+            .expect("Binance ws listen to klines failed");
 
-    pub async fn init(&mut self, subject: BehaviorSubject<Option<SignalCategory>>) {
-        let connection = self.connect().await;
-        match connection {
-            Err(e) => {
-                error!("web socket stream connection error {:?}", e);
-            }
-            Ok(mut ws) => match self.listen_to_klines_live_data(&mut ws).await {
-                Ok(()) => {
-                    let _events = self.listen_websocket(&mut ws, subject).await;
-                }
-                Err(e) => error!("Klines error {:?}", e),
-            },
-        }
+        let mut exchange_wss = self
+            .connect_to_exchange_ws()
+            .await
+            .expect("Exchange ws stream connection error");
+
+        self.listen_websocket(&mut binance_wss, &mut exchange_wss)
+            .await
     }
 
     pub async fn fetch_benchmark_data(&self) {
         match self.fetch_historical_data().await {
             Ok(lf) => {
                 let mut strategy_guard = self.strategy_arc.lock().unwrap();
-                let _ = strategy_guard.set_benchmark(lf, &self.last_bar, &self.contracts[1]);
+                let _ = strategy_guard.set_benchmark(lf, &self.last_bar);
             }
             Err(e) => error!("get historical data error {:?}", e),
         }
+    }
+
+    fn get_current_symbols(&self) -> Vec<String> {
+        let exchange_ref = self.exchange.value();
+        exchange_ref.get_current_symbols()
     }
 
     async fn fetch_historical_data(&self) -> Result<LazyFrame, Error> {
@@ -141,6 +146,7 @@ impl MarketDataFeed {
         let timestamp_intervals =
             timestamp_end_to_daily_timestamp_sec_intervals(timestamp_end, limit, 1); // TODO: granularity hardcoded
         let mut tick_data = vec![];
+        let symbols = self.get_current_symbols();
 
         for (i, value) in timestamp_intervals.iter().enumerate() {
             let start: i64;
@@ -158,7 +164,7 @@ impl MarketDataFeed {
 
             if value == timestamp_intervals.last().unwrap() {
                 println!(
-                    "{:?} | ⌛ Waiting {:?} secs until last ({}) klines data  are available",
+                    "{:?} | ⌛ Waiting {:?} secs until last ({}) klines data is available",
                     current_datetime(),
                     self.initial_fetch_delay.as_secs(),
                     NaiveDateTime::from_timestamp_millis(end)
@@ -174,7 +180,7 @@ impl MarketDataFeed {
                 //     sleep(Duration::from_secs(1)).await;
                 // }
             }
-            for symbol in &self.symbols() {
+            for symbol in &symbols {
                 let fetched_klines =
                     fetch_data(&self.http, symbol, &start, &end, current_limit).await?;
                 fetched_klines.iter().for_each(|kline| {
@@ -184,14 +190,11 @@ impl MarketDataFeed {
             }
         }
 
-        let new_tick_data_lf = consolidate_complete_tick_data_into_lf(
-            &self.symbols(),
-            &tick_data,
-            &self.tick_data_schema,
-        )?;
+        let new_tick_data_lf =
+            consolidate_complete_tick_data_into_lf(&symbols, &tick_data, &self.tick_data_schema)?;
 
         let tick_data_lf = resample_tick_data_to_length(
-            &self.symbols(),
+            &symbols,
             &self.bar_length,
             new_tick_data_lf,
             ClosedWindow::Left,
@@ -202,7 +205,9 @@ impl MarketDataFeed {
     }
 
     /// A single connection to stream.binance.com is only valid for 24 hours; expect to be disconnected at the 24 hour mark
-    pub async fn connect(&mut self) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
+    pub async fn connect_to_binance_ws(
+        &self,
+    ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
         let binance_ws_base_url = env::var("BINANCE_WS_BASE_URL")?;
 
         if self.log_level > LogLevel::Trades {
@@ -211,63 +216,60 @@ impl MarketDataFeed {
 
         let url = Url::parse(&format!("{}/ws/bookTicker", binance_ws_base_url))?; // ws url
 
-        let (ws_stream, _) = connect_async(url).await?;
-        // self.socket = Some(ws_stream);
+        let (ws_stream, response) = connect_async(url).await?;
+        println!("BINANCE WS RESPONSE {:?}", response);
 
         Ok(ws_stream)
     }
 
-    pub async fn listen_to_klines_live_data(
-        &mut self,
+    pub async fn listen_to_binance_klines(
+        &self,
         wss: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
     ) -> Result<(), Error> {
         let mut ticker_params: Vec<String> = vec![];
-        let symbols = self.symbols();
-        if symbols[0] != symbols[1] {
-            for symbol in symbols {
-                let kline_param = format!("{}@kline_1m", symbol.to_lowercase());
-                ticker_params.push(kline_param);
-            }
-        } else {
-            ticker_params.push(format!("{}@kline_1m", symbols[0].to_lowercase()));
+        let symbols = self.get_current_symbols();
+        for symbol in symbols {
+            let kline_param = format!("{}@kline_1m", symbol.to_lowercase());
+            ticker_params.push(kline_param);
         }
 
-        let request = Request {
+        let subscribe_request = Request {
             method: RequestMethod::SUBSCRIBE,
             params: ticker_params,
             id: 1,
         };
 
-        let json_str_result = serde_json::to_string(&request);
+        let subscribe_json_str = serde_json::to_string(&subscribe_request)
+            .expect(&format!("JSON ({:?}) parsing error", subscribe_request));
 
-        let json_str = match json_str_result {
-            Ok(json_str) => json_str,
-            Err(error) => {
-                println!("JSON ({:?}) parsing error: {:?}", request, error);
-                String::from("{}")
-            }
-        };
+        let subscription_message = Message::Text(subscribe_json_str);
+        wss.send(subscription_message).await?;
 
-        let subscription_message = Message::Text(json_str);
-        let result = wss.send(subscription_message).await?;
+        Ok(())
+    }
 
-        Ok(result)
+    async fn connect_to_exchange_ws(
+        &self,
+    ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
+        let binding = self.exchange.value();
+
+        let wss = binding.connect_to_ws().await?;
+        Ok(wss)
     }
 
     pub async fn listen_websocket(
         &mut self,
-        wss: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-        subject: BehaviorSubject<Option<SignalCategory>>,
+        binance_wss: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+        exchange_wss: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
     ) -> Result<(), Error> {
         // let socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>> = self.socket.as_mut().unwrap();
         println!(
-            "{:?} | 🔌 Started to listen to websocket events",
+            "{:?} | 🔌 Started to listen to Binance websocket events",
             current_datetime()
         );
-        // let mut tick_data_payload = vec![];
         loop {
             tokio::select! {
-                ws_message = wss.next() => {
+                ws_message = binance_wss.next() => {
                     let message = ws_message.unwrap()?;
                     let message_str = message.to_string();
                     if !message_str.contains("\"e\":\"kline\"") {
@@ -275,7 +277,7 @@ impl MarketDataFeed {
                     }
                     let kline_response: WsKlineResponse = serde_json::from_str(&message_str)?;
                     let tick_data = parse_ws_kline_into_tick_data(kline_response)?;
-                    let last_tick_datetime = tick_data.date;
+                    // let last_tick_datetime = tick_data.date;
                     let diff = self.last_bar - tick_data.date;
                     // println!("tickbar diff = {}", diff.num_seconds());
 
@@ -286,10 +288,33 @@ impl MarketDataFeed {
 
                     println!("{:?} | ✅ {:?}", tick_data.date, tick_data);
                     let mut guard = self.strategy_arc.lock().unwrap();
+                    let symbols = self.get_current_symbols();
 
-                    self.last_bar = guard.process_tick_data(tick_data, &self.last_bar, self.bar_length, &self.contracts, subject.clone())?;
+                    self.last_bar = guard.process_tick_data(tick_data, &self.last_bar, self.bar_length, &symbols)?;
 
                 },
+                ws_message = exchange_wss.next() =>{
+                    let message = ws_message.unwrap()?;
+                    let ws_json_response = message.to_string();
+                    let binding = self.exchange.value();
+                    let processer = binding.get_processer();
+
+                    let action = processer.process_ws_message(ws_json_response);
+
+                    match action {
+                        ProcesserAction::Nil => {},
+                        ProcesserAction::Auth { success } => {
+                            println!("AUTH ACTION SUCCESS: {}", success);
+                        },
+                        ProcesserAction::UpdateOrder {order} =>{
+                            self.staging_order.next(order);
+                        }
+                        ProcesserAction::UpdateBalance {balance_available} =>{
+                            self.current_balance.next(balance_available);
+                        }
+                    }
+
+                }
             }
         }
         // Ok(())

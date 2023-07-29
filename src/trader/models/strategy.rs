@@ -1,6 +1,6 @@
 use crate::{
     shared::csv::save_csv,
-    trader::functions::{get_symbol_ohlc_cols, map_tick_data_to_data_lf},
+    trader::{functions::{get_symbol_ohlc_cols, map_tick_data_to_data_lf}, OrderStatus},
 };
 
 use super::{
@@ -26,38 +26,15 @@ pub struct Strategy {
     pub pre_indicators: Vec<Box<dyn Indicator + Send + Sync>>,
     pub indicators: Vec<Box<dyn Indicator + Send + Sync>>,
     pub signals: Vec<Box<dyn Signer + Send + Sync>>,
+    pub signal_generator: BehaviorSubject<Option<SignalCategory>>,
     pub data: BehaviorSubject<DataFrame>,
     pub initial_balance: f64,
-    pub exchange: Exchange,
+    pub exchange: BehaviorSubject<Box<dyn Exchange + Send + Sync>>,
     pub leverage: Leverage,
     pub position_modifier: PositionLockModifier,
     pub price_level_modifiers: HashMap<String, PriceLevelModifier>,
-    pub staging_area: StagingArea,
     tick_data_vec: Vec<TickData>,
     performance_arc: Arc<Mutex<Performance>>,
-}
-
-pub struct StagingArea {
-    pub current_order: Option<LeveredOrder>,
-    pub current_balance: f64,
-}
-
-impl StagingArea {
-    pub fn new(initial_balance: f64) -> Self {
-        StagingArea {
-            current_order: None,
-            current_balance: initial_balance,
-        }
-    }
-}
-
-impl Default for StagingArea {
-    fn default() -> Self {
-        StagingArea {
-            current_order: None,
-            current_balance: 0.0,
-        }
-    }
 }
 
 impl Clone for Strategy {
@@ -67,10 +44,11 @@ impl Clone for Strategy {
             self.pre_indicators.clone(),
             self.indicators.clone(),
             self.signals.clone(),
+            self.signal_generator.clone(),
             self.data.clone(),
             self.initial_balance,
             self.exchange.clone(),
-            Some(self.leverage.clone()),
+            self.leverage.clone(),
             self.position_modifier.clone(),
             self.price_level_modifiers.clone(),
             self.performance_arc.clone(),
@@ -84,30 +62,27 @@ impl Strategy {
         pre_indicators: Vec<Box<dyn Indicator + Send + Sync>>,
         indicators: Vec<Box<dyn Indicator + Send + Sync>>,
         signals: Vec<Box<dyn Signer + Send + Sync>>,
+        signal_generator: BehaviorSubject<Option<SignalCategory>>,
         data: BehaviorSubject<DataFrame>,
         initial_balance: f64,
-        exchange: Exchange,
-        leverage_opt: Option<Leverage>,
+        exchange: BehaviorSubject<Box<dyn Exchange + Send + Sync>>,
+        leverage: Leverage,
         position_modifier: PositionLockModifier,
         price_level_modifiers: HashMap<String, PriceLevelModifier>,
         performance_arc: Arc<Mutex<Performance>>,
     ) -> Strategy {
-        let mut leverage = Leverage::default();
-        if let Some(lambda) = leverage_opt {
-            leverage = lambda;
-        }
         Strategy {
             name,
             pre_indicators,
             indicators,
             signals,
+            signal_generator,
             data,
             initial_balance,
             exchange,
             leverage,
             position_modifier,
             price_level_modifiers,
-            staging_area: StagingArea::new(initial_balance),
             tick_data_vec: vec![],
             performance_arc,
         }
@@ -117,13 +92,12 @@ impl Strategy {
         &mut self,
         tick_data: LazyFrame,
         last_bar: &NaiveDateTime,
-        traded_contract: &Contract,
     ) -> Result<(), Error> {
         println!("SET BENCHMARK");
         let tick_data = tick_data.cache();
         let mut lf = self.set_strategy_data(tick_data)?;
 
-        let benchmark_positions = self.compute_benchmark_positions(&lf, traded_contract)?;
+        let benchmark_positions = self.compute_benchmark_positions(&lf)?;
         lf = lf.left_join(benchmark_positions, "start_time", "start_time");
 
         // get only signals from previous day
@@ -144,7 +118,7 @@ impl Strategy {
 
         // TODO: subscribe to strategy data behavior subject and calculate performance based on strategy data changes
         let mut performance = self.performance_arc.lock().unwrap();
-        performance.set_benchmark(&lf, &traded_contract.symbol)?;
+        performance.set_benchmark(&lf)?;
         lf = lf.cache();
         self.data.next(lf.collect()?);
 
@@ -190,11 +164,7 @@ impl Strategy {
         Ok(data)
     }
 
-    fn compute_benchmark_positions(
-        &self,
-        data: &LazyFrame,
-        traded_contract: &Contract,
-    ) -> Result<LazyFrame, Error> {
+    fn compute_benchmark_positions(&self, data: &LazyFrame) -> Result<LazyFrame, Error> {
         let data = data.to_owned();
         // TODO: TRY TO IMPLEMENT THIS USING LAZYFRAMES
         let mut df = data.clone().drop_nulls(None).collect()?;
@@ -230,6 +200,10 @@ impl Strategy {
             );
         });
 
+        let exchange_ref = self.exchange.ref_value();
+        let exchange_fee_rate = exchange_ref.get_maker_fee();
+        let traded_contract = exchange_ref.get_traded_contract();
+
         let (_, high_col, low_col, price_col) = get_symbol_ohlc_cols(&traded_contract.symbol);
         let additional_cols = vec![price_col.clone(), high_col.clone(), low_col.clone()];
 
@@ -249,7 +223,7 @@ impl Strategy {
         });
 
         let start_time = Instant::now();
-        let mut current_order: Option<LeveredOrder> = None;
+        let mut current_order: Option<LeveragedOrder> = None;
 
         // fee = balance * leverage * price * fee_rate
         // marginal fee = price * fee_rate
@@ -270,6 +244,7 @@ impl Strategy {
             .price_level_modifiers
             .get(&PriceLevelModifier::TakeProfit(0.0).get_hash_key());
         let dataframe_height = df.height();
+
         for index in 0..dataframe_height {
             if index == 0 {
                 continue;
@@ -289,7 +264,7 @@ impl Strategy {
                         -1,
                         current_price,
                         current_balance,
-                        self.exchange.taker_fee_rate,
+                        exchange_fee_rate,
                         leverage_factor,
                     );
 
@@ -318,7 +293,7 @@ impl Strategy {
                         1,
                         current_price,
                         current_balance,
-                        self.exchange.taker_fee_rate,
+                        exchange_fee_rate,
                         leverage_factor,
                     );
 
@@ -491,19 +466,14 @@ impl Strategy {
         Ok(result)
     }
 
-    fn update_positions(
-        &mut self,
-        data: DataFrame,
-        traded_contract: &Contract,
-        subject: BehaviorSubject<Option<SignalCategory>>,
-    ) -> Result<(), Error> {
+    fn update_positions(&mut self, data: DataFrame) -> Result<(), Error> {
         println!("UPDATE POSITIONS");
         let df = self.update_strategy_data(data)?;
         let path = "data/test".to_string();
         let file_name = "updated.csv".to_string();
         save_csv(path.clone(), file_name, &df, true)?;
-        let signal = self.generate_last_position_signal(&df, traded_contract)?;
-        subject.next(signal);
+        let signal = self.generate_last_position_signal(&df)?;
+        self.signal_generator.next(signal);
 
         // TODO: This should happen after dispatching order / receiving result
         self.data.next(df);
@@ -546,7 +516,6 @@ impl Strategy {
     fn generate_last_position_signal(
         &self,
         data: &DataFrame,
-        traded_contract: &Contract,
     ) -> Result<Option<SignalCategory>, Error> {
         // uses hashset to ensure no SignalCategory is double counted
         let mut signals_cols = HashSet::new();
@@ -578,8 +547,9 @@ impl Strategy {
                     .collect::<Vec<i32>>(),
             );
         });
-
-        let (_, high_col, low_col, price_col) = get_symbol_ohlc_cols(&traded_contract.symbol);
+        let binding = self.exchange.ref_value();
+        let traded_symbol = &binding.get_traded_contract().symbol;
+        let (_, high_col, low_col, price_col) = get_symbol_ohlc_cols(traded_symbol);
         let additional_cols = vec![price_col.clone(), high_col.clone(), low_col.clone()];
 
         let additional_filtered_df = data.select(&additional_cols)?;
@@ -612,11 +582,9 @@ impl Strategy {
         } else {
             // no position has been taken yet, so fetch latest signals
             let current_position = positions[penultimate_index].unwrap();
-            // CHECK THIS:
-            let is_staging_area_order_empty = self.staging_area.current_order.is_none();
 
             // position is neutral
-            if current_position == 0 && is_staging_area_order_empty {
+            if current_position == 0 {
                 if contains_short && signals_cols_map.get("short").unwrap()[last_index] == 1 {
                     return Ok(Some(SignalCategory::GoShort));
                 }
@@ -658,8 +626,7 @@ impl Strategy {
         tick_data: TickData,
         last_bar: &NaiveDateTime,
         bar_length: Duration,
-        contracts: &[Contract; 2],
-        subject: BehaviorSubject<Option<SignalCategory>>,
+        symbols: &Vec<String>,
     ) -> Result<NaiveDateTime, Error> {
         // checks if close price reached stop_loss or take_profit prices
         // adds tick_data to tick_data_vec
@@ -672,7 +639,7 @@ impl Strategy {
             // let start_time = Instant::now();
 
             let last_period_tick_data_df = map_tick_data_to_data_lf(
-                &contracts.clone().map(|c| c.symbol),
+                symbols,
                 self.tick_data_vec.clone(),
                 &self.data.value().schema(),
                 &last_bar,
@@ -686,7 +653,7 @@ impl Strategy {
             //     .gt(filter_datetime.timestamp_millis())?;
             // updated_tick_data_df = updated_tick_data_df.filter(&last_day_filter_mask)?;
 
-            let _ = self.update_positions(updated_tick_data_df, &contracts[1], subject);
+            let _ = self.update_positions(updated_tick_data_df);
 
             // let elapsed_time = start_time.elapsed();
             // let elapsed_millis = elapsed_time.as_nanos();
@@ -715,8 +682,8 @@ fn take_position_by_balance<'a>(
     balance: f64,
     fee_rate: f64,
     leverage_factor: f64,
-) -> LeveredOrder {
-    LeveredOrder::new(
+) -> LeveragedOrder {
+    LeveragedOrder::new(
         contract,
         position,
         None,
@@ -728,8 +695,9 @@ fn take_position_by_balance<'a>(
 }
 
 #[derive(Clone, Debug)]
-pub struct LeveredOrder {
+pub struct LeveragedOrder {
     contract: Contract,
+    status: OrderStatus,
     pub position: i32,
     pub units: f64, // non-levered
     pub price: f64,
@@ -741,10 +709,7 @@ pub struct LeveredOrder {
     pub balance_remainder: f64,
 }
 
-unsafe impl Send for LeveredOrder {}
-unsafe impl Sync for LeveredOrder {}
-
-impl LeveredOrder {
+impl LeveragedOrder {
     pub fn new(
         contract: &Contract,
         position: i32,
@@ -808,8 +773,9 @@ impl LeveredOrder {
                     leverage_factor > contract.max_leverage
                 );
             }
-            return LeveredOrder {
+            return LeveragedOrder {
                 contract: contract.clone(),
+                status: OrderStatus::Canceled,
                 units: 0.0,
                 price,
                 bankruptcy_price: 0.0,
@@ -834,8 +800,9 @@ impl LeveredOrder {
         };
         let close_fee = units * bankruptcy_price * fee_rate;
 
-        LeveredOrder {
+        LeveragedOrder {
             contract: contract.clone(),
+            status: OrderStatus::Filled,
             units,
             price,
             bankruptcy_price,

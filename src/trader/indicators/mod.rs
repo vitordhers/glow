@@ -225,7 +225,6 @@ impl Indicator for StochasticThresholdIndicator {
         columns_names
     }
     fn set_indicator_columns(&self, lf: LazyFrame) -> Result<LazyFrame, Error> {
-        println!("stochastic threshold fn");
         let trend_col = &self.trend_col;
         let long_threshold_col = "long_threshold";
         let short_threshold_col = "short_threshold";
@@ -246,7 +245,6 @@ impl Indicator for StochasticThresholdIndicator {
             col(long_threshold_col),
             col(short_threshold_col),
         ]);
-        println!("stochastic threshold fn end");
         Ok(lf)
     }
 

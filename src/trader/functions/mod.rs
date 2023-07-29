@@ -1,13 +1,12 @@
-use std::{
-    collections::{HashMap, HashSet},
-    time::Duration as TimeDuration,
-};
+use std::collections::{HashMap, HashSet};
 
 use chrono::{Duration, NaiveDateTime, Timelike, Utc};
+use hmac::{Hmac, Mac};
 use polars::prelude::{Duration as PolarsDuration, *};
 use reqwest::Client;
+use sha2::Sha256;
 use std::env::{self};
-use tokio::time::sleep;
+use std::string::FromUtf8Error;
 
 use super::{
     constants::{MINUTES_IN_DAY, NANOS_IN_SECOND, SECONDS_IN_MIN},
@@ -78,7 +77,7 @@ pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
 
 /// Works when all ticks have data the same height
 pub fn consolidate_complete_tick_data_into_lf(
-    symbols: &[String; 2],
+    symbols: &Vec<String>,
     tick_data: &Vec<TickData>,
     tick_data_schema: &Schema,
 ) -> Result<LazyFrame, Error> {
@@ -136,7 +135,7 @@ pub fn consolidate_complete_tick_data_into_lf(
 }
 
 pub fn map_tick_data_to_data_lf(
-    symbols: &[String; 2],
+    symbols: &Vec<String>,
     tick_data_vec: Vec<TickData>,
     data_schema: &Schema,
     current_last_bar: &NaiveDateTime,
@@ -168,7 +167,7 @@ pub fn map_tick_data_to_data_lf(
     columns.push(Series::new(date_col, &datetimes_vec));
 
     let unique_symbols: HashSet<String> = symbols.iter().cloned().collect();
-    let unique_symbols: Vec<String> = unique_symbols.iter().cloned().collect();
+    // let unique_symbols: Vec<String> = unique_symbols.iter().cloned().collect();
     let mut opens_map = HashMap::new();
     let mut highs_map = HashMap::new();
     let mut closes_map = HashMap::new();
@@ -181,7 +180,9 @@ pub fn map_tick_data_to_data_lf(
         lows_map.insert(low_col.clone(), vec![] as Vec<Option<f64>>);
 
         for datetime in &datetimes_vec {
-            if let Some(tick) = symbol_timestamp_map.get(&(symbol.clone(), datetime.timestamp())) {
+            if let Some(tick) =
+                symbol_timestamp_map.get(&(symbol.to_string(), datetime.timestamp()))
+            {
                 opens_map.get_mut(&open_col).unwrap().push(Some(tick.open));
                 highs_map.get_mut(&high_col).unwrap().push(Some(tick.open));
                 closes_map
@@ -266,7 +267,7 @@ pub fn map_tick_data_to_data_lf(
 }
 
 pub fn resample_tick_data_to_length(
-    symbols: &[String; 2],
+    symbols: &Vec<String>,
     length: &Duration,
     data_lf: LazyFrame,
     closed_window: ClosedWindow, // TODO: check why benchmark frame doesn't leave last minute tick
@@ -452,4 +453,23 @@ pub fn print_names(lf: &LazyFrame, identifier: String) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+pub fn calculate_hmac(api_secret: &str, message: &str) -> Result<String, FromUtf8Error> {
+    // Create an HMAC-SHA256 object with the provided secret key
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(api_secret.as_bytes()).expect("Invalid API secret length");
+
+    // Update the HMAC object with the message
+    mac.update(message.as_bytes());
+
+    // Obtain the result of the HMAC computation as an array of bytes
+    let result = mac.finalize();
+    let signature = result
+        .into_bytes()
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect::<String>();
+
+    Ok(signature)
 }

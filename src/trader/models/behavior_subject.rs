@@ -1,18 +1,15 @@
 use futures_util::Stream;
 use futures_util::StreamExt;
-use std::{sync::Arc, time::Duration};
-use tokio::sync::watch::{channel, Receiver, Sender};
-use tokio::time::sleep;
+use std::sync::Arc;
+use tokio::sync::watch::{channel, Receiver, Ref, Sender};
 use tokio_stream::wrappers::WatchStream;
 
 #[derive(Clone)]
 pub struct BehaviorSubject<T> {
     sender: Arc<Sender<T>>,
     receiver: Receiver<T>,
+    previous_value: Option<T>
 }
-
-// unsafe impl<T: Send + Sync> Send for BehaviorSubject<T> {}
-// unsafe impl<T: Send + Sync> Sync for BehaviorSubject<T> {}
 
 impl<T: 'static + Clone + Send + Sync> BehaviorSubject<T> {
     pub fn new(value: T) -> Self {
@@ -20,11 +17,20 @@ impl<T: 'static + Clone + Send + Sync> BehaviorSubject<T> {
         Self {
             sender: Arc::new(sender),
             receiver,
+            previous_value: None
         }
     }
 
     pub fn value(&self) -> T {
         self.receiver.borrow().clone()
+    }
+
+    pub fn ref_value(&self) -> Ref<'_, T> {
+        self.receiver.borrow()
+    }
+
+    pub fn previous_value(&self) -> Option<T>{
+        self.previous_value
     }
 
     pub fn next(&self, value: T) {

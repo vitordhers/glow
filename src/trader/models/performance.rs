@@ -14,41 +14,44 @@ use crate::{
     },
 };
 
+use super::behavior_subject::BehaviorSubject;
+use super::exchange::Exchange;
+
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct Performance {
     http: Client,
+    exchange: BehaviorSubject<Box<dyn Exchange + Send + Sync>>,
     benchmark_data: DataFrame,
-    data: DataFrame,
+    trading_data: DataFrame,
     benchmark_stats: Statistics,
-    stats: Statistics,
+    trading_stats: Statistics,
     risk_free_returns: f64,
 }
 
 impl Performance {
-    // pub fn new(data: &LazyFrame, traded_symbol: &String) -> Self {
-    //     let benchmark_df = calculate_benchmark_stats(data, traded_symbol)
-    //         .expect("calculate benchmark stats error");
-
-    //     // calculate benchmark stats
-    //     Self {
-    //         data: DataFrame::default(),
-    //         benchmark_data: benchmark_df,
-    //         benchmark_stats: Statistics::default(),
-    //         stats: Statistics::default(),
-    //     }
-    // }
-
-    pub fn default() -> Self {
+    pub fn new(exchange: BehaviorSubject<Box<dyn Exchange + Send + Sync>>) -> Self {
         Self {
             http: Client::new(),
-            data: DataFrame::default(),
+            exchange,
+            trading_data: DataFrame::default(),
             benchmark_data: DataFrame::default(),
             benchmark_stats: Statistics::default(),
-            stats: Statistics::default(),
+            trading_stats: Statistics::default(),
             risk_free_returns: 0.0,
         }
     }
+
+    // pub fn default() -> Self {
+    //     Self {
+    //         http: Client::new(),
+    //         trading_data: DataFrame::default(),
+    //         benchmark_data: DataFrame::default(),
+    //         benchmark_stats: Statistics::default(),
+    //         trading_stats: Statistics::default(),
+    //         risk_free_returns: 0.0,
+    //     }
+    // }
 }
 
 // risk-adjusted-return = reward / risk = mean returns / std of returns
@@ -59,18 +62,18 @@ impl Performance {
 // calmar-ratio = reward / tail risk = CAGR (compound anual growth rate) / max drawdown -> for that matter, use benchmark period growth rate
 
 impl Performance {
-    pub fn set_benchmark(
-        &mut self,
-        strategy_lf: &LazyFrame,
-        traded_symbol: &String,
-    ) -> Result<(), Error> {
+    pub fn set_benchmark(&mut self, strategy_lf: &LazyFrame) -> Result<(), Error> {
         let path = "data/test".to_string();
         let file_name = "benchmark.csv".to_string();
         let strategy_df = strategy_lf.clone().collect()?;
         save_csv(path.clone(), file_name, &strategy_df, true)?;
 
+        let binding = self.exchange.ref_value();
+        let traded_contract = binding.get_traded_contract();
+        let traded_symbol = &traded_contract.symbol;
+
         self.benchmark_data =
-            calculate_benchmark_data(strategy_lf, traded_symbol, self.risk_free_returns)?;
+            calculate_benchmark_data(strategy_lf, self.risk_free_returns, traded_symbol)?;
         let file_name = "trades.csv".to_string();
         save_csv(path, file_name, &self.benchmark_data, true)?;
         // self.benchmark_data = strategy_lf.clone().collect()?;
@@ -85,8 +88,8 @@ impl Performance {
 // move to trader
 pub fn calculate_benchmark_data(
     strategy_lf: &LazyFrame,
-    traded_symbol: &String,
     risk_free_returns: f64,
+    traded_symbol: &String,
 ) -> Result<DataFrame, Error> {
     let trades_lf = calculate_trades(strategy_lf, traded_symbol)?;
     // let path = "data/test".to_string();

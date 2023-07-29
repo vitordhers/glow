@@ -13,6 +13,7 @@ mod trader;
 use polars::prelude::DataFrame;
 use trader::{
     enums::log_level::LogLevel,
+    exchanges::bybit::BybitExchange,
     indicators::{
         ExponentialMovingAverageIndicator, StochasticIndicator, StochasticThresholdIndicator,
     },
@@ -46,12 +47,23 @@ async fn main() {
 
     let trend_col = String::from("bullish_market");
 
-    let windows = vec![3, 5, 15]; // 5, 15, 30
+    let windows = vec![3, 5, 15]; // 5, 15, 30 // 5, 9, 12
     let upper_threshold = 70;
     let lower_threshold = 30;
     let close_window_index = 2;
 
-    let AGIXUSDT: Contract = Contract::new(
+    let btcusdt_contract: Contract = Contract::new(
+        String::from("BTCUSDT"),
+        0.0001,
+        Duration::hours(8),
+        None,
+        0.00005,
+        100.0,
+        0.001,
+        100.0,
+    );
+
+    let agixusdt_contract: Contract = Contract::new(
         String::from("AGIXUSDT"),
         0.000073,
         Duration::hours(8),
@@ -62,7 +74,7 @@ async fn main() {
         25.0,
     );
 
-    let ARBUSDT: Contract = Contract::new(
+    let arbusdt_contract: Contract = Contract::new(
         String::from("ARBUSDT"),
         0.0001,
         Duration::hours(8),
@@ -73,16 +85,10 @@ async fn main() {
         50.0,
     );
 
-    let BTCUSDT: Contract = Contract::new(
-        String::from("BTCUSDT"),
-        0.0001,
-        Duration::hours(8),
-        None,
-        0.00005,
-        100.0,
-        0.001,
-        100.0,
-    );
+    let mut contracts = HashMap::new();
+    contracts.insert(btcusdt_contract.symbol.clone(), btcusdt_contract);
+    contracts.insert(agixusdt_contract.symbol.clone(), agixusdt_contract);
+    contracts.insert(arbusdt_contract.symbol.clone(), arbusdt_contract);
 
     let stochastic_indicator = StochasticIndicator {
         name: "StochasticIndicator".into(),
@@ -150,13 +156,20 @@ async fn main() {
         Box::new(multiple_stochastic_with_threshold_close_long_signal),
     ];
 
-    let exchange = Exchange::new(
+    let bybit_exchage = BybitExchange::new(
         "Bybit".to_string(),
-        0.0001,
-        0.0006,
-        "https://api.bybit.com/v5".to_string(),
-        "wss://stream.bybit.com/v5/public/option".to_string(),
+        contracts,
+        "BTCUSDT".to_string(),
+        "AGIXUSDT".to_string(),
+        0.0002,
+        0.00055,
+        "https://testnet.bybit.com".to_string(),
+        "wss://stream-testnet.bybit.com".to_string(),
     );
+
+    let exchange = Box::new(bybit_exchage);
+
+    let exchange: BehaviorSubject<Box<dyn Exchange + Send + Sync>> = BehaviorSubject::new(exchange);
 
     let lock_modifier = PositionLockModifier::Fee;
 
@@ -170,9 +183,10 @@ async fn main() {
     price_level_modifiers.insert(stop_loss.get_hash_key(), stop_loss);
     price_level_modifiers.insert(take_profit.get_hash_key(), take_profit);
 
-    let performance = Performance::default();
+    let performance = Performance::new(exchange.clone());
     let performance_arc = Arc::new(Mutex::new(performance));
 
+    let signal_subject: BehaviorSubject<Option<SignalCategory>> = BehaviorSubject::new(None);
     let data_subject = BehaviorSubject::new(DataFrame::default());
 
     let strategy = Strategy::new(
@@ -180,10 +194,11 @@ async fn main() {
         pre_indicators,
         indicators,
         signals,
-        data_subject,
+        signal_subject.clone(),
+        data_subject.clone(),
         initial_balance,
-        exchange,
-        Some(Leverage::Isolated(25)),
+        exchange.clone(),
+        Leverage::Isolated(25),
         lock_modifier,
         price_level_modifiers,
         performance_arc.clone(),
@@ -191,12 +206,11 @@ async fn main() {
     let strategy_arc = Arc::new(Mutex::new(strategy));
 
     let data_feed = MarketDataFeed::new(
-        [BTCUSDT, ARBUSDT],
+        exchange.clone(),
         bar_length,
         initial_data_offset,
         log_level.clone(),
         strategy_arc.clone(),
-        performance_arc.clone(),
     );
 
     let trader = Trader::new(
@@ -205,10 +219,10 @@ async fn main() {
         data_feed,
         strategy_arc,
         performance_arc,
+        signal_subject.clone(),
+        data_subject.clone(),
         &log_level,
     );
 
-    let signal_subject: BehaviorSubject<Option<SignalCategory>> = BehaviorSubject::new(None);
-
-    let _ = trader.init(signal_subject).await;
+    let _ = trader.init().await;
 }
