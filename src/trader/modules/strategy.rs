@@ -1,40 +1,38 @@
-use crate::{
-    shared::csv::save_csv,
-    trader::{functions::{get_symbol_ohlc_cols, map_tick_data_to_data_lf}, OrderStatus},
+use crate::trader::constants::SECONDS_IN_DAY;
+use crate::trader::enums::modifiers::position_lock::PositionLock;
+use crate::trader::enums::order_status::OrderStatus;
+use crate::trader::indicators::IndicatorWrapper;
+use crate::trader::models::contract::Contract;
+use crate::trader::signals::SignalWrapper;
+use crate::trader::{
+    enums::{
+        balance::Balance, modifiers::price_level::PriceLevel, signal_category::SignalCategory,
+    },
+    errors::Error,
+    functions::{calculate_remainder, get_symbol_ohlc_cols},
+    models::{behavior_subject::BehaviorSubject, trade::Trade, trading_settings::TradingSettings},
+    traits::{exchange::Exchange, indicator::Indicator, signal::Signal},
 };
-
-use super::{
-    super::constants::SECONDS_IN_DAY,
-    super::errors::Error,
-    behavior_subject::BehaviorSubject,
-    contract::Contract,
-    exchange::Exchange,
-    indicator::Indicator,
-    modifiers::{Leverage, PositionLockModifier, PriceLevelModifier},
-    performance::Performance,
-    signal::{SignalCategory, Signer},
-    TickData,
-};
-use chrono::{Duration, NaiveDateTime};
+use chrono::NaiveDateTime;
 use polars::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use super::performance::Performance;
+
 pub struct Strategy {
     pub name: String,
-    pub pre_indicators: Vec<Box<dyn Indicator + Send + Sync>>,
-    pub indicators: Vec<Box<dyn Indicator + Send + Sync>>,
-    pub signals: Vec<Box<dyn Signer + Send + Sync>>,
-    pub signal_generator: BehaviorSubject<Option<SignalCategory>>,
-    pub data: BehaviorSubject<DataFrame>,
-    pub initial_balance: f64,
-    pub exchange: BehaviorSubject<Box<dyn Exchange + Send + Sync>>,
-    pub leverage: Leverage,
-    pub position_modifier: PositionLockModifier,
-    pub price_level_modifiers: HashMap<String, PriceLevelModifier>,
-    tick_data_vec: Vec<TickData>,
+    pub pre_indicators: Vec<IndicatorWrapper>,
+    pub indicators: Vec<IndicatorWrapper>,
+    pub signals: Vec<SignalWrapper>,
+    pub benchmark_balance: f64,
     performance_arc: Arc<Mutex<Performance>>,
+    pub trading_settings_arc: Arc<Mutex<TradingSettings>>,
+    pub exchange_listener: BehaviorSubject<Box<dyn Exchange + Send + Sync>>,
+    current_trade_listener: BehaviorSubject<Option<Trade>>,
+    pub signal_generator: BehaviorSubject<Option<SignalCategory>>,
+    pub current_balance_listener: BehaviorSubject<Balance>,
 }
 
 impl Clone for Strategy {
@@ -44,14 +42,13 @@ impl Clone for Strategy {
             self.pre_indicators.clone(),
             self.indicators.clone(),
             self.signals.clone(),
-            self.signal_generator.clone(),
-            self.data.clone(),
-            self.initial_balance,
-            self.exchange.clone(),
-            self.leverage.clone(),
-            self.position_modifier.clone(),
-            self.price_level_modifiers.clone(),
+            self.benchmark_balance,
             self.performance_arc.clone(),
+            self.trading_settings_arc.clone(),
+            self.exchange_listener.clone(),
+            self.current_trade_listener.clone(),
+            self.signal_generator.clone(),
+            self.current_balance_listener.clone(),
         )
     }
 }
@@ -59,70 +56,55 @@ impl Clone for Strategy {
 impl Strategy {
     pub fn new(
         name: String,
-        pre_indicators: Vec<Box<dyn Indicator + Send + Sync>>,
-        indicators: Vec<Box<dyn Indicator + Send + Sync>>,
-        signals: Vec<Box<dyn Signer + Send + Sync>>,
-        signal_generator: BehaviorSubject<Option<SignalCategory>>,
-        data: BehaviorSubject<DataFrame>,
-        initial_balance: f64,
-        exchange: BehaviorSubject<Box<dyn Exchange + Send + Sync>>,
-        leverage: Leverage,
-        position_modifier: PositionLockModifier,
-        price_level_modifiers: HashMap<String, PriceLevelModifier>,
+        pre_indicators: Vec<IndicatorWrapper>,
+        indicators: Vec<IndicatorWrapper>,
+        signals: Vec<SignalWrapper>,
+        benchmark_balance: f64,
         performance_arc: Arc<Mutex<Performance>>,
+        trading_settings_arc: Arc<Mutex<TradingSettings>>,
+        exchange_listener: BehaviorSubject<Box<dyn Exchange + Send + Sync>>,
+        current_trade_listener: BehaviorSubject<Option<Trade>>,
+        signal_generator: BehaviorSubject<Option<SignalCategory>>,
+        current_balance_listener: BehaviorSubject<Balance>,
     ) -> Strategy {
         Strategy {
             name,
             pre_indicators,
             indicators,
             signals,
-            signal_generator,
-            data,
-            initial_balance,
-            exchange,
-            leverage,
-            position_modifier,
-            price_level_modifiers,
-            tick_data_vec: vec![],
-            performance_arc,
+            signal_generator: signal_generator.clone(),
+            benchmark_balance,
+            exchange_listener: exchange_listener.clone(),
+            performance_arc: performance_arc.clone(),
+            trading_settings_arc: trading_settings_arc.clone(),
+            current_trade_listener: current_trade_listener.clone(),
+            current_balance_listener: current_balance_listener.clone(),
         }
     }
 
     pub fn set_benchmark(
-        &mut self,
-        tick_data: LazyFrame,
-        last_bar: &NaiveDateTime,
-    ) -> Result<(), Error> {
-        println!("SET BENCHMARK");
-        let tick_data = tick_data.cache();
-        let mut lf = self.set_strategy_data(tick_data)?;
+        &self,
+        initial_tick_data_lf: LazyFrame,
+        initial_last_bar: NaiveDateTime,
+    ) -> Result<LazyFrame, Error> {
+        let tick_data = initial_tick_data_lf.cache();
+        let mut initial_trading_data_lf = self.set_strategy_data(tick_data)?;
 
-        let benchmark_positions = self.compute_benchmark_positions(&lf)?;
-        lf = lf.left_join(benchmark_positions, "start_time", "start_time");
+        let benchmark_trading_data = self.compute_benchmark_positions(&initial_trading_data_lf)?;
+        initial_trading_data_lf =
+            initial_trading_data_lf.left_join(benchmark_trading_data, "start_time", "start_time");
 
         // get only signals from previous day
-        let minus_one_day_timestamp = last_bar.timestamp() * 1000 - SECONDS_IN_DAY * 1000;
+        let minus_one_day_timestamp = initial_last_bar.timestamp() * 1000 - SECONDS_IN_DAY * 1000;
 
-        // save benchmark before filtering last day in order to understand better stochastic indicator
-        // let path = "data/test".to_string();
-        // let file_name = "benchmark_full.csv".to_string();
-        // let df = lf.clone().collect()?;
-        // save_csv(path.clone(), file_name, &df, true)?;
-
-        lf = lf.filter(
+        initial_trading_data_lf = initial_trading_data_lf.filter(
             col("start_time")
                 .dt()
                 .timestamp(TimeUnit::Milliseconds)
                 .gt_eq(minus_one_day_timestamp),
         );
 
-        // TODO: subscribe to strategy data behavior subject and calculate performance based on strategy data changes
-        let mut performance = self.performance_arc.lock().unwrap();
-        performance.set_benchmark(&lf)?;
-        lf = lf.cache();
-        self.data.next(lf.collect()?);
-
-        Ok(())
+        Ok(initial_trading_data_lf)
     }
 
     pub fn set_strategy_data(&self, tick_data: LazyFrame) -> Result<LazyFrame, Error> {
@@ -200,7 +182,7 @@ impl Strategy {
             );
         });
 
-        let exchange_ref = self.exchange.ref_value();
+        let exchange_ref = self.exchange_listener.ref_value();
         let exchange_fee_rate = exchange_ref.get_maker_fee();
         let traded_contract = exchange_ref.get_traded_contract();
 
@@ -231,19 +213,29 @@ impl Strategy {
         let mut units = vec![0.0];
         let mut profit_and_loss = vec![0.0];
         let mut returns = vec![0.0];
-        let mut balances = vec![self.initial_balance];
+        let mut balances = vec![self.benchmark_balance];
         let mut positions = vec![0];
         let mut actions = vec![SignalCategory::KeepPosition.get_column().to_string()];
 
-        let leverage_factor = self.leverage.get_factor();
+        let settings_guard = self
+            .trading_settings_arc
+            .lock()
+            .expect("compute_benchmark_positions -> trading settings settings_guard unwrap");
+
+        let leverage_factor = settings_guard.leverage.get_factor();
         let has_leverage = if leverage_factor > 1.0 { true } else { false };
-        let stop_loss_opt: Option<&PriceLevelModifier> = self
-            .price_level_modifiers
-            .get(&PriceLevelModifier::StopLoss(0.0).get_hash_key());
-        let take_profit_opt = self
-            .price_level_modifiers
-            .get(&PriceLevelModifier::TakeProfit(0.0).get_hash_key());
+
+        let price_level_modifier_map_binding = settings_guard.price_level_modifier_map.clone();
+
+        let stop_loss_opt: Option<&PriceLevel> =
+            price_level_modifier_map_binding.get(&PriceLevel::StopLoss(0.0).get_hash_key());
+        let take_profit_opt =
+            price_level_modifier_map_binding.get(&PriceLevel::TakeProfit(0.0).get_hash_key());
         let dataframe_height = df.height();
+
+        let position_modifier = settings_guard.position_lock_modifier.clone();
+
+        drop(settings_guard);
 
         for index in 0..dataframe_height {
             if index == 0 {
@@ -369,7 +361,8 @@ impl Strategy {
                         SignalCategory::KeepPosition
                     };
 
-                    match order.close_order(current_price, self.position_modifier, close_signal) {
+                    match order.close_order(current_price, position_modifier.clone(), close_signal)
+                    {
                         Ok(order_result) => {
                             trade_fees.push(order_result.close_fee);
                             units.push(0.0);
@@ -406,7 +399,8 @@ impl Strategy {
             {
                 // splices results vectors to values before opening the order
 
-                let range = before_last_order_index..dataframe_height; // note that even though the vector was reversed, before_last_order_index keeps being the original vector index. Thanks, Rust <3stoploss
+                // note that even though the vector was reversed, before_last_order_index keeps being the original vector index. Thanks, Rust <3
+                let range = before_last_order_index..dataframe_height;
                 let zeroed_float_patch: Vec<f64> = range.clone().map(|_| 0.0 as f64).collect();
                 let zeroed_integer_patch: Vec<i32> = range.clone().map(|_| 0 as i32).collect();
                 let keep_position_action_patch: Vec<String> = range
@@ -466,27 +460,35 @@ impl Strategy {
         Ok(result)
     }
 
-    fn update_positions(&mut self, data: DataFrame) -> Result<(), Error> {
-        println!("UPDATE POSITIONS");
-        let df = self.update_strategy_data(data)?;
-        let path = "data/test".to_string();
-        let file_name = "updated.csv".to_string();
-        save_csv(path.clone(), file_name, &df, true)?;
-        let signal = self.generate_last_position_signal(&df)?;
-        self.signal_generator.next(signal);
+    // pub fn update_positions(&self, current_trading_data: DataFrame, last_period_tick_data: DataFrame) -> Result<DataFrame, Error> {
+    //     let trading_data = current_trading_data.vstack(&last_period_tick_data)?;
+    //     let strategy_data = self.update_strategy_data(&trading_data)?;
 
-        // TODO: This should happen after dispatching order / receiving result
-        self.data.next(df);
+    //     // trading_data = self.update_trading_data(&trading_data)?;
+    //     // let path = "data/test".to_string();
+    //     // let file_name = "updated.csv".to_string();
+    //     // save_csv(path.clone(), file_name, &trading_data, true)?;
 
-        Ok(())
-    }
+    //     // let signal = self.generate_last_position_signal(&trading_data)?;
+    //     // self.trading_data.next(trading_data);
 
-    fn update_strategy_data(&self, data: DataFrame) -> Result<DataFrame, Error> {
-        let mut df = data.sort(["start_time"], vec![false])?;
-        df = self.update_preindicators_data(df)?;
-        df = self.update_indicators_data(df)?;
-        df = self.update_signals_data(df)?;
-        Ok(df)
+    //     // self.signal_generator.next(Some(signal));
+
+    //     Ok(strategy_data)
+    // }
+
+    pub fn update_strategy_data(
+        &self,
+        current_trading_data: DataFrame,
+        last_period_tick_data: DataFrame,
+    ) -> Result<DataFrame, Error> {
+        let mut strategy_data = current_trading_data.vstack(&last_period_tick_data)?;
+
+        // let mut df = data.sort(["start_time"], vec![false])?;
+        strategy_data = self.update_preindicators_data(strategy_data)?;
+        strategy_data = self.update_indicators_data(strategy_data)?;
+        strategy_data = self.update_signals_data(strategy_data)?;
+        Ok(strategy_data)
     }
 
     fn update_preindicators_data(&self, data: DataFrame) -> Result<DataFrame, Error> {
@@ -513,28 +515,28 @@ impl Strategy {
         Ok(data)
     }
 
-    fn generate_last_position_signal(
-        &self,
-        data: &DataFrame,
-    ) -> Result<Option<SignalCategory>, Error> {
+    pub fn generate_last_position_signal(&self, data: &DataFrame) -> Result<SignalCategory, Error> {
         // uses hashset to ensure no SignalCategory is double counted
         let mut signals_cols = HashSet::new();
         for signal in self.signals.clone().into_iter() {
             signals_cols.insert(String::from(signal.signal_category().get_column()));
         }
-        let contains_short =
-            signals_cols.contains(&SignalCategory::GoShort.get_column().to_string());
-        let contains_long = signals_cols.contains(&SignalCategory::GoLong.get_column().to_string());
-        let contains_short_close =
-            signals_cols.contains(&SignalCategory::CloseShort.get_column().to_string());
-        let contains_long_close =
-            signals_cols.contains(&SignalCategory::CloseLong.get_column().to_string());
+
+        let contains_short = signals_cols.contains(SignalCategory::GoShort.get_column());
+
+        let contains_long = signals_cols.contains(SignalCategory::GoLong.get_column());
+
+        let contains_short_close = signals_cols.contains(SignalCategory::CloseShort.get_column());
+
+        let contains_long_close = signals_cols.contains(SignalCategory::CloseLong.get_column());
+
         let contains_position_close =
-            signals_cols.contains(&SignalCategory::ClosePosition.get_column().to_string());
+            signals_cols.contains(SignalCategory::ClosePosition.get_column());
 
         let signals_filtered_df = data.select(&signals_cols)?;
 
         let mut signals_cols_map = HashMap::new();
+
         signals_cols.into_iter().for_each(|col| {
             signals_cols_map.insert(
                 col.clone(),
@@ -547,7 +549,7 @@ impl Strategy {
                     .collect::<Vec<i32>>(),
             );
         });
-        let binding = self.exchange.ref_value();
+        let binding = self.exchange_listener.ref_value();
         let traded_symbol = &binding.get_traded_contract().symbol;
         let (_, high_col, low_col, price_col) = get_symbol_ohlc_cols(traded_symbol);
         let additional_cols = vec![price_col.clone(), high_col.clone(), low_col.clone()];
@@ -568,7 +570,7 @@ impl Strategy {
         });
 
         let last_index = data.height() - 1;
-        let penultimate_index = last_index - 1;
+        // let penultimate_index = last_index - 1;
 
         let positions = data
             .column("position")?
@@ -576,102 +578,53 @@ impl Strategy {
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
-        if let Some(_) = positions[last_index] {
-            // last position was already filled by stop loss / take profit, return None
-            return Ok(None);
+        let current_position = positions[last_index].unwrap();
+
+        // position is neutral
+        if current_position == 0 {
+            if contains_short
+                && signals_cols_map
+                    .get(SignalCategory::GoShort.get_column())
+                    .unwrap()[last_index]
+                    == 1
+            {
+                return Ok(SignalCategory::GoShort);
+            }
+
+            if contains_long
+                && signals_cols_map
+                    .get(SignalCategory::GoLong.get_column())
+                    .unwrap()[last_index]
+                    == 1
+            {
+                return Ok(SignalCategory::GoLong);
+            }
         } else {
-            // no position has been taken yet, so fetch latest signals
-            let current_position = positions[penultimate_index].unwrap();
+            // position is not closed
+            let is_position_close = contains_position_close
+                && signals_cols_map.get("position_close").unwrap()[last_index] == 1;
+            let is_long_close = current_position == 1
+                && contains_long_close
+                && signals_cols_map.get("long_close").unwrap()[last_index] == 1;
+            let is_short_close = current_position == -1
+                && contains_short_close
+                && signals_cols_map.get("short_close").unwrap()[last_index] == 1;
+            if is_position_close || is_long_close || is_short_close {
+                let close_signal = if is_position_close {
+                    SignalCategory::ClosePosition
+                } else if is_short_close {
+                    SignalCategory::CloseShort
+                } else if is_long_close {
+                    SignalCategory::CloseLong
+                } else {
+                    return Ok(SignalCategory::KeepPosition);
+                };
 
-            // position is neutral
-            if current_position == 0 {
-                if contains_short && signals_cols_map.get("short").unwrap()[last_index] == 1 {
-                    return Ok(Some(SignalCategory::GoShort));
-                }
-
-                if contains_long && signals_cols_map.get("long").unwrap()[last_index] == 1 {
-                    return Ok(Some(SignalCategory::GoShort));
-                }
-            } else {
-                // position is not closed
-                let is_position_close = contains_position_close
-                    && signals_cols_map.get("position_close").unwrap()[last_index] == 1;
-                let is_long_close = current_position == 1
-                    && contains_long_close
-                    && signals_cols_map.get("long_close").unwrap()[last_index] == 1;
-                let is_short_close = current_position == -1
-                    && contains_short_close
-                    && signals_cols_map.get("short_close").unwrap()[last_index] == 1;
-                if is_position_close || is_long_close || is_short_close {
-                    let close_signal = if is_position_close {
-                        SignalCategory::ClosePosition
-                    } else if is_short_close {
-                        SignalCategory::CloseShort
-                    } else if is_long_close {
-                        SignalCategory::CloseLong
-                    } else {
-                        return Ok(None);
-                    };
-
-                    return Ok(Some(close_signal));
-                }
+                return Ok(close_signal);
             }
         }
 
-        Ok(Some(SignalCategory::KeepPosition))
-    }
-
-    pub fn process_tick_data(
-        &mut self,
-        tick_data: TickData,
-        last_bar: &NaiveDateTime,
-        bar_length: Duration,
-        symbols: &Vec<String>,
-    ) -> Result<NaiveDateTime, Error> {
-        // checks if close price reached stop_loss or take_profit prices
-        // adds tick_data to tick_data_vec
-        // checks if last tick_data minus last_bar is greater or equals bar_length
-
-        let last_tick_datetime = tick_data.date;
-        self.tick_data_vec.push(tick_data.clone());
-
-        if tick_data.date - *last_bar >= bar_length {
-            // let start_time = Instant::now();
-
-            let last_period_tick_data_df = map_tick_data_to_data_lf(
-                symbols,
-                self.tick_data_vec.clone(),
-                &self.data.value().schema(),
-                &last_bar,
-                &bar_length,
-            )?;
-            let updated_tick_data_df = self.data.value().vstack(&last_period_tick_data_df)?;
-
-            // let filter_datetime = *last_bar - Duration::days(1);
-            // let last_day_filter_mask = updated_tick_data_df
-            //     .column("start_time")?
-            //     .gt(filter_datetime.timestamp_millis())?;
-            // updated_tick_data_df = updated_tick_data_df.filter(&last_day_filter_mask)?;
-
-            let _ = self.update_positions(updated_tick_data_df);
-
-            // let elapsed_time = start_time.elapsed();
-            // let elapsed_millis = elapsed_time.as_nanos();
-            // println!(
-            //     "process_tick_data => Elapsed time in nanos: {}",
-            //     elapsed_millis
-            // );
-
-            // println!("@@@ updated_tick_data_df LFS {:?}", updated_tick_data_df);
-
-            // tick_data_lf = concat_and_clean_lazyframes([tick_data_lf, new_tick_data_lf], filter_datetime)?;
-            self.tick_data_vec.clear();
-            return Ok(last_tick_datetime);
-            // tick_data_payload.clear();
-        }
-        Ok(*last_bar)
-        // if so, consolidade tick_data into lazyframe and append indicators
-        // after that, clear tick_data_lf
+        Ok(SignalCategory::KeepPosition)
     }
 }
 
@@ -775,7 +728,7 @@ impl LeveragedOrder {
             }
             return LeveragedOrder {
                 contract: contract.clone(),
-                status: OrderStatus::Canceled,
+                status: OrderStatus::Cancelled,
                 units: 0.0,
                 price,
                 bankruptcy_price: 0.0,
@@ -854,14 +807,14 @@ impl LeveragedOrder {
     pub fn close_order(
         &mut self,
         close_price: f64,
-        lock: PositionLockModifier,
+        lock: PositionLock,
         signal: SignalCategory,
     ) -> Result<OrderClose, OrderCloseError> {
         let (revenue, close_fee, profit_and_loss, amount, returns) =
             self.get_close_data(close_price).unwrap();
 
         match lock {
-            PositionLockModifier::Nil => {
+            PositionLock::Nil => {
                 self.close_fee = close_fee;
                 Ok(OrderClose {
                     close_fee,
@@ -871,7 +824,7 @@ impl LeveragedOrder {
                     signal,
                 })
             }
-            PositionLockModifier::Fee => {
+            PositionLock::Fee => {
                 if self.open_fee + close_fee >= revenue.abs() {
                     // keeps position
                     Err(OrderCloseError::FeeLock)
@@ -886,7 +839,7 @@ impl LeveragedOrder {
                     })
                 }
             }
-            PositionLockModifier::Loss => {
+            PositionLock::Loss => {
                 if profit_and_loss <= 0.0 {
                     Err(OrderCloseError::LossLock)
                 } else {
@@ -908,8 +861,8 @@ impl LeveragedOrder {
         min_price: f64,
         max_price: f64,
         current_price: f64,
-        stop_loss_opt: Option<&PriceLevelModifier>,
-        take_profit_opt: Option<&PriceLevelModifier>,
+        stop_loss_opt: Option<&PriceLevel>,
+        take_profit_opt: Option<&PriceLevel>,
     ) -> Result<OrderClose, OrderCloseError> {
         let ref_price: f64 = if self.position == -1 {
             max_price
@@ -923,14 +876,14 @@ impl LeveragedOrder {
             if self.position == -1 && self.bankruptcy_price <= ref_price {
                 return self.close_order(
                     ref_price,
-                    PositionLockModifier::Nil,
+                    PositionLock::Nil,
                     SignalCategory::LeverageBankrupcty,
                 );
             }
             if self.position == 1 && self.bankruptcy_price >= ref_price {
                 return self.close_order(
                     ref_price,
-                    PositionLockModifier::Nil,
+                    PositionLock::Nil,
                     SignalCategory::LeverageBankrupcty,
                 );
             }
@@ -946,7 +899,7 @@ impl LeveragedOrder {
                     );
                     return self.close_order(
                         ref_price,
-                        PositionLockModifier::Nil,
+                        PositionLock::Nil,
                         SignalCategory::StopLoss,
                     );
                 }
@@ -961,7 +914,7 @@ impl LeveragedOrder {
                     );
                     return self.close_order(
                         current_price,
-                        PositionLockModifier::Nil,
+                        PositionLock::Nil,
                         SignalCategory::TakeProfit,
                     );
                 }
@@ -970,10 +923,6 @@ impl LeveragedOrder {
 
         return Err(OrderCloseError::Nil);
     }
-}
-
-fn calculate_remainder(dividend: f64, divisor: f64) -> f64 {
-    dividend - (dividend / divisor).floor() * divisor
 }
 
 #[derive(Debug)]

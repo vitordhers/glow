@@ -1,8 +1,11 @@
 use polars::prelude::PolarsError;
 use reqwest::Error as ReqwestError;
 use serde_json::Error as SerdeError;
+use serde_urlencoded::ser::Error as UrlEncodedError;
 use std::error::Error as StdError;
 use std::fmt;
+use std::num::ParseIntError;
+use std::string::FromUtf8Error;
 use std::{env::VarError, num::ParseFloatError};
 use tokio_tungstenite::tungstenite::Error as TugsteniteError;
 use url::ParseError as UrlParseError;
@@ -17,10 +20,13 @@ pub enum Error {
     PolarsError(PolarsError),
     ReqwestError(ReqwestError),
     CustomError(CustomError),
+    UrlEncodedError(UrlEncodedError),
+    FromUtf8Error(FromUtf8Error),
+    ParseIntError(ParseIntError),
 }
 #[derive(Debug)]
 pub struct CustomError {
-    message: String,
+    pub message: String,
 }
 
 impl CustomError {
@@ -85,9 +91,30 @@ impl From<ReqwestError> for Error {
     }
 }
 
+impl From<FromUtf8Error> for Error {
+    fn from(from_utf8_error: FromUtf8Error) -> Self {
+        println!("From UTF-8 Error = {:?}", from_utf8_error.to_string());
+        Error::FromUtf8Error(from_utf8_error)
+    }
+}
+
+impl From<UrlEncodedError> for Error {
+    fn from(url_encoded_error: UrlEncodedError) -> Self {
+        println!("Url Encoded Error = {:?}", url_encoded_error.to_string());
+        Error::UrlEncodedError(url_encoded_error)
+    }
+}
+
 impl From<CustomError> for Error {
     fn from(custom_error: CustomError) -> Self {
         println!("Reqwest Error = {:?}", custom_error.to_string());
         Error::CustomError(custom_error)
+    }
+}
+
+impl From<ParseIntError> for Error {
+    fn from(parse_int_error: ParseIntError) -> Self {
+        println!("Parse Int Error = {:?}", parse_int_error.to_string());
+        Error::ParseIntError(parse_int_error)
     }
 }

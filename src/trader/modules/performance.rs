@@ -6,16 +6,12 @@ use serde::Deserialize;
 use std::fmt::Debug;
 
 use crate::trader::functions::round_down_nth_decimal;
+use crate::trader::models::behavior_subject::BehaviorSubject;
+use crate::trader::traits::exchange::Exchange;
 use crate::{
     shared::csv::save_csv,
-    trader::{
-        errors::{CustomError, Error},
-        functions::get_symbol_ohlc_cols,
-    },
+    trader::{errors::Error, functions::get_symbol_ohlc_cols},
 };
-
-use super::behavior_subject::BehaviorSubject;
-use super::exchange::Exchange;
 
 #[allow(dead_code)]
 #[derive(Clone)]

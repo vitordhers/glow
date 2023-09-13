@@ -12,7 +12,7 @@ pub fn save_csv(
 ) -> Result<(), Error> {
     let current_dir = env::current_dir().expect("Failed to get current directory");
     let file_path = format!("{}/{}/{}", current_dir.display(), &path, &file_name);
-    println!("Saving {:?} csv...", &file_path);
+    // println!("Saving {:?} csv...", &file_path);
 
     let path_metadata_result = metadata(&path);
 

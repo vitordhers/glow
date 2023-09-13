@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{Duration, NaiveDateTime, Timelike, Utc};
 use hmac::{Hmac, Mac};
@@ -8,14 +10,84 @@ use sha2::Sha256;
 use std::env::{self};
 use std::string::FromUtf8Error;
 
+use super::enums::balance::Balance;
+use super::enums::order_action::OrderAction;
+use super::enums::trade_status::TradeStatus;
+use super::exchanges::binance::models::BinanceHttpKlineResponse;
+use super::models::behavior_subject::BehaviorSubject;
+use super::models::execution::Execution;
+use super::models::tick_data::TickData;
+use super::models::trade::Trade;
+use super::traits::exchange::Exchange;
 use super::{
     constants::{MINUTES_IN_DAY, NANOS_IN_SECOND, SECONDS_IN_MIN},
     errors::Error,
-    models::{HttpKlineResponse, TickData, WsKlineResponse},
 };
 
+/// gives result with full seconds
 pub fn current_datetime() -> NaiveDateTime {
     Utc::now().naive_utc().with_nanosecond(0).unwrap()
+}
+
+// gives current timestamp in milliseconds
+pub fn current_timestamp_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_millis()
+}
+
+/// Gets Open, High, Low and Close labels for symbol.
+///
+/// # Arguments
+/// * `use_milliseconds`- will receive / return the timestamp in milliseconds
+/// * `timestamp` - Optional for getting timestamp start minute, by using None, the current timestamp will be used.
+///
+pub fn timestamp_minute_start(use_milliseconds: bool, timestamp: Option<i64>) -> i64 {
+    let mut timestamp = match timestamp {
+        Some(timestamp) => {
+            if use_milliseconds {
+                NaiveDateTime::from_timestamp_millis(timestamp)
+                    .unwrap()
+                    .timestamp()
+            } else {
+                NaiveDateTime::from_timestamp_millis(timestamp * 1_000)
+                    .unwrap()
+                    .timestamp()
+            }
+        }
+        None => {
+            let timestamp = Utc::now().naive_utc().timestamp();
+            if use_milliseconds {
+                timestamp * 1_000
+            } else {
+                timestamp
+            }
+        }
+    };
+    let remainder = if use_milliseconds {
+        timestamp % 60_000
+    } else {
+        timestamp % 60
+    };
+    timestamp -= remainder;
+    timestamp
+}
+
+/// Gets Open, High, Low and Close labels for symbol.
+///
+/// # Arguments
+/// * `use_milliseconds`- will receive / return the timestamp in milliseconds
+/// * `timestamp` - Optional for getting timestamp start minute, by using None, the current timestamp will be used.
+///
+pub fn timestamp_minute_end(use_milliseconds: bool, timestamp: Option<i64>) -> i64 {
+    let mut timestamp = timestamp_minute_start(use_milliseconds, timestamp);
+    if use_milliseconds {
+        timestamp += 59_999
+    } else {
+        timestamp += 59
+    }
+    timestamp
 }
 
 /// Gets Open, High, Low and Close labels for symbol.
@@ -45,6 +117,10 @@ pub fn get_symbol_ohlc_cols(symbol: &String) -> (String, String, String, String)
     let low_col = format!("{}_low", symbol);
     let close_col = format!("{}_close", symbol);
     return (open_col, high_col, low_col, close_col);
+}
+
+pub fn get_symbol_close_col(symbol: &String) -> String {
+    format!("{}_close", symbol)
 }
 
 pub fn get_symbol_window_ohlc_cols(
@@ -86,46 +162,92 @@ pub fn consolidate_complete_tick_data_into_lf(
     let mut empty_ticks: Vec<Option<f64>> = vec![];
 
     for tick in tick_data {
-        if datetimes_vec.contains(&tick.date) {
+        if datetimes_vec.contains(&tick.start_time) {
             continue;
         };
-        datetimes_vec.push(tick.date);
+        datetimes_vec.push(tick.start_time);
         empty_ticks.push(None::<f64>);
+    }
+    let mut symbol_timestamp_map = HashMap::new();
+    for tick_data in tick_data {
+        symbol_timestamp_map.insert(
+            (tick_data.symbol.clone(), tick_data.start_time.timestamp()),
+            tick_data,
+        );
     }
 
     let date_col = "start_time";
     columns.push(Series::new(date_col, &datetimes_vec));
     let unique_symbols: HashSet<String> = symbols.iter().cloned().collect();
-    for symbol in unique_symbols {
-        let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(&symbol);
+    // let unique_symbols: Vec<String> = unique_symbols.iter().cloned().collect();
+    let mut opens_map = HashMap::new();
+    let mut highs_map = HashMap::new();
+    let mut closes_map = HashMap::new();
+    let mut lows_map = HashMap::new();
+    for symbol in &unique_symbols {
+        let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(symbol);
+        opens_map.insert(open_col.clone(), vec![] as Vec<Option<f64>>);
+        highs_map.insert(high_col.clone(), vec![] as Vec<Option<f64>>);
+        closes_map.insert(close_col.clone(), vec![] as Vec<Option<f64>>);
+        lows_map.insert(low_col.clone(), vec![] as Vec<Option<f64>>);
 
-        let mut opens = vec![];
-        let mut highs = vec![];
-        let mut closes = vec![];
-        let mut lows = vec![];
-
-        let symbol_ticks: Vec<TickData> = tick_data
-            .iter()
-            .filter(|&tick| tick.symbol == symbol.to_string())
-            .cloned()
-            .collect();
-
-        for tick in symbol_ticks {
-            opens.push(tick.open);
-            highs.push(tick.high);
-            closes.push(tick.close);
-            lows.push(tick.low);
+        for datetime in &datetimes_vec {
+            if let Some(tick) =
+                symbol_timestamp_map.get(&(symbol.to_string(), datetime.timestamp()))
+            {
+                opens_map.get_mut(&open_col).unwrap().push(Some(tick.open));
+                highs_map.get_mut(&high_col).unwrap().push(Some(tick.high));
+                closes_map
+                    .get_mut(&close_col)
+                    .unwrap()
+                    .push(Some(tick.close));
+                lows_map.get_mut(&low_col).unwrap().push(Some(tick.low));
+            } else {
+                opens_map.get_mut(&open_col).unwrap().push(None::<f64>);
+                highs_map.get_mut(&high_col).unwrap().push(None::<f64>);
+                closes_map.get_mut(&close_col).unwrap().push(None::<f64>);
+                lows_map.get_mut(&low_col).unwrap().push(None::<f64>);
+            }
         }
-        for (field, _) in tick_data_schema.iter() {
-            let result = match field {
-                _open_col if _open_col == open_col.as_str() => Series::new(field, &opens),
-                _high_col if _high_col == high_col.as_str() => Series::new(field, &highs),
-                _close_col if _close_col == close_col.as_str() => Series::new(field, &closes),
-                _low_col if _low_col == low_col.as_str() => Series::new(field, &lows),
-                _ => continue,
-            };
-            columns.push(result);
-        }
+    }
+
+    let opens_cols: HashSet<String> = opens_map.keys().cloned().collect();
+    let highs_cols: HashSet<String> = highs_map.keys().cloned().collect();
+    let closes_cols: HashSet<String> = closes_map.keys().cloned().collect();
+    let lows_cols: HashSet<String> = lows_map.keys().cloned().collect();
+    let mut tick_data_cols = HashSet::new();
+    tick_data_cols.extend(opens_cols.clone());
+    tick_data_cols.extend(highs_cols.clone());
+    tick_data_cols.extend(closes_cols.clone());
+    tick_data_cols.extend(lows_cols.clone());
+    let data_cols: HashSet<String> = tick_data_schema
+        .iter()
+        .map(|(x, _)| x.to_string())
+        .collect();
+    let mut non_tick_data_cols: HashSet<&String> = data_cols.difference(&tick_data_cols).collect();
+    // removes start_time as it's not considered in tick_data_cols, and duplication of index column messes up resample
+    non_tick_data_cols.remove(&"start_time".to_string());
+    for (field, data_type) in tick_data_schema.iter() {
+        let result = match field {
+            start_time_col if start_time_col == "start_time" => continue,
+            open_col if opens_cols.contains(&open_col.to_string()) => {
+                Series::new(field, &opens_map.get(&field.to_string()).unwrap())
+            }
+            high_col if highs_cols.contains(&high_col.to_string()) => {
+                Series::new(field, &highs_map.get(&field.to_string()).unwrap())
+            }
+            close_col if closes_cols.contains(&close_col.to_string()) => {
+                Series::new(field, &closes_map.get(&field.to_string()).unwrap())
+            }
+            low_col if lows_cols.contains(&low_col.to_string()) => {
+                Series::new(field, &lows_map.get(&field.to_string()).unwrap())
+            }
+            non_tick_data_col if non_tick_data_cols.contains(&non_tick_data_col.to_string()) => {
+                Series::full_null(&field.to_string(), empty_ticks.len(), data_type)
+            }
+            _ => unreachable!("Unexpected value"),
+        };
+        columns.push(result);
     }
 
     let new_df = DataFrame::new(columns)?;
@@ -134,37 +256,35 @@ pub fn consolidate_complete_tick_data_into_lf(
     Ok(new_lf)
 }
 
-pub fn map_tick_data_to_data_lf(
+pub fn map_tick_data_to_df(
     symbols: &Vec<String>,
-    tick_data_vec: Vec<TickData>,
+    ticks_data: &Vec<TickData>,
     data_schema: &Schema,
-    current_last_bar: &NaiveDateTime,
-    bar_length: &Duration,
+    prev_bar: NaiveDateTime,
+    bar_length: Duration,
 ) -> Result<DataFrame, Error> {
-    // set base df from current_last_bar to current_last_bar + bar_length
-    let bar_length_in_seconds = bar_length.num_seconds();
-    let end_timestamp = current_last_bar.timestamp() + bar_length_in_seconds;
-    let mut current_timestamp = current_last_bar.timestamp();
+    let mut start_timestamp = prev_bar.timestamp();
+    let end_timestamp = (prev_bar + bar_length).timestamp();
     let mut columns: Vec<Series> = vec![];
     let mut datetimes_vec = vec![];
     let mut empty_float_ticks = vec![];
 
-    while current_timestamp <= end_timestamp {
-        datetimes_vec.push(NaiveDateTime::from_timestamp_opt(current_timestamp, 0).unwrap());
-        current_timestamp += 1;
+    while start_timestamp < end_timestamp {
+        datetimes_vec.push(NaiveDateTime::from_timestamp_opt(start_timestamp, 0).unwrap());
+        start_timestamp += 1;
         empty_float_ticks.push(None::<f64>);
     }
 
     let mut symbol_timestamp_map = HashMap::new();
-    for tick_data in tick_data_vec {
+    for tick_data in ticks_data {
         symbol_timestamp_map.insert(
-            (tick_data.symbol.clone(), tick_data.date.timestamp()),
+            (tick_data.symbol.clone(), tick_data.start_time.timestamp()),
             tick_data,
         );
     }
 
-    let date_col = "start_time";
-    columns.push(Series::new(date_col, &datetimes_vec));
+    let start_time_col = "start_time";
+    columns.push(Series::new(start_time_col, &datetimes_vec));
 
     let unique_symbols: HashSet<String> = symbols.iter().cloned().collect();
     // let unique_symbols: Vec<String> = unique_symbols.iter().cloned().collect();
@@ -235,10 +355,8 @@ pub fn map_tick_data_to_data_lf(
         columns.push(result);
     }
 
-    let df = DataFrame::new(columns)?;
-
-    let data_lf = df.lazy();
-
+    let non_sampled_data_df = DataFrame::new(columns)?;
+    let non_sampled_data_lf = non_sampled_data_df.lazy();
     let non_tick_data_cols_ordered: Vec<String> = data_schema
         .clone()
         .iter()
@@ -254,7 +372,7 @@ pub fn map_tick_data_to_data_lf(
     let resampled_data = resample_tick_data_to_length(
         symbols,
         bar_length,
-        data_lf,
+        non_sampled_data_lf,
         ClosedWindow::Right,
         Some(non_tick_data_cols_ordered),
     )?;
@@ -268,7 +386,7 @@ pub fn map_tick_data_to_data_lf(
 
 pub fn resample_tick_data_to_length(
     symbols: &Vec<String>,
-    length: &Duration,
+    length: Duration,
     data_lf: LazyFrame,
     closed_window: ClosedWindow, // TODO: check why benchmark frame doesn't leave last minute tick
     nullable_cols_to_keep: Option<Vec<String>>,
@@ -316,33 +434,22 @@ pub fn resample_tick_data_to_length(
 
 // pub fn stack
 
-pub fn parse_ws_kline_into_tick_data(data: WsKlineResponse) -> Result<TickData, Error> {
-    let open = data.k.o.parse::<f64>()?;
-    let close = data.k.c.parse::<f64>()?;
-    let high = data.k.h.parse::<f64>()?;
-    let low = data.k.l.parse::<f64>()?;
-    let date = NaiveDateTime::from_timestamp_opt(data.E / 1000, 0).unwrap();
-    let result = TickData {
-        symbol: data.s,
-        date,
-        open,
-        close,
-        high,
-        low,
-    };
-    Ok(result)
-}
-
-pub fn clear_tick_data_to_last_bar(
-    tick_data_vec: Vec<TickData>,
-    last_bar: &NaiveDateTime,
-) -> Vec<TickData> {
-    tick_data_vec
-        .iter()
-        .filter(|&tick_data| tick_data.date >= *last_bar)
-        .cloned()
-        .collect()
-}
+// pub fn parse_ws_kline_into_tick_data(data: WsKlineResponse) -> Result<TickData, Error> {
+//     let open = data.k.o.parse::<f64>()?;
+//     let close = data.k.c.parse::<f64>()?;
+//     let high = data.k.h.parse::<f64>()?;
+//     let low = data.k.l.parse::<f64>()?;
+//     let date = NaiveDateTime::from_timestamp_opt(data.E / 1000, 0).unwrap();
+//     let result = TickData {
+//         symbol: data.s,
+//         date,
+//         open,
+//         close,
+//         high,
+//         low,
+//     };
+//     Ok(result)
+// }
 
 pub async fn fetch_data(
     http: &Client,
@@ -350,7 +457,7 @@ pub async fn fetch_data(
     start_timestamp: &i64, // ms
     end_timestamp: &i64,   // ms
     limit: i64,            //Default 500; max 1000.
-) -> Result<Vec<HttpKlineResponse>, Error> {
+) -> Result<Vec<BinanceHttpKlineResponse>, Error> {
     if limit > 1000 || limit < 0 {
         panic!("Limit must be less than 1000. Currently is {}", limit);
     }
@@ -366,22 +473,22 @@ pub async fn fetch_data(
         NaiveDateTime::from_timestamp_millis(*start_timestamp).unwrap(),
         NaiveDateTime::from_timestamp_millis(*end_timestamp).unwrap()
     );
-    let result: Vec<HttpKlineResponse> = http.get(url).send().await?.json().await?;
+    let result: Vec<BinanceHttpKlineResponse> = http.get(url).send().await?.json().await?;
     Ok(result)
 }
 
 pub fn parse_http_kline_into_tick_data(
     symbol: String,
-    data: &HttpKlineResponse,
+    data: &BinanceHttpKlineResponse,
 ) -> Result<TickData, Error> {
     let open = data.open.parse::<f64>()?;
     let close = data.close.parse::<f64>()?;
     let high = data.high.parse::<f64>()?;
     let low = data.low.parse::<f64>()?;
-    let date = NaiveDateTime::from_timestamp_opt(data.timestamp / 1000, 0).unwrap();
+    let start_time = NaiveDateTime::from_timestamp_opt(data.timestamp / 1000, 0).unwrap();
     let result = TickData {
         symbol,
-        date,
+        start_time,
         open,
         close,
         high,
@@ -406,6 +513,16 @@ pub fn timestamp_end_to_daily_timestamp_sec_intervals(
 pub fn round_down_nth_decimal(num: f64, n: i32) -> f64 {
     let multiplier = 10.0_f64.powi(n);
     (num * multiplier).floor() / multiplier
+}
+
+pub fn count_decimal_places(value: f64) -> i32 {
+    let decimal_str = value.to_string();
+
+    if let Some(dot_idx) = decimal_str.find('.') {
+        (decimal_str.len() - dot_idx - 1) as i32
+    } else {
+        0
+    }
 }
 
 #[allow(dead_code)]
@@ -472,4 +589,128 @@ pub fn calculate_hmac(api_secret: &str, message: &str) -> Result<String, FromUtf
         .collect::<String>();
 
     Ok(signature)
+}
+
+pub fn calculate_remainder(dividend: f64, divisor: f64) -> f64 {
+    dividend.rem_euclid(divisor)
+}
+
+// #[test]
+// fn test_floor() {
+//     let numb: f64 = 2400.7154131931316;
+//     let fdpta: f64 = calculate_remainder(numb, 1.0);
+
+//     let fdpta2 = numb - (2400.7154131931316 as f64).rem_euclid(1.0);
+//     print!("FLOOR {}, floor2 {}", fdpta, fdpta2);
+// }
+
+pub async fn update_position_data_on_faulty_exchange_ws(
+    exchange_socket_error_arc: &Arc<Mutex<Option<i64>>>,
+    exchange_listener: &BehaviorSubject<Box<dyn Exchange + Send + Sync>>,
+    current_trade_listener: &BehaviorSubject<Option<Trade>>,
+    update_balance_listener: &BehaviorSubject<Option<Balance>>,
+    update_order_listener: &BehaviorSubject<Option<OrderAction>>,
+    update_executions_listener: &BehaviorSubject<Vec<Execution>>,
+) -> Result<(), Error> {
+    let exchange_binding = exchange_listener.value();
+    // get if there was an error
+    let mut last_error_ts = None;
+    {
+        let last_error_guard = exchange_socket_error_arc.lock().unwrap();
+        if let Some(last_error) = *last_error_guard {
+            last_error_ts = Some(last_error);
+        }
+    }
+
+    let current_trade = current_trade_listener.value();
+    // check for last_error_ts
+    if let Some(last_error_ts) = last_error_ts {
+        println!(
+            "{} | update_position_data_on_faulty_exchange_ws -> last error ts = {}",
+            current_timestamp_ms(),
+            last_error_ts
+        );
+        // if it exists, check for current trade
+        if let Some(current_trade) = current_trade {
+            let current_trade_status = current_trade.status();
+            match current_trade_status {
+                TradeStatus::PendingCloseOrder | TradeStatus::Closed | TradeStatus::Cancelled => {
+                    // in this case, no close order was opened (as when a close order is open, current_trade is updated as soon as it finishes http query)
+                    // also, it doesn't make sense to fetch data from finished trades (closed/cancelled)
+                }
+                _ => {
+                    let current_order_uuid = current_trade.get_active_order_uuid()
+                        .expect(&format!("update_position_data_on_faulty_exchange_ws -> missing current order uuid. trade = {:?}", &current_trade));
+                    let start_timestamp = last_error_ts;
+                    let current_minute_end_timestamp = timestamp_minute_end(true, None);
+
+                    let interim_executions = match exchange_binding
+                        .fetch_order_executions(
+                            current_order_uuid,
+                            start_timestamp,
+                            current_minute_end_timestamp,
+                        )
+                        .await
+                    {
+                        Ok(executions) => executions,
+                        Err(error) => {
+                            println!("update_position_data_on_faulty_exchange_ws -> executions error {:?}", error);
+                            vec![]
+                        }
+                    };
+
+                    let current_trade_status = current_trade.status();
+                    // if executions were updated, order was too, but in case order could be cancelled (OrderStatus::New), we check for order updates
+                    if interim_executions.len() > 0 || current_trade_status == TradeStatus::New {
+                        // if executions were updated, we emit new executions action
+                        if interim_executions.len() > 0 {
+                            // let update_action = UpdateAction::Executions(interim_executions);
+                            update_executions_listener.next(interim_executions);
+                        }
+                        let current_order_id = current_trade.get_active_order_id()
+                            .expect(&format!("update_position_data_on_faulty_exchange_ws -> missing current order id. trade = {:?}", &current_trade));
+
+                        // get order without executions
+                        match exchange_binding
+                            .fetch_opened_order(current_order_id.clone(), false)
+                            .await
+                        {
+                            Ok(updated_order) => {
+                                let order_action = if updated_order.is_cancel_order() {
+                                    OrderAction::Cancel(updated_order)
+                                } else {
+                                    OrderAction::Update(updated_order)
+                                };
+                                // let update_action = UpdateAction::Order(Some(order_action));
+                                update_order_listener.next(Some(order_action));
+                            }
+                            Err(error) => {
+                                println!("handle_exchange_websocket -> fetch_opened_order failed {:?}. Error = {:?}", current_trade_status, error);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // get open trade and set if any is open
+        let trade = exchange_binding.fetch_current_position_trade().await?;
+        if trade.is_some() {
+            println!(
+                "{:?} | A initial trade was found! {:?}",
+                current_datetime(),
+                trade.clone().unwrap()
+            );
+        }
+        current_trade_listener.next(trade);
+    }
+
+    // regardless of error, usdt balance must be updated
+    let balance = exchange_binding
+        .fetch_current_usdt_balance()
+        .await
+        .expect("set_current_balance_handle -> get_current_usdt_balance error");
+    // let update_action = UpdateAction::Balance(balance);
+    update_balance_listener.next(Some(balance));
+    Ok(())
 }

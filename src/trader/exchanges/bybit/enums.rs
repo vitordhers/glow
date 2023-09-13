@@ -1,14 +1,16 @@
-use serde::Deserialize;
-
-use crate::trader::models::strategy::OrderStatus;
+use crate::trader::enums::order_status::OrderStatus;
 
 use super::models::*;
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum BybitWsResponse {
     Nil,
+    PongWsResponse(PongWsResponse),
     AuthWsResponse(AuthWsResponse),
-    OrderWsResponse(ByBitWsResponseWrapper<OrderWsResponseData>),
+    Execution(ByBitWsResponseWrapper<ExecutionResponseData>),
+    OrderWsResponse(ByBitWsResponseWrapper<OrderResponseData>),
     WalletWsResponse(ByBitWsResponseWrapper<WalletResponseData>),
     // Add more variants as needed
 }
@@ -17,8 +19,15 @@ impl Default for BybitWsResponse {
         BybitWsResponse::Nil
     }
 }
-
 #[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum BybitHttpResponse {
+    Nil,
+    WalletResponse(BybitHttpResponseWrapper<HttpResultList<WalletResponseData>>),
+    LeverageResponse(BybitHttpResponseWrapper<EmptyObject>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub enum BybitOrderStatus {
     Created, //order has been accepted by the system but not yet put through the matching engine
     New,     //order has been placed successfully
@@ -38,7 +47,7 @@ impl From<BybitOrderStatus> for OrderStatus {
         match value {
             BybitOrderStatus::Created | BybitOrderStatus::New => OrderStatus::StandBy,
             BybitOrderStatus::PartiallyFilled | BybitOrderStatus::PartiallyFilledCanceled => {
-                OrderStatus::Partial
+                OrderStatus::PartiallyFilled
             }
             BybitOrderStatus::Active | BybitOrderStatus::Filled | BybitOrderStatus::Untriggered => {
                 OrderStatus::Filled
@@ -51,7 +60,7 @@ impl From<BybitOrderStatus> for OrderStatus {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub enum CancelType {
     #[serde(rename = "UNKNOWN")]
     Nil,
@@ -67,7 +76,7 @@ pub enum CancelType {
     CancelBySmp,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug)]
 pub enum RejectReason {
     #[serde(rename = "EC_NoError")]
     EcNoError,
@@ -115,13 +124,7 @@ pub enum RejectReason {
     ECInvalidSymbolStatus,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-pub enum Side {
-    Buy,
-    Sell,
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub enum TriggerBy {
     #[serde(rename = "UNKNOWN")]
     Nil,
@@ -130,8 +133,10 @@ pub enum TriggerBy {
     MarkPrice,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Deserialize)]
 pub enum StopOrderType {
+    #[serde(rename = "")]
+    Empty,
     #[serde(rename = "UNKNOWN")]
     Nil,
     TakeProfit,
@@ -144,15 +149,7 @@ pub enum StopOrderType {
     TpslOrder,
 }
 
-#[derive(Debug, Deserialize)]
-pub enum TimeInForce {
-    GTC, //GoodTillCancel
-    IOC, //ImmediateOrCancel
-    FOK, //FillOrKill
-    PostOnly,
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub enum SmpType {
     None,
     CancelMaker,
@@ -160,15 +157,17 @@ pub enum SmpType {
     CancelBoth,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub enum TpslMode {
+    #[serde(rename = "")]
+    Empty,
     #[serde(rename = "UNKNOWN")]
     Nil,
     Partial,
     Full,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AccountType {
     #[serde(rename = "CONTRACT")]
     Contract,
@@ -176,4 +175,32 @@ pub enum AccountType {
     Unified,
     #[serde(rename = "SPOT")]
     Spot,
+}
+
+#[derive(Debug, Deserialize)]
+pub enum ExecType {
+    Trade,
+    AdlTrade,
+    Funding,
+    BustTrade,
+    Delivery,
+    BlockTrade,
+}
+
+#[derive(Debug, Deserialize)]
+pub enum PositionStatus {
+    Normal,
+    Liq,
+    Adl,
+}
+
+#[derive(Debug, Deserialize)]
+#[repr(i8)]
+pub enum AdlRankIndicator {
+    Empty = 0,
+    First = 1,
+    Second = 2,
+    Third = 3,
+    Fourth = 4,
+    Fifth = 5,
 }

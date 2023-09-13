@@ -8,7 +8,6 @@ use tokio_stream::wrappers::WatchStream;
 pub struct BehaviorSubject<T> {
     sender: Arc<Sender<T>>,
     receiver: Receiver<T>,
-    previous_value: Option<T>
 }
 
 impl<T: 'static + Clone + Send + Sync> BehaviorSubject<T> {
@@ -17,7 +16,6 @@ impl<T: 'static + Clone + Send + Sync> BehaviorSubject<T> {
         Self {
             sender: Arc::new(sender),
             receiver,
-            previous_value: None
         }
     }
 
@@ -27,10 +25,6 @@ impl<T: 'static + Clone + Send + Sync> BehaviorSubject<T> {
 
     pub fn ref_value(&self) -> Ref<'_, T> {
         self.receiver.borrow()
-    }
-
-    pub fn previous_value(&self) -> Option<T>{
-        self.previous_value
     }
 
     pub fn next(&self, value: T) {
@@ -43,27 +37,29 @@ impl<T: 'static + Clone + Send + Sync> BehaviorSubject<T> {
     }
 }
 
-// #[tokio::test]
-// async fn test() {
-//     let test = BehaviorSubject::new(0);
+#[tokio::test]
+async fn test() {
+    use std::time::Duration;
+    use tokio::time::sleep;
+    let test = BehaviorSubject::new(0);
 
-//     let mut stream = test.subscribe();
+    let mut stream = test.subscribe();
 
-//     tokio::spawn(async move {
-//         while let Some(value) = stream.next().await {
-//             println!("Got {}", value);
-//         }
-//     });
+    tokio::spawn(async move {
+        while let Some(value) = stream.next().await {
+            println!("Got {}", value);
+        }
+    });
 
-//     test.next(1);
+    test.next(1);
 
-//     sleep(Duration::from_secs(1)).await;
+    sleep(Duration::from_secs(1)).await;
 
-//     println!("TEST GET VALUE {}", test.value());
+    println!("TEST GET VALUE {}", test.value());
 
-//     test.next(2);
-//     sleep(Duration::from_secs(2)).await;
-//     test.next(3);
-//     test.next(4);
-//     sleep(Duration::from_secs(4)).await;
-// }
+    test.next(2);
+    sleep(Duration::from_secs(2)).await;
+    test.next(3);
+    test.next(4);
+    sleep(Duration::from_secs(4)).await;
+}

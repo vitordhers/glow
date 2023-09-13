@@ -1,16 +1,38 @@
+mod functions;
 use polars::prelude::*;
 
-use crate::trader::{
-    constants::{NANOS_IN_SECOND, SECONDS_IN_MIN},
-    functions::get_symbol_window_ohlc_cols,
-    models::indicator::{forward_fill_lf, get_resampled_ohlc_window_data},
+use crate::trader::functions::get_symbol_window_ohlc_cols;
+
+use super::{
+    errors::Error,
+    functions::get_symbol_ohlc_cols,
+    traits::indicator::{forward_fill_lf, get_resampled_ohlc_window_data, Indicator},
 };
 
-use super::{errors::Error, functions::get_symbol_ohlc_cols, models::indicator::Indicator};
+use functions::calculate_span_alpha;
+
+#[derive(Clone)]
 pub struct StochasticIndicator {
     pub name: String,
     pub windows: Vec<u32>,
     pub anchor_symbol: String,
+}
+
+#[derive(Clone)]
+pub struct StochasticThresholdIndicator {
+    pub name: String,
+    pub upper_threshold: i32,
+    pub lower_threshold: i32,
+    pub trend_col: String,
+}
+
+#[derive(Clone)]
+pub struct ExponentialMovingAverageIndicator {
+    pub name: String,
+    pub anchor_symbol: String,
+    pub long_span: usize,
+    pub short_span: usize,
+    pub trend_col: String,
 }
 
 impl Indicator for StochasticIndicator {
@@ -131,7 +153,7 @@ impl Indicator for StochasticIndicator {
                 window_size: Duration::parse(&format!("{}i", k_window)),
                 min_periods: k_window as usize,
                 center: false,
-                by: Some("start_time".to_string()),
+                by: None,
                 weights: None,
                 closed_window: Some(ClosedWindow::Right),
             };
@@ -140,7 +162,7 @@ impl Indicator for StochasticIndicator {
                 window_size: Duration::parse(&format!("{}i", d_window)),
                 min_periods: d_window as usize,
                 center: false,
-                by: Some("start_time".to_string()),
+                by: None,
                 weights: None,
                 closed_window: Some(ClosedWindow::Right),
             };
@@ -204,12 +226,7 @@ impl Indicator for StochasticIndicator {
     }
 }
 
-pub struct StochasticThresholdIndicator {
-    pub name: String,
-    pub upper_threshold: i32,
-    pub lower_threshold: i32,
-    pub trend_col: String,
-}
+
 
 impl Indicator for StochasticThresholdIndicator {
     fn name(&self) -> String {
@@ -298,13 +315,7 @@ impl Indicator for StochasticThresholdIndicator {
     }
 }
 
-pub struct ExponentialMovingAverageIndicator {
-    pub name: String,
-    pub anchor_symbol: String,
-    pub long_span: usize,
-    pub short_span: usize,
-    pub trend_col: String,
-}
+
 
 impl Indicator for ExponentialMovingAverageIndicator {
     fn name(&self) -> String {
@@ -322,8 +333,6 @@ impl Indicator for ExponentialMovingAverageIndicator {
         columns_names
     }
     fn set_indicator_columns(&self, lf: LazyFrame) -> Result<LazyFrame, Error> {
-        println!("ema fn");
-
         let long_span = self.long_span;
         let short_span = self.short_span;
         let (_, _, _, close_col) = get_symbol_ohlc_cols(&self.anchor_symbol);
@@ -378,44 +387,18 @@ impl Indicator for ExponentialMovingAverageIndicator {
     }
 
     fn update_indicator_columns(&self, df: &DataFrame) -> Result<DataFrame, Error> {
-        let long_span = self.long_span;
-        let short_span = self.short_span;
-        let (_, _, _, close_col) = get_symbol_ohlc_cols(&self.anchor_symbol);
         let ema_short_col = format!("{}_ema_s", &self.anchor_symbol);
         let ema_long_col = format!("{}_ema_l", &self.anchor_symbol);
         let trend_col = &self.trend_col;
 
-        let records_series = df.columns([
-            close_col.clone(),
-            ema_long_col.clone(),
-            ema_short_col.clone(),
-            trend_col.to_string(),
-        ])?;
-        let close_col_ca = records_series[0].f64().unwrap();
-        let closes: Vec<Option<f64>> = close_col_ca.into_iter().collect();
-        let ema_long_col_ca = records_series[1].f64().unwrap();
-        let mut ema_longs: Vec<Option<f64>> = ema_long_col_ca.into_iter().collect();
-        let ema_short_col_ca = records_series[2].f64().unwrap();
-        let mut ema_shorts: Vec<Option<f64>> = ema_short_col_ca.into_iter().collect();
-        let trend_col_ca = records_series[3].i32().unwrap();
-        let mut trends: Vec<Option<i32>> = trend_col_ca.into_iter().collect();
+        let lf = self.set_indicator_columns(df.clone().lazy())?;
 
-        let last_index = df.height() - 1;
-        let penultimate_index = last_index - 1;
+        let result_df = lf.collect()?;
 
-        let long_alpha = calculate_span_alpha(long_span as f64)?;
-        let ewma_long = (long_alpha * closes[last_index].unwrap())
-            + ((1.0 - long_alpha) * ema_longs.clone()[penultimate_index].unwrap());
+        let ema_shorts = result_df.column(&ema_short_col)?;
+        let ema_longs = result_df.column(&ema_long_col)?;
+        let trends = result_df.column(&trend_col)?;
 
-        let short_alpha = calculate_span_alpha(short_span as f64)?;
-
-        let ewma_short = (short_alpha * closes[last_index].unwrap())
-            + ((1.0 - short_alpha) * ema_shorts.clone()[penultimate_index].unwrap());
-
-        let trend = if ewma_short > ewma_long { 1 } else { 0 };
-        ema_longs[last_index] = Some(ewma_long);
-        ema_shorts[last_index] = Some(ewma_short);
-        trends[last_index] = Some(trend);
         let mut df = df.clone();
         df.replace(&ema_short_col, Series::new(&ema_short_col, ema_shorts))?;
         df.replace(&ema_long_col, Series::new(&ema_long_col, ema_longs))?;
@@ -435,9 +418,89 @@ impl Indicator for ExponentialMovingAverageIndicator {
     }
 }
 
-fn calculate_span_alpha(span: f64) -> Result<f64, Error> {
-    if span < 1.0 {
-        panic!("Require 'span' >= 1 (found {})", span);
+#[derive(Clone)]
+pub enum IndicatorWrapper {
+    StochasticIndicator(StochasticIndicator),
+    StochasticThresholdIndicator(StochasticThresholdIndicator),
+    ExponentialMovingAverageIndicator(ExponentialMovingAverageIndicator),
+}
+
+impl Indicator for IndicatorWrapper {
+    fn name(&self) -> String {
+        match self {
+            Self::StochasticIndicator(stochastic_indicator) => stochastic_indicator.name(),
+            Self::StochasticThresholdIndicator(stochastic_threshold_indicator) => {
+                stochastic_threshold_indicator.name()
+            }
+            Self::ExponentialMovingAverageIndicator(ema_indicator) => ema_indicator.name(),
+        }
     }
-    Ok(2.0 / (span + 1.0))
+    fn get_indicator_columns(&self) -> Vec<String> {
+        match self {
+            Self::StochasticIndicator(stochastic_indicator) => {
+                stochastic_indicator.get_indicator_columns()
+            }
+            Self::StochasticThresholdIndicator(stochastic_threshold_indicator) => {
+                stochastic_threshold_indicator.get_indicator_columns()
+            }
+            Self::ExponentialMovingAverageIndicator(ema_indicator) => {
+                ema_indicator.get_indicator_columns()
+            }
+        }
+    }
+
+    fn set_indicator_columns(&self, lf: LazyFrame) -> Result<LazyFrame, Error> {
+        match self {
+            Self::StochasticIndicator(stochastic_indicator) => {
+                stochastic_indicator.set_indicator_columns(lf)
+            }
+            Self::StochasticThresholdIndicator(stochastic_threshold_indicator) => {
+                stochastic_threshold_indicator.set_indicator_columns(lf)
+            }
+            Self::ExponentialMovingAverageIndicator(ema_indicator) => {
+                ema_indicator.set_indicator_columns(lf)
+            }
+        }
+    }
+    fn update_indicator_columns(&self, df: &DataFrame) -> Result<DataFrame, Error> {
+        match self {
+            Self::StochasticIndicator(stochastic_indicator) => {
+                stochastic_indicator.update_indicator_columns(df)
+            }
+            Self::StochasticThresholdIndicator(stochastic_threshold_indicator) => {
+                stochastic_threshold_indicator.update_indicator_columns(df)
+            }
+            Self::ExponentialMovingAverageIndicator(ema_indicator) => {
+                ema_indicator.update_indicator_columns(df)
+            }
+        }
+    }
+
+    fn clone_box(&self) -> Box<dyn Indicator + Send + Sync> {
+        match self {
+            Self::StochasticIndicator(stochastic_indicator) => stochastic_indicator.clone_box(),
+            Self::StochasticThresholdIndicator(stochastic_threshold_indicator) => {
+                stochastic_threshold_indicator.clone_box()
+            }
+            Self::ExponentialMovingAverageIndicator(ema_indicator) => ema_indicator.clone_box(),
+        }
+    }
+}
+
+impl From<StochasticIndicator> for IndicatorWrapper {
+    fn from(value: StochasticIndicator) -> Self {
+        IndicatorWrapper::StochasticIndicator(value)
+    }
+}
+
+impl From<ExponentialMovingAverageIndicator> for IndicatorWrapper {
+    fn from(value: ExponentialMovingAverageIndicator) -> Self {
+        IndicatorWrapper::ExponentialMovingAverageIndicator(value)
+    }
+}
+
+impl From<StochasticThresholdIndicator> for IndicatorWrapper {
+    fn from(value: StochasticThresholdIndicator) -> Self {
+        IndicatorWrapper::StochasticThresholdIndicator(value)
+    }
 }

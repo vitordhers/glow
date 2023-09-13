@@ -6,34 +6,40 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use chrono::Duration;
+use chrono::{Duration, Utc};
 use dotenv::dotenv;
 pub mod shared;
 mod trader;
 use polars::prelude::DataFrame;
 use trader::{
-    enums::log_level::LogLevel,
+    enums::{
+        balance::Balance,
+        log_level::LogLevel,
+        modifiers::{leverage::Leverage, position_lock::PositionLock, price_level::PriceLevel},
+        order_action::OrderAction,
+        order_type::OrderType,
+        trading_data_update::TradingDataUpdate,
+    },
     exchanges::bybit::BybitExchange,
     indicators::{
-        ExponentialMovingAverageIndicator, StochasticIndicator, StochasticThresholdIndicator,
+        ExponentialMovingAverageIndicator, StochasticIndicator, StochasticThresholdIndicator, IndicatorWrapper,
     },
     models::{
-        behavior_subject::BehaviorSubject,
-        exchange::Exchange,
-        indicator::Indicator,
-        market_data::MarketDataFeed,
-        modifiers::{Leverage, PositionLockModifier, PriceLevelModifier},
-        performance::Performance,
-        signal::{SignalCategory, Signer},
-        strategy::{self, Strategy},
+        behavior_subject::BehaviorSubject, execution::Execution, trade::Trade,
+        trading_settings::TradingSettings,
     },
+    modules::{data_feed::DataFeed, performance::Performance, strategy::Strategy, trader::Trader},
     signals::{
         MultipleStochasticWithThresholdCloseLongSignal,
         MultipleStochasticWithThresholdCloseShortSignal, MultipleStochasticWithThresholdLongSignal,
-        MultipleStochasticWithThresholdShortSignal,
+        MultipleStochasticWithThresholdShortSignal, SignalWrapper,
     },
-    Trader,
+    traits::{exchange::Exchange, indicator::Indicator, signal::Signal},
 };
+
+use std::marker::Send;
+
+// mod optimization;
 
 use crate::trader::models::contract::Contract;
 
@@ -42,11 +48,9 @@ async fn main() {
     env_logger::init();
     dotenv().ok();
     let anchor_symbol = String::from("BTCUSDT");
-    let symbol = String::from("AGIXUSDT");
-    let symbols = [anchor_symbol.clone(), symbol];
-
     let trend_col = String::from("bullish_market");
 
+    // ARGS
     let windows = vec![3, 5, 15]; // 5, 15, 30 // 5, 9, 12
     let upper_threshold = 70;
     let lower_threshold = 30;
@@ -85,10 +89,22 @@ async fn main() {
         50.0,
     );
 
+    let linlusdt_contract: Contract = Contract::new(
+        String::from("LINKUSDT"),
+        0.000047,
+        Duration::hours(8),
+        None,
+        0.001,
+        36750.0,
+        0.1,
+        50.0,
+    );
+
     let mut contracts = HashMap::new();
     contracts.insert(btcusdt_contract.symbol.clone(), btcusdt_contract);
     contracts.insert(agixusdt_contract.symbol.clone(), agixusdt_contract);
     contracts.insert(arbusdt_contract.symbol.clone(), arbusdt_contract);
+    contracts.insert(linlusdt_contract.symbol.clone(), linlusdt_contract);
 
     let stochastic_indicator = StochasticIndicator {
         name: "StochasticIndicator".into(),
@@ -111,12 +127,12 @@ async fn main() {
         trend_col: trend_col.clone(),
     };
 
-    let pre_indicators: Vec<Box<(dyn Indicator + std::marker::Send + Sync + 'static)>> =
-        vec![Box::new(ewm_preindicator)];
+    let pre_indicators: Vec<IndicatorWrapper> =
+        vec![ewm_preindicator.into()];
 
-    let indicators: Vec<Box<(dyn Indicator + std::marker::Send + Sync + 'static)>> = vec![
-        Box::new(stochastic_indicator),
-        Box::new(stochastic_threshold_indicator),
+    let indicators: Vec<IndicatorWrapper> = vec![
+        stochastic_indicator.into(),
+        stochastic_threshold_indicator.into()
     ];
 
     let multiple_stochastic_with_threshold_short_signal =
@@ -149,78 +165,113 @@ async fn main() {
             close_window_index,
         };
 
-    let signals: Vec<Box<dyn Signer + std::marker::Send + Sync + 'static>> = vec![
-        Box::new(multiple_stochastic_with_threshold_short_signal),
-        Box::new(multiple_stochastic_with_threshold_long_signal),
-        Box::new(multiple_stochastic_with_threshold_close_short_signal),
-        Box::new(multiple_stochastic_with_threshold_close_long_signal),
+    let signals: Vec<SignalWrapper> = vec![
+        multiple_stochastic_with_threshold_short_signal.into(),
+        multiple_stochastic_with_threshold_long_signal.into(),
+        multiple_stochastic_with_threshold_close_short_signal.into(),
+        multiple_stochastic_with_threshold_close_long_signal.into(),
     ];
 
-    let bybit_exchage = BybitExchange::new(
+    let bybit_exchange = BybitExchange::new(
         "Bybit".to_string(),
         contracts,
         "BTCUSDT".to_string(),
         "AGIXUSDT".to_string(),
         0.0002,
         0.00055,
-        "https://testnet.bybit.com".to_string(),
-        "wss://stream-testnet.bybit.com".to_string(),
     );
 
-    let exchange = Box::new(bybit_exchage);
+    let exchange = Box::new(bybit_exchange);
 
-    let exchange: BehaviorSubject<Box<dyn Exchange + Send + Sync>> = BehaviorSubject::new(exchange);
+    let exchange_listener: BehaviorSubject<Box<dyn Exchange + Send + Sync>> =
+        BehaviorSubject::new(exchange);
 
-    let lock_modifier = PositionLockModifier::Fee;
+    let current_trade_listener: BehaviorSubject<Option<Trade>> = BehaviorSubject::new(None);
+    let timestamp = Utc::now().timestamp() * 1000;
+    let current_balance_listener = BehaviorSubject::new(Balance::new(timestamp, 0.0, 0.0));
 
     let bar_length = 60;
     let log_level = LogLevel::All;
     let initial_data_offset = 225; // TODO: create a way to calculate this automatically
-    let initial_balance = 100.00;
+    let benchmark_balance = 100.00;
+
+    let performance = Performance::new(exchange_listener.clone());
+    let performance_arc = Arc::new(Mutex::new(performance));
+
+    let signal_listener = BehaviorSubject::new(None);
+    let trading_data_listener = BehaviorSubject::new(DataFrame::default());
+    let initial_leverage = Leverage::Isolated(25);
+
+    let position_lock_modifier = PositionLock::Fee;
+
     let mut price_level_modifiers = HashMap::new();
-    let stop_loss = PriceLevelModifier::StopLoss(0.44);
-    let take_profit = PriceLevelModifier::TakeProfit(1.0);
+    let stop_loss: PriceLevel = PriceLevel::StopLoss(0.40);
+    let take_profit = PriceLevel::TakeProfit(1.0);
     price_level_modifiers.insert(stop_loss.get_hash_key(), stop_loss);
     price_level_modifiers.insert(take_profit.get_hash_key(), take_profit);
 
-    let performance = Performance::new(exchange.clone());
-    let performance_arc = Arc::new(Mutex::new(performance));
-
-    let signal_subject: BehaviorSubject<Option<SignalCategory>> = BehaviorSubject::new(None);
-    let data_subject = BehaviorSubject::new(DataFrame::default());
+    let trading_settings_arc = Arc::new(Mutex::new(TradingSettings::new(
+        OrderType::Limit,
+        OrderType::Market,
+        initial_leverage.clone(),
+        position_lock_modifier,
+        price_level_modifiers,
+        0.95, // CHANGE ALLOCATION
+    )));
 
     let strategy = Strategy::new(
         "Stepped Stochastic Strategy".into(),
         pre_indicators,
         indicators,
         signals,
-        signal_subject.clone(),
-        data_subject.clone(),
-        initial_balance,
-        exchange.clone(),
-        Leverage::Isolated(25),
-        lock_modifier,
-        price_level_modifiers,
+        benchmark_balance,
         performance_arc.clone(),
+        trading_settings_arc.clone(),
+        exchange_listener.clone(),
+        current_trade_listener.clone(),
+        signal_listener.clone(),
+        current_balance_listener.clone(),
     );
-    let strategy_arc = Arc::new(Mutex::new(strategy));
 
-    let data_feed = MarketDataFeed::new(
-        exchange.clone(),
+    let strategy_arc = Arc::new(Mutex::new(strategy));
+    let exchange_socket_error_arc = Arc::new(Mutex::new(None));
+
+    let trading_data_update_listener = BehaviorSubject::new(TradingDataUpdate::Nil);
+    let update_balance_listener: BehaviorSubject<Option<Balance>> = BehaviorSubject::new(None);
+    let update_order_listener: BehaviorSubject<Option<OrderAction>> = BehaviorSubject::new(None);
+    let update_executions_listener: BehaviorSubject<Vec<Execution>> = BehaviorSubject::new(vec![]);
+
+    let data_feed = DataFeed::new(
         bar_length,
         initial_data_offset,
-        log_level.clone(),
-        strategy_arc.clone(),
+        log_level,
+        &exchange_socket_error_arc,
+        &trading_data_update_listener,
+        &exchange_listener,
+        &trading_data_listener,
+        &update_balance_listener,
+        &update_order_listener,
+        &update_executions_listener,
+        &current_trade_listener,
     );
 
+    let leverage_listener = BehaviorSubject::new(initial_leverage);
     let trader = Trader::new(
-        &symbols,
-        50.0,
         data_feed,
-        strategy_arc,
-        performance_arc,
-        signal_subject.clone(),
-        data_subject.clone(),
+        &strategy_arc,
+        &performance_arc,
+        &trading_settings_arc,
+        &exchange_socket_error_arc,
+        &exchange_listener,
+        &current_balance_listener,
+        &update_balance_listener,
+        &update_order_listener,
+        &update_executions_listener,
+        &signal_listener,
+        &trading_data_listener,
+        &trading_data_update_listener,
+        &current_trade_listener,
+        &leverage_listener,
         &log_level,
     );
 

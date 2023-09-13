@@ -9,7 +9,7 @@ pub struct Contract {
     pub tick_size: f64,
     pub maximum_order_size: f64,
     pub minimum_order_size: f64,
-    pub max_leverage: f64
+    pub max_leverage: f64,
 }
 
 impl Contract {
@@ -21,7 +21,7 @@ impl Contract {
         tick_size: f64,
         maximum_order_size: f64,
         minimum_order_size: f64,
-        max_leverage: f64
+        max_leverage: f64,
     ) -> Self {
         Contract {
             symbol,
@@ -31,7 +31,7 @@ impl Contract {
             tick_size,
             maximum_order_size,
             minimum_order_size,
-            max_leverage
+            max_leverage,
         }
     }
 
