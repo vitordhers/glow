@@ -1,6 +1,8 @@
+use crate::shared::csv::save_csv;
 use crate::trader::constants::SECONDS_IN_DAY;
 use crate::trader::enums::modifiers::position_lock::PositionLock;
 use crate::trader::enums::order_status::OrderStatus;
+use crate::trader::functions::current_timestamp_ms;
 use crate::trader::indicators::IndicatorWrapper;
 use crate::trader::models::contract::Contract;
 use crate::trader::signals::SignalWrapper;
@@ -95,14 +97,14 @@ impl Strategy {
             initial_trading_data_lf.left_join(benchmark_trading_data, "start_time", "start_time");
 
         // get only signals from previous day
-        let minus_one_day_timestamp = initial_last_bar.timestamp() * 1000 - SECONDS_IN_DAY * 1000;
+        // let minus_one_day_timestamp = initial_last_bar.timestamp() * 1000 - SECONDS_IN_DAY * 1000;
 
-        initial_trading_data_lf = initial_trading_data_lf.filter(
-            col("start_time")
-                .dt()
-                .timestamp(TimeUnit::Milliseconds)
-                .gt_eq(minus_one_day_timestamp),
-        );
+        // initial_trading_data_lf = initial_trading_data_lf.filter(
+        //     col("start_time")
+        //         .dt()
+        //         .timestamp(TimeUnit::Milliseconds)
+        //         .gt_eq(minus_one_day_timestamp),
+        // );
 
         Ok(initial_trading_data_lf)
     }
@@ -149,7 +151,7 @@ impl Strategy {
     fn compute_benchmark_positions(&self, data: &LazyFrame) -> Result<LazyFrame, Error> {
         let data = data.to_owned();
         // TODO: TRY TO IMPLEMENT THIS USING LAZYFRAMES
-        let mut df = data.clone().drop_nulls(None).collect()?;
+        let mut df = data.clone().collect()?;
 
         // uses hashset to ensure no SignalCategory is double counted
         let mut signals_cols = HashSet::new();
@@ -482,12 +484,17 @@ impl Strategy {
         current_trading_data: DataFrame,
         last_period_tick_data: DataFrame,
     ) -> Result<DataFrame, Error> {
+        let path = "data/test".to_string();
+        // let file_name = format!("update_strategy_data_b4_{}.csv", current_timestamp_ms());
+        // save_csv(path.clone(), file_name, &current_trading_data, true)?;
         let mut strategy_data = current_trading_data.vstack(&last_period_tick_data)?;
 
         // let mut df = data.sort(["start_time"], vec![false])?;
         strategy_data = self.update_preindicators_data(strategy_data)?;
         strategy_data = self.update_indicators_data(strategy_data)?;
         strategy_data = self.update_signals_data(strategy_data)?;
+        // let file_name = format!("update_strategy_data_zafter_{}.csv", current_timestamp_ms());
+        // save_csv(path.clone(), file_name, &strategy_data, true)?;
         Ok(strategy_data)
     }
 
@@ -537,7 +544,7 @@ impl Strategy {
 
         let mut signals_cols_map = HashMap::new();
 
-        signals_cols.into_iter().for_each(|col| {
+        signals_cols.clone().into_iter().for_each(|col| {
             signals_cols_map.insert(
                 col.clone(),
                 signals_filtered_df
@@ -549,28 +556,11 @@ impl Strategy {
                     .collect::<Vec<i32>>(),
             );
         });
-        let binding = self.exchange_listener.ref_value();
-        let traded_symbol = &binding.get_traded_contract().symbol;
-        let (_, high_col, low_col, price_col) = get_symbol_ohlc_cols(traded_symbol);
-        let additional_cols = vec![price_col.clone(), high_col.clone(), low_col.clone()];
-
-        let additional_filtered_df = data.select(&additional_cols)?;
-        let mut additional_cols_map = HashMap::new();
-        additional_cols.into_iter().for_each(|col| {
-            additional_cols_map.insert(
-                col.clone(),
-                additional_filtered_df
-                    .column(&col)
-                    .unwrap()
-                    .f64()
-                    .unwrap()
-                    .into_no_null_iter()
-                    .collect::<Vec<f64>>(),
-            );
-        });
 
         let last_index = data.height() - 1;
         // let penultimate_index = last_index - 1;
+        let last_start_time = data.column("start_time")?;
+        let last_start_time = last_start_time.get(last_index)?;
 
         let positions = data
             .column("position")?
@@ -579,9 +569,16 @@ impl Strategy {
             .into_iter()
             .collect::<Vec<_>>();
         let current_position = positions[last_index].unwrap();
+        // let mut selection = vec!["start_time".to_string()];
+        // selection.extend(signals_cols);
+        // println!(
+        //     "generate_last_position_signal DATA TAIL {:?}",
+        //     data.select(selection)?.tail(Some(1))
+        // );
 
         // position is neutral
         if current_position == 0 {
+            // println!("{} | generate_last_position_signal -> last_index ={}, last start_time = {}, current_position = {}", current_timestamp_ms(), &last_index, last_start_time,  &current_position);
             if contains_short
                 && signals_cols_map
                     .get(SignalCategory::GoShort.get_column())
@@ -602,13 +599,44 @@ impl Strategy {
         } else {
             // position is not closed
             let is_position_close = contains_position_close
-                && signals_cols_map.get("position_close").unwrap()[last_index] == 1;
+                && signals_cols_map
+                    .get(SignalCategory::ClosePosition.get_column())
+                    .unwrap()[last_index]
+                    == 1;
+
             let is_long_close = current_position == 1
                 && contains_long_close
-                && signals_cols_map.get("long_close").unwrap()[last_index] == 1;
+                && signals_cols_map
+                    .get(SignalCategory::CloseLong.get_column())
+                    .unwrap()[last_index]
+                    == 1;
+            // println!(
+            //     "is_long_close = {}, contains_long_close = {} signals_cols_map.get = {}",
+            //     is_long_close,
+            //     contains_long_close,
+            //     signals_cols_map
+            //         .get(SignalCategory::CloseLong.get_column())
+            //         .unwrap()[last_index]
+            // );
+
             let is_short_close = current_position == -1
                 && contains_short_close
-                && signals_cols_map.get("short_close").unwrap()[last_index] == 1;
+                && signals_cols_map
+                    .get(SignalCategory::CloseShort.get_column())
+                    .unwrap()[last_index]
+                    == 1;
+
+            println!(
+                "is_short_close = {}, contains_short_close = {} signals_cols_map.get = {}",
+                is_short_close,
+                contains_short_close,
+                signals_cols_map
+                    .get(SignalCategory::CloseShort.get_column())
+                    .unwrap()[last_index]
+            );
+
+            // println!("{} | generate_last_position_signal -> last_index ={}, last start_time = {}, current_position = {}", current_timestamp_ms(), &last_index, last_start_time,  &current_position);
+
             if is_position_close || is_long_close || is_short_close {
                 let close_signal = if is_position_close {
                     SignalCategory::ClosePosition

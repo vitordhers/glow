@@ -126,13 +126,14 @@ impl Trade {
         let open_order_executed_value = self.open_order.get_executed_order_value();
         let executed_initial_margin = open_order_executed_value / self.leverage;
 
+        // println!("@@@ realized_pnl = {}, unrealized_pnl = {}, open_order_executed_value = {}, executed_initial_margin = {}, current_price = {}",realized_pnl, unrealized_pnl, open_order_executed_value,  executed_initial_margin, current_price);
         let returns = if executed_initial_margin != 0.0 {
-            realized_pnl + unrealized_pnl / executed_initial_margin
+            (realized_pnl + unrealized_pnl) / executed_initial_margin
         } else {
             0.0
         };
 
-        (realized_pnl, returns)
+        ((realized_pnl + unrealized_pnl), returns)
     }
 
     pub fn calculate_pnl_and_returns(&self) -> (f64, f64) {
@@ -237,7 +238,7 @@ impl Trade {
         let entry_position = self.open_order.position;
         let close_interval_executions =
             self.get_interval_close_executions(start_timestamp, end_timestamp);
-        close_interval_executions
+        let result = close_interval_executions
             .iter()
             .fold(0.0, |acc, execution| {
                 if entry_position == -1 {
@@ -249,7 +250,9 @@ impl Trade {
                         "get_interval_profit_and_loss -> entry_position is different from -1 or 1"
                     );
                 }
-            })
+            });
+        let total_fees = self.get_executed_fees_between_interval(start_timestamp, end_timestamp);
+        result - total_fees
     }
 
     pub fn get_executed_fees_between_interval(

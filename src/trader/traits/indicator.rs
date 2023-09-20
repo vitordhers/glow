@@ -22,9 +22,9 @@ pub fn get_resampled_ohlc_window_data(
     let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(anchor_symbol);
     let (open_col_alias, high_col_alias, close_col_alias, low_col_alias) =
         get_symbol_window_ohlc_cols(anchor_symbol, &window_in_mins.to_string());
-    let open = col(&open_col).drop_nulls().first().alias(&open_col_alias);
+    let open = col(&open_col).first().alias(&open_col_alias);
     let high = col(&high_col).max().alias(&high_col_alias);
-    let close = col(&close_col).drop_nulls().last().alias(&close_col_alias);
+    let close = col(&close_col).last().alias(&close_col_alias);
     let low = col(&low_col).min().alias(&low_col_alias);
     agg_expressions.push(open);
     agg_expressions.push(high);
@@ -67,7 +67,7 @@ pub fn forward_fill_lf(lf: LazyFrame, from_mins: &u32, to_mins: u32) -> Result<L
             continue;
         }
         col_names.push(col(name));
-        aggs.push(col(name).first());
+        aggs.push(col(name).mean());
         fill_null_cols.push(col(name).forward_fill(Some(from_mins.clone())));
     }
 

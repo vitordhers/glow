@@ -22,7 +22,8 @@ use trader::{
     },
     exchanges::bybit::BybitExchange,
     indicators::{
-        ExponentialMovingAverageIndicator, StochasticIndicator, StochasticThresholdIndicator, IndicatorWrapper,
+        ExponentialMovingAverageIndicator, IndicatorWrapper, StochasticIndicator,
+        StochasticThresholdIndicator,
     },
     models::{
         behavior_subject::BehaviorSubject, execution::Execution, trade::Trade,
@@ -34,7 +35,7 @@ use trader::{
         MultipleStochasticWithThresholdCloseShortSignal, MultipleStochasticWithThresholdLongSignal,
         MultipleStochasticWithThresholdShortSignal, SignalWrapper,
     },
-    traits::{exchange::Exchange, indicator::Indicator, signal::Signal},
+    traits::exchange::Exchange,
 };
 
 use std::marker::Send;
@@ -127,12 +128,11 @@ async fn main() {
         trend_col: trend_col.clone(),
     };
 
-    let pre_indicators: Vec<IndicatorWrapper> =
-        vec![ewm_preindicator.into()];
+    let pre_indicators: Vec<IndicatorWrapper> = vec![ewm_preindicator.into()];
 
     let indicators: Vec<IndicatorWrapper> = vec![
         stochastic_indicator.into(),
-        stochastic_threshold_indicator.into()
+        stochastic_threshold_indicator.into(),
     ];
 
     let multiple_stochastic_with_threshold_short_signal =

@@ -1,4 +1,4 @@
-use super::{enums::signal_category::SignalCategory, errors::Error, traits::signal::Signal};
+use super::{enums::signal_category::SignalCategory, errors::Error, traits::signal::Signal, functions::get_symbol_close_col};
 use polars::prelude::*;
 
 #[derive(Clone)]
@@ -14,7 +14,9 @@ impl Signal for MultipleStochasticWithThresholdShortSignal {
 
     fn set_signal_column(&self, lf: &LazyFrame) -> Result<LazyFrame, Error> {
         let mut signal_lf = lf.clone();
-        let mut col_exprs: Vec<Expr> = vec![];
+        let close_col = get_symbol_close_col(&self.anchor_symbol);
+        let ema_col = &format!("{}_ema_l", self.anchor_symbol);
+        let mut col_exprs: Vec<Expr> = vec![col(&close_col).lt(col(ema_col))];
         let mut iter = self.windows.iter().enumerate();
 
         let short_threshold_col = "short_threshold";
@@ -26,14 +28,24 @@ impl Signal for MultipleStochasticWithThresholdShortSignal {
             let stochastic_d_col = format!("D%_{}", suffix);
             let windowed_threshold_col = format!("short_{}", index);
 
-            col_exprs.push(col(&windowed_threshold_col).eq(lit(1)));
+            // K% crosses below D% -> Stochastic is going downwards
 
+            // K% crosses above D% -> Stochastic is going upwards
+
+            // if market is bullish, stochastic tends to remain at overbought levels
+            // price > ema && stochastic is oversold => long
+            // price < ema && stochastic is overbought => short
             signal_lf = signal_lf.with_column(
-                when(col(&stochastic_d_col).gt(col(&stochastic_k_col)))
-                    .then(1)
-                    .otherwise(0)
-                    .alias(&windowed_threshold_col),
+                when(
+                    (col(&stochastic_k_col).gt(lit(70)))
+                        .and(col(&stochastic_d_col).gt(lit(70))),
+                )
+                .then(1)
+                .otherwise(0)
+                .alias(&windowed_threshold_col),
             );
+
+            col_exprs.push(col(&windowed_threshold_col).eq(lit(1)));
         }
 
         let and_cols_expr: Expr = col_exprs
@@ -98,9 +110,11 @@ impl Signal for MultipleStochasticWithThresholdCloseShortSignal {
         signal_lf = signal_lf
             .with_column(
                 when(
-                    col(close_k_col)
-                        .gt(col(close_d_col))
-                        .and(col(close_k_col).shift(1).lt(col(close_d_col).shift(1))),
+                    col(close_k_col).lt(lit(self.lower_threshold)).and(
+                        col(close_k_col)
+                            .gt(col(close_d_col))
+                            .and(col(close_k_col).shift(1).lt(col(close_d_col).shift(1))),
+                    ),
                 )
                 .then(1)
                 .otherwise(0)
@@ -157,25 +171,40 @@ impl Signal for MultipleStochasticWithThresholdLongSignal {
 
     fn set_signal_column(&self, lf: &LazyFrame) -> Result<LazyFrame, Error> {
         let mut signal_lf = lf.clone();
-        let mut col_exprs: Vec<Expr> = vec![];
-        let mut iter = self.windows.iter().enumerate();
-        let select_columns = vec![col("start_time"), col("long")];
-        let long_threshold_col = "long_threshold";
+        let close_col = get_symbol_close_col(&self.anchor_symbol);
+        let ema_col = &format!("{}_ema_l", self.anchor_symbol);
+        let mut col_exprs: Vec<Expr> = vec![col(&close_col).gt(col(ema_col))];
 
+        let mut iter = self.windows.iter().enumerate();
+        
+        let long_threshold_col = "long_threshold";
+        
         while let Some((index, window)) = iter.next() {
             let suffix = format!("{}_{}", self.anchor_symbol, window);
 
             let stochastic_k_col = format!("K%_{}", suffix);
             let stochastic_d_col = format!("D%_{}", suffix);
             let windowed_threshold_col = format!("long_{}", index);
-            col_exprs.push(col(&windowed_threshold_col).eq(lit(1)));
+            // K% crosses below D% -> Stochastic is going downwards
+
+            //K% crosses above D% -> Stochastic is going upwards
+
+            // if market is bullish, stochastic tends to remain at overbought levels
+            // price > ema && stochastic is oversold => long
+            // price < ema && stochastic is overbought => short
+
 
             signal_lf = signal_lf.with_column(
-                when(col(&stochastic_d_col).lt(col(&stochastic_k_col)))
-                    .then(1)
-                    .otherwise(0)
-                    .alias(&windowed_threshold_col),
+                when(
+                    (col(&stochastic_k_col).lt(lit(20)))
+                    .and(col(&stochastic_d_col).lt(lit(20))),
+                )
+                .then(1)
+                .otherwise(0)
+                .alias(&windowed_threshold_col),
             );
+
+            col_exprs.push(col(&windowed_threshold_col).eq(lit(1)));
         }
 
         let and_cols_expr: Expr = col_exprs
@@ -187,6 +216,7 @@ impl Signal for MultipleStochasticWithThresholdLongSignal {
                 Some(curr.clone())
             })
             .unwrap();
+        let select_columns = vec![col("start_time"), col("long")];
         signal_lf = signal_lf.with_column(when(and_cols_expr).then(1).otherwise(0).alias("long"));
         signal_lf = signal_lf.select(select_columns);
 
@@ -226,6 +256,7 @@ impl Signal for MultipleStochasticWithThresholdCloseLongSignal {
     fn signal_category(&self) -> SignalCategory {
         SignalCategory::CloseLong
     }
+
     fn set_signal_column(&self, lf: &LazyFrame) -> Result<LazyFrame, Error> {
         let mut signal_lf = lf.clone();
 
@@ -238,9 +269,11 @@ impl Signal for MultipleStochasticWithThresholdCloseLongSignal {
         signal_lf = signal_lf
             .with_column(
                 when(
-                    col(close_k_col)
-                        .lt(col(close_d_col))
-                        .and(col(close_k_col).shift(1).gt(col(close_d_col).shift(1))),
+                    col(close_k_col).gt(lit(self.upper_threshold)).and(
+                        col(close_k_col)
+                            .lt(col(close_d_col))
+                            .and(col(close_k_col).shift(1).gt(col(close_d_col).shift(1))),
+                    ),
                 )
                 .then(1)
                 .otherwise(0)

@@ -11,7 +11,9 @@ pub enum TradingDataUpdate {
     MarketData {
         last_period_tick_data: DataFrame,
     },
-    StrategyData,
+    StrategyData {
+        strategy_data: DataFrame,
+    },
     EmitSignal,
     CleanUp,
 }
