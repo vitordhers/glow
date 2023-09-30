@@ -1,5 +1,5 @@
 #[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum SignalCategory {
     GoShort,
     CloseShort,
@@ -11,6 +11,7 @@ pub enum SignalCategory {
     ClosePosition,
     RevertPosition,
     StopLoss,
+    TrailingStopLoss,
     TakeProfit,
     LeverageBankrupcty,
 }
@@ -34,6 +35,7 @@ impl SignalCategory {
             Self::ClosePosition => "position_close",
             Self::RevertPosition => "position_revert",
             Self::StopLoss => "stop_loss",
+            Self::TrailingStopLoss => "trailing_stop_loss",
             Self::TakeProfit => "take_profit",
             Self::LeverageBankrupcty => "leverage_bankruptcy",
         }

@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 async-trait = "0.1.68"
-chrono = "0.4.24"
+chrono = "0.4.31"
 dotenv = "0.15.0"
 env_logger = "0.10.0"
 futures-util = "0.3.28"
@@ -23,16 +23,20 @@ polars = { version = "0.33.2", features = [
     "repeat_by",
     "ewma",
     "sign",
+    "dynamic_group_by",
+    "round_series",
+    "abs",
+    "cum_agg",
 ] }
 polars-lazy = { version = "0.33.2", features = ["rolling_window"] }
 reqwest = { version = "0.11.16", features = ["json", "gzip"] }
 serde = { version = "1.0.160", features = ["derive"] }
 serde_json = "1.0.96"
-strum = "0.24.1"
-strum_macros = "0.24.3"
+strum = "0.25.0"
+strum_macros = "0.25.2"
 tokio = { version = "1.27.0", features = ['full'] }
 tokio-stream = { version = "0.1.14", features = ['sync'] }
-tokio-tungstenite = { version = "0.18", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
 url = "2.3.1"
 hmac = "0.12.1"
 sha2 = "0.10.7"
@@ -41,5 +45,5 @@ itertools = "0.11.0"
 
 
 [profile.release]
-opt-level = 3  # Optimization level 3 (max optimization)
-debug = false    # Disable debugging information
+opt-level = 3 # Optimization level 3 (max optimization)
+debug = false # Disable debugging information

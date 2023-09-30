@@ -4,6 +4,7 @@ use serde_json::Error as SerdeError;
 use serde_urlencoded::ser::Error as UrlEncodedError;
 use std::error::Error as StdError;
 use std::fmt;
+use std::io::Error as IoError;
 use std::num::ParseIntError;
 use std::string::FromUtf8Error;
 use std::{env::VarError, num::ParseFloatError};
@@ -23,6 +24,7 @@ pub enum Error {
     UrlEncodedError(UrlEncodedError),
     FromUtf8Error(FromUtf8Error),
     ParseIntError(ParseIntError),
+    IoError(IoError),
 }
 #[derive(Debug)]
 pub struct CustomError {
@@ -116,5 +118,12 @@ impl From<ParseIntError> for Error {
     fn from(parse_int_error: ParseIntError) -> Self {
         println!("Parse Int Error = {:?}", parse_int_error.to_string());
         Error::ParseIntError(parse_int_error)
+    }
+}
+
+impl From<IoError> for Error {
+    fn from(io_error: IoError) -> Self {
+        println!("Io Error = {:?}", io_error.to_string());
+        Error::IoError(io_error)
     }
 }

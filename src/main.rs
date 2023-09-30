@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use chrono::{Duration, Utc};
+use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dotenv::dotenv;
 pub mod shared;
 mod trader;
@@ -21,6 +21,7 @@ use trader::{
         trading_data_update::TradingDataUpdate,
     },
     exchanges::bybit::BybitExchange,
+    functions::current_datetime,
     indicators::{
         ExponentialMovingAverageIndicator, IndicatorWrapper, StochasticIndicator,
         StochasticThresholdIndicator,
@@ -42,7 +43,7 @@ use std::marker::Send;
 
 // mod optimization;
 
-use crate::trader::models::contract::Contract;
+use crate::trader::{enums::modifiers::price_level::TrailingStopLoss, models::contract::Contract};
 
 #[tokio::main]
 async fn main() {
@@ -50,9 +51,12 @@ async fn main() {
     dotenv().ok();
     let anchor_symbol = String::from("BTCUSDT");
     let trend_col = String::from("bullish_market");
+    use std::env::{self};
+    let max_rows = "40".to_string();
+    env::set_var("POLARS_FMT_MAX_ROWS", max_rows);
 
     // ARGS
-    let windows = vec![3, 5, 15]; // 5, 15, 30 // 5, 9, 12
+    let windows = vec![5]; // 5, 15, 30 // 5, 9, 12
     let upper_threshold = 70;
     let lower_threshold = 30;
     let close_window_index = 2;
@@ -90,7 +94,18 @@ async fn main() {
         50.0,
     );
 
-    let linlusdt_contract: Contract = Contract::new(
+    let ethusdt_contract: Contract = Contract::new(
+        String::from("ETHUSDT"),
+        0.0001,
+        Duration::hours(8),
+        None,
+        0.01,
+        1500.0,
+        0.01,
+        50.0,
+    );
+
+    let linkusdt_contract: Contract = Contract::new(
         String::from("LINKUSDT"),
         0.000047,
         Duration::hours(8),
@@ -105,20 +120,35 @@ async fn main() {
     contracts.insert(btcusdt_contract.symbol.clone(), btcusdt_contract);
     contracts.insert(agixusdt_contract.symbol.clone(), agixusdt_contract);
     contracts.insert(arbusdt_contract.symbol.clone(), arbusdt_contract);
-    contracts.insert(linlusdt_contract.symbol.clone(), linlusdt_contract);
+    contracts.insert(linkusdt_contract.symbol.clone(), linkusdt_contract);
+    contracts.insert(ethusdt_contract.symbol.clone(), ethusdt_contract);
+
+    let start_datetime = current_datetime();
+
+    let start_date = NaiveDate::from_ymd_opt(2023, 9, 22).unwrap();
+    let start_time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+
+    let start_datetime = NaiveDateTime::new(start_date, start_time);
+
+    let seconds_to_next_full_minute = 60 - start_datetime.timestamp() % 60;
+    let trading_initial_datetime = start_datetime + Duration::seconds(seconds_to_next_full_minute);
 
     let stochastic_indicator = StochasticIndicator {
         name: "StochasticIndicator".into(),
         windows: windows.clone(),
         anchor_symbol: anchor_symbol.clone(),
+        starting_datetime: trading_initial_datetime,
+        k_window: 14,
+        k_smooth: 4,
+        d_smooth: 4,
     };
 
-    let stochastic_threshold_indicator = StochasticThresholdIndicator {
-        name: "StochasticThresholdIndicator".into(),
-        upper_threshold,
-        lower_threshold,
-        trend_col: trend_col.clone(),
-    };
+    // let stochastic_threshold_indicator = StochasticThresholdIndicator {
+    //     name: "StochasticThresholdIndicator".into(),
+    //     upper_threshold,
+    //     lower_threshold,
+    //     trend_col: trend_col.clone(),
+    // };
 
     let ewm_preindicator = ExponentialMovingAverageIndicator {
         name: "ExponentialMovingAverageIndicator".into(),
@@ -128,11 +158,13 @@ async fn main() {
         trend_col: trend_col.clone(),
     };
 
-    let pre_indicators: Vec<IndicatorWrapper> = vec![ewm_preindicator.into()];
+    let pre_indicators: Vec<IndicatorWrapper> = vec![
+    ewm_preindicator.into()
+    ];
 
     let indicators: Vec<IndicatorWrapper> = vec![
         stochastic_indicator.into(),
-        stochastic_threshold_indicator.into(),
+        // stochastic_threshold_indicator.into(),
     ];
 
     let multiple_stochastic_with_threshold_short_signal =
@@ -176,7 +208,7 @@ async fn main() {
         "Bybit".to_string(),
         contracts,
         "BTCUSDT".to_string(),
-        "AGIXUSDT".to_string(),
+        "BTCUSDT".to_string(),
         0.0002,
         0.00055,
     );
@@ -192,26 +224,31 @@ async fn main() {
 
     let bar_length = 60;
     let log_level = LogLevel::All;
-    let initial_data_offset = 225; // TODO: create a way to calculate this automatically
     let benchmark_balance = 100.00;
 
-    let performance = Performance::new(exchange_listener.clone());
+    let performance = Performance::new(exchange_listener.clone(), trading_initial_datetime);
     let performance_arc = Arc::new(Mutex::new(performance));
 
     let signal_listener = BehaviorSubject::new(None);
     let trading_data_listener = BehaviorSubject::new(DataFrame::default());
-    let initial_leverage = Leverage::Isolated(25);
+    
+    let initial_leverage = Leverage::Isolated(20);
 
-    let position_lock_modifier = PositionLock::Fee;
+    let position_lock_modifier = PositionLock::Nil;
 
     let mut price_level_modifiers = HashMap::new();
-    let stop_loss: PriceLevel = PriceLevel::StopLoss(0.40);
-    let take_profit = PriceLevel::TakeProfit(1.0);
+    let stop_loss: PriceLevel = PriceLevel::StopLoss(0.15);
+    let take_profit = PriceLevel::TakeProfit(0.40);
+
+    let trailing_stop_loss = TrailingStopLoss::Percent(0.5, 0.1);
+    let trailing_modifier = PriceLevel::TrailingStopLoss(trailing_stop_loss);
+
     price_level_modifiers.insert(stop_loss.get_hash_key(), stop_loss);
     price_level_modifiers.insert(take_profit.get_hash_key(), take_profit);
+    price_level_modifiers.insert("tsl".to_string(), trailing_modifier);
 
     let trading_settings_arc = Arc::new(Mutex::new(TradingSettings::new(
-        OrderType::Limit,
+        OrderType::Market,
         OrderType::Market,
         initial_leverage.clone(),
         position_lock_modifier,
@@ -222,8 +259,8 @@ async fn main() {
     let strategy = Strategy::new(
         "Stepped Stochastic Strategy".into(),
         pre_indicators,
-        indicators,
-        signals,
+        indicators.clone(),
+        signals.clone(),
         benchmark_balance,
         performance_arc.clone(),
         trading_settings_arc.clone(),
@@ -243,7 +280,6 @@ async fn main() {
 
     let data_feed = DataFeed::new(
         bar_length,
-        initial_data_offset,
         log_level,
         &exchange_socket_error_arc,
         &trading_data_update_listener,
@@ -253,6 +289,9 @@ async fn main() {
         &update_order_listener,
         &update_executions_listener,
         &current_trade_listener,
+        start_datetime,
+        indicators,
+        signals,
     );
 
     let leverage_listener = BehaviorSubject::new(initial_leverage);
@@ -273,6 +312,7 @@ async fn main() {
         &current_trade_listener,
         &leverage_listener,
         &log_level,
+        true,
     );
 
     let _ = trader.init().await;

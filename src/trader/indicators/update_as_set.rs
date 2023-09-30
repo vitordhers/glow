@@ -2,8 +2,6 @@ mod functions;
 use chrono::{NaiveDateTime, Timelike};
 use polars::prelude::*;
 
-use crate::shared::csv::save_csv;
-
 use super::{
     errors::Error,
     functions::{
@@ -21,9 +19,6 @@ pub struct StochasticIndicator {
     pub windows: Vec<u32>,
     pub anchor_symbol: String,
     pub starting_datetime: NaiveDateTime,
-    pub k_window: u32,
-    pub k_smooth: u32,
-    pub d_smooth: u32,
 }
 
 #[derive(Clone)]
@@ -53,21 +48,12 @@ impl Indicator for StochasticIndicator {
         for window in &self.windows {
             let suffix = format!("{}_{}", self.anchor_symbol, window);
 
-            let k_raw_column_title = format!("K%_raw_{}", suffix);
-
             let k_column_title = format!("K%_{}", suffix);
             let k_column_dtype = DataType::Float64;
-            let k_non_shifted_column_title = format!("K%_{}_non_shifted", suffix);
-
             let d_column_title = format!("D%_{}", suffix);
             let d_column_dtype = DataType::Float64;
-            let d_non_shifted_column_title = format!("D%_{}_non_shifted", suffix);
-
-            columns_names.push((k_raw_column_title, k_column_dtype.clone()));
-            columns_names.push((k_column_title, k_column_dtype.clone()));
-            columns_names.push((k_non_shifted_column_title, k_column_dtype));
-            columns_names.push((d_column_title, d_column_dtype.clone()));
-            columns_names.push((d_non_shifted_column_title, d_column_dtype));
+            columns_names.push((k_column_title, k_column_dtype));
+            columns_names.push((d_column_title, d_column_dtype));
         }
         columns_names
     }
@@ -79,34 +65,20 @@ impl Indicator for StochasticIndicator {
 
         for window in &self.windows {
             let resampled_data = get_resampled_ohlc_window_data(&lf, &self.anchor_symbol, window)?;
-            let (_, high_col, low_col, close_col) =
+            let (_, high_col, close_col, low_col) =
                 get_symbol_window_ohlc_cols(&self.anchor_symbol, &window.to_string());
 
             let suffix = format!("{}_{}", self.anchor_symbol, window);
 
-            let k_raw_column = format!("K%_raw_{}", suffix);
-            let k_non_shifted_column = format!("K%_{}_non_shifted", suffix);
             let k_column = format!("K%_{}", suffix);
-            let d_non_shifted_column = format!("D%_{}_non_shifted", suffix);
             let d_column = format!("D%_{}", suffix);
 
-            let k_window = self.k_window;
-            let smooth_window = self.k_smooth;
-            let d_window = self.d_smooth;
+            let k_window = 14;
+            let d_window = 3;
 
             let rolling_k_opts = RollingOptions {
                 window_size: Duration::parse(&format!("{}i", k_window)),
                 min_periods: k_window as usize,
-                center: false,
-                by: Some("start_time".to_string()),
-                weights: None,
-                closed_window: Some(ClosedWindow::Right),
-                fn_params: None,
-            };
-
-            let rolling_smooth_opts = RollingOptions {
-                window_size: Duration::parse(&format!("{}i", smooth_window)),
-                min_periods: smooth_window as usize,
                 center: false,
                 by: Some("start_time".to_string()),
                 weights: None,
@@ -124,54 +96,21 @@ impl Indicator for StochasticIndicator {
                 fn_params: None,
             };
 
-            let lowest_col = &format!("rolling_{}_lowest_{}", k_window, window);
-            let highest_col = &format!("rolling_{}_highest_{}", k_window, window);
-
             let resampled_lf = resampled_data
-                .with_columns([
-                    col(&high_col)
-                        .rolling_max(rolling_k_opts.clone())
-                        .alias(highest_col),
-                    col(&low_col)
-                        .rolling_min(rolling_k_opts.clone())
-                        .alias(lowest_col),
-                ])
                 .with_column(
-                    (lit(100) * (col(&close_col) - col(lowest_col))
-                        / (col(highest_col) - col(lowest_col)).round(2))
-                    .alias(&k_raw_column),
+                    lit(100)
+                        * (col(&close_col) - col(&low_col).rolling_min(rolling_k_opts.clone()))
+                        / (col(&high_col).rolling_max(rolling_k_opts.clone())
+                            - col(&low_col).rolling_min(rolling_k_opts))
+                        .round(2)
+                        .alias(&k_column),
                 )
+                // TODO: define forward fill with windows
+                // .with_column(col(&k_column).forward_fill(None).keep_name())
                 .with_column(
-                    (col(&k_raw_column)
-                        .rolling_mean(rolling_smooth_opts)
-                        .round(2))
-                    .alias(&k_non_shifted_column),
+                    (col(&k_column).rolling_mean(rolling_mean_d_opts).round(2)).alias(&d_column),
                 )
-                .with_column(col(&k_non_shifted_column).shift(1).alias(&k_column))
-                .with_columns([
-                    (col(&k_column)
-                        .rolling_mean(rolling_mean_d_opts.clone())
-                        .round(2))
-                    .alias(&d_column),
-                    (col(&k_non_shifted_column)
-                        .rolling_mean(rolling_mean_d_opts)
-                        .round(2))
-                    .alias(&d_non_shifted_column),
-                ]);
-
-            let log_df = resampled_lf.clone().collect()?;
-
-            let path = "data/test".to_string();
-            let file_name = format!("log_resampled_window_{}.csv", window);
-            // save_csv(path.clone(), file_name, &log_df, true)?;
-
-            // resampled_lf = resampled_lf.select(vec![
-            //     col("start_time"),
-            //     col(&k_column),
-            //     col(&k_non_shifted_column),
-            //     col(&d_column),
-            //     col(&d_non_shifted_column),
-            // ]);
+                .select(vec![col("start_time"), col(&k_column), col(&d_column)]);
 
             let resampled_lf_with_full_mins = lf_full_mins
                 .clone()
@@ -185,25 +124,12 @@ impl Indicator for StochasticIndicator {
                         maintain_order: true,
                     },
                 );
+            let full_mins_df = resampled_lf_with_full_mins
+                .collect()?
+                .fill_null(FillNullStrategy::Forward(Some(*window)))?;
+            let resampled_lf_with_full_mins = full_mins_df.lazy();
 
-            let mut resampled_lf_min = forward_fill_lf(resampled_lf_with_full_mins, window, 1)?;
-
-            // let file_name = format!("log_full_minutes_window_{}.csv", window);
-            // save_csv(
-            //     path.clone(),
-            //     file_name,
-            //     &resampled_lf_min.clone().collect()?,
-            //     true,
-            // )?;
-
-            resampled_lf_min = resampled_lf_min.select(vec![
-                col("start_time"),
-                col(&k_raw_column),
-                col(&k_column),
-                col(&k_non_shifted_column),
-                col(&d_column),
-                col(&d_non_shifted_column),
-            ]);
+            // let resampled_lf_min = forward_fill_lf(resampled_lf_with_full_mins, window, 1)?;
 
             // // TODO: implement with with_columns_seq
             // // let mut resampled_lf_min = forward_fill_lf(resampled_lf_with_full_mins, window, 1)?;
@@ -216,7 +142,7 @@ impl Indicator for StochasticIndicator {
             // //         .otherwise(col(&d_column)),
             // // ]);
 
-            resampled_lfs.push(resampled_lf_min);
+            resampled_lfs.push(resampled_lf_with_full_mins);
         }
 
         let mut new_lf = lf_full_mins.clone();
@@ -224,7 +150,6 @@ impl Indicator for StochasticIndicator {
         for resampled_lf in resampled_lfs {
             new_lf = new_lf.left_join(resampled_lf, "start_time", "start_time");
         }
-
         Ok(new_lf)
     }
 
@@ -270,9 +195,9 @@ impl Indicator for StochasticIndicator {
             let last_d;
 
             let df_height = result_df.height();
-
-            let last_index = df_height - 1;
-            // let last_index = df_height - 1 - window_usize; // hollywood
+            
+            // let last_index = df_height - 1;
+            let last_index = df_height - 1 - window_usize; // hollywood
 
             if calculation_minutes.contains(&last_minute) {
                 let k_timeframe = 14 * window;
@@ -332,7 +257,7 @@ impl Indicator for StochasticIndicator {
                         (prev_val_1 + prev_val_2 + last_k.unwrap()) / 3.0,
                         2,
                     ));
-
+                    
                     // if window == &3 {
                     //     println!(
                     //         "{:?} | window = {} highest = {:?}, close = {:?}, lowest = {:?}, last_k = {:?}, last_d = {:?}",
@@ -348,10 +273,10 @@ impl Indicator for StochasticIndicator {
                 }
             } else {
                 // penultimate index
-                // last_k = k_col[k_col.len() - window_usize - 2]; // hollywood
-                // last_d = d_col[d_col.len() - window_usize - 2]; // hollywood
-                last_k = k_col[k_col.len() - 2];
-                last_d = d_col[d_col.len() - 2];
+                last_k = k_col[k_col.len() - window_usize - 2]; // hollywood
+                last_d = d_col[d_col.len() - window_usize - 2]; // hollywood
+                // last_k = k_col[k_col.len() - 2];
+                // last_d = d_col[d_col.len() - 2];
             }
 
             k_col[last_index] = last_k;
@@ -364,15 +289,6 @@ impl Indicator for StochasticIndicator {
         }
 
         Ok(result_df)
-    }
-
-    fn get_data_offset(&self) -> u32 {
-        let max_window = self.windows.iter().max();
-
-        match max_window {
-            Some(window) => window * self.k_window * self.d_smooth,
-            None => 0,
-        }
     }
 }
 
@@ -428,10 +344,6 @@ impl Indicator for StochasticThresholdIndicator {
         }
 
         Ok(result_df)
-    }
-
-    fn get_data_offset(&self) -> u32 {
-        0
     }
 }
 
@@ -520,10 +432,6 @@ impl Indicator for ExponentialMovingAverageIndicator {
 
         Ok(result_df)
     }
-
-    fn get_data_offset(&self) -> u32 {
-        self.long_span as u32
-    }
 }
 
 #[derive(Clone)]
@@ -580,19 +488,6 @@ impl Indicator for IndicatorWrapper {
             }
             Self::ExponentialMovingAverageIndicator(ema_indicator) => {
                 ema_indicator.update_indicator_columns(df)
-            }
-        }
-    }
-    fn get_data_offset(&self) -> u32 {
-        match self {
-            Self::StochasticIndicator(stochastic_indicator) => {
-                stochastic_indicator.get_data_offset()
-            }
-            Self::StochasticThresholdIndicator(stochastic_threshold_indicator) => {
-                stochastic_threshold_indicator.get_data_offset()
-            }
-            Self::ExponentialMovingAverageIndicator(ema_indicator) => {
-                ema_indicator.get_data_offset()
             }
         }
     }

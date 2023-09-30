@@ -10,9 +10,9 @@ use crate::trader::{
 
 use super::{execution::Execution, order::Order};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Trade {
-    // defined as `{traded_symbol}_{timestamp}
+    /// defined as `{traded_symbol}_{timestamp}
     pub id: String,
     pub symbol: String,
     pub leverage: f64,
@@ -45,6 +45,18 @@ impl Trade {
             open_order,
             close_order,
         }
+    }
+
+    pub fn get_current_order(&self) -> Order {
+        if self.close_order.is_some() {
+            self.close_order.clone().unwrap()
+        } else {
+            self.open_order.clone()
+        }
+    }
+
+    pub fn get_current_position(&self) -> i32 {
+        self.get_current_order().position
     }
 
     pub fn status(&self) -> TradeStatus {

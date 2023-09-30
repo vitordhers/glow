@@ -1,37 +1,37 @@
-use chrono::Duration;
 use chrono::{Datelike, Local};
+use chrono::{Duration, NaiveDateTime};
 use polars::prelude::*;
 use reqwest::Client;
 use serde::Deserialize;
 use std::fmt::Debug;
 
-use crate::trader::functions::round_down_nth_decimal;
+use crate::trader::constants::DAY_IN_MS;
+use crate::trader::functions::{get_symbol_close_col, round_down_nth_decimal};
 use crate::trader::models::behavior_subject::BehaviorSubject;
 use crate::trader::traits::exchange::Exchange;
-use crate::{
-    shared::csv::save_csv,
-    trader::{errors::Error, functions::get_symbol_ohlc_cols},
-};
+use crate::{shared::csv::save_csv, trader::errors::Error};
+use std::env;
 
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct Performance {
     http: Client,
     exchange: BehaviorSubject<Box<dyn Exchange + Send + Sync>>,
-    benchmark_data: DataFrame,
-    trading_data: DataFrame,
-    benchmark_stats: Statistics,
-    trading_stats: Statistics,
-    risk_free_returns: f64,
+    trading_initial_datetime: NaiveDateTime,
+    pub benchmark_stats: Statistics,
+    pub trading_stats: Statistics,
+    pub risk_free_returns: f64,
 }
 
 impl Performance {
-    pub fn new(exchange: BehaviorSubject<Box<dyn Exchange + Send + Sync>>) -> Self {
+    pub fn new(
+        exchange: BehaviorSubject<Box<dyn Exchange + Send + Sync>>,
+        trading_initial_datetime: NaiveDateTime,
+    ) -> Self {
         Self {
             http: Client::new(),
             exchange,
-            trading_data: DataFrame::default(),
-            benchmark_data: DataFrame::default(),
+            trading_initial_datetime,
             benchmark_stats: Statistics::default(),
             trading_stats: Statistics::default(),
             risk_free_returns: 0.0,
@@ -58,21 +58,42 @@ impl Performance {
 // calmar-ratio = reward / tail risk = CAGR (compound anual growth rate) / max drawdown -> for that matter, use benchmark period growth rate
 
 impl Performance {
-    pub fn set_benchmark(&mut self, strategy_lf: &LazyFrame) -> Result<(), Error> {
-        let path = "data/test".to_string();
-        let file_name = "benchmark.csv".to_string();
-        let strategy_df = strategy_lf.clone().collect()?;
-        save_csv(path.clone(), file_name, &strategy_df, true)?;
+    pub fn set_benchmark_stats(&mut self, benchmark_trading_data: &LazyFrame) -> Result<(), Error> {
+        let binding = self.exchange.ref_value();
+        let traded_contract = binding.get_traded_contract();
+        let traded_symbol = &traded_contract.symbol;
+        let anchor_contract = binding.get_anchor_contract();
+        let anchor_symbol = &anchor_contract.symbol;
+
+        let journey_formmated_datetime_start = self
+            .trading_initial_datetime
+            .format("%H:%M-%d-%m-%Y")
+            .to_string();
+
+        let trading_journey_identifier = format!(
+            "{}_{}_{}",
+            journey_formmated_datetime_start, anchor_symbol, traded_symbol
+        );
+
+        let path = get_current_env_log_path();
+        let file_name = format!("{}_benchmark_data.csv", trading_journey_identifier);
+        let benchmark_trading_data_df = benchmark_trading_data.clone().collect()?;
+        save_csv(path.clone(), file_name, &benchmark_trading_data_df, true)?;
 
         let binding = self.exchange.ref_value();
         let traded_contract = binding.get_traded_contract();
         let traded_symbol = &traded_contract.symbol;
 
-        self.benchmark_data =
-            calculate_benchmark_data(strategy_lf, self.risk_free_returns, traded_symbol)?;
-        let file_name = "trades.csv".to_string();
-        save_csv(path, file_name, &self.benchmark_data, true)?;
-        // self.benchmark_data = strategy_lf.clone().collect()?;
+        let (benchmark_data, benchmark_stats) = calculate_benchmark_data(
+            benchmark_trading_data,
+            self.risk_free_returns,
+            traded_symbol,
+        )?;
+
+        self.benchmark_stats = benchmark_stats;
+
+        let file_name = format!("{}_benchmark_trades.csv", trading_journey_identifier);
+        save_csv(path, file_name, &benchmark_data, true)?;
 
         Ok(())
     }
@@ -80,55 +101,108 @@ impl Performance {
     fn set_risk_free_daily_returns(&mut self, returns: f64) {
         self.risk_free_returns = returns;
     }
+
+    pub fn update_trading_stats(&mut self, trading_data: &DataFrame) -> Result<(), Error> {
+        let binding = self.exchange.ref_value();
+        let traded_contract = binding.get_traded_contract();
+        let traded_symbol = &traded_contract.symbol;
+        let anchor_contract = binding.get_anchor_contract();
+        let anchor_symbol = &anchor_contract.symbol;
+
+        let journey_formmated_datetime_start = self
+            .trading_initial_datetime
+            .format("%H:%M-%d-%m-%Y")
+            .to_string();
+
+        let trading_journey_identifier = format!(
+            "{}_{}_{}",
+            journey_formmated_datetime_start, anchor_symbol, traded_symbol
+        );
+
+        let trading_journey_start = self.trading_initial_datetime.timestamp_millis();
+        let filter_mask = trading_data.column("start_time")?.gt_eq(trading_journey_start)?;
+        let trading_data = trading_data.filter(&filter_mask)?;
+
+        let path = get_current_env_log_path();
+        let file_name = format!("{}_trading_data.csv", trading_journey_identifier);
+
+        save_csv(path.clone(), file_name, &trading_data, true)?;
+
+        let (trading_data, trading_stats) = update_trading_data(
+            &trading_data,
+            self.risk_free_returns,
+            traded_symbol,
+            Some(self.trading_initial_datetime),
+        )?;
+
+        self.trading_stats = trading_stats;
+
+        let file_name = format!("{}_trades.csv", trading_journey_identifier);
+
+        save_csv(path, file_name, &trading_data, true)?;
+
+        Ok(())
+    }
 }
-// move to trader
+
+fn get_current_env_log_path() -> String {
+    let env = env::var("ENV_NAME").unwrap().to_uppercase();
+    if env == "PROD".to_string() {
+        "data/journals".to_string()
+    } else {
+        "data/test".to_string()
+    }
+}
+
 pub fn calculate_benchmark_data(
-    strategy_lf: &LazyFrame,
+    benchmark_trading_data: &LazyFrame,
     risk_free_returns: f64,
     traded_symbol: &String,
-) -> Result<DataFrame, Error> {
-    let trades_lf = calculate_trades(strategy_lf, traded_symbol)?;
-    // let path = "data/test".to_string();
-    // let file_name = "trades_lf.csv".to_string();
-    // let trades_df = trades_lf.clone().collect()?;
-    // save_csv(path, file_name, &trades_df, true)?;
+) -> Result<(DataFrame, Statistics), Error> {
+    let trades_lf = calculate_trades(benchmark_trading_data)?;
 
-    let trading_lf = calculate_trading_sessions(trades_lf, traded_symbol)?;
+    let mut trading_lf = calculate_trading_sessions(trades_lf, traded_symbol, None)?;
+    trading_lf = trading_lf.drop_nulls(None);
 
     let df = trading_lf.collect()?;
 
-    let benchmark_stats = calculate_benchmark_stats(&df, risk_free_returns)?;
+    let benchmark_stats = calculate_trading_stats(&df, risk_free_returns)?;
 
-    println!("Benchmark stats {:?}", benchmark_stats);
+    println!("\n Benchmark stats {:?}", benchmark_stats);
 
-    Ok(df)
+    Ok((df, benchmark_stats))
 }
 
-pub fn calculate_trades(lf: &LazyFrame, traded_symbol: &String) -> Result<LazyFrame, Error> {
-    let (_, _, _, price_col) = get_symbol_ohlc_cols(traded_symbol);
-    let lf = lf.clone().with_columns([
-        when(
-            col("position")
-                .shift(1)
-                .is_not_null()
-                .and(col("position").neq(col("position").shift(1))),
-        )
-        .then(1)
-        .otherwise(0)
-        .alias("trade"),
-        // when(
-        //     col("returns")
-        //         .shift(1)
-        //         .is_not_null()
-        //         .and(col("returns").shift(1).neq(0.0)),
-        // )
-        // .then((col("returns") - col("returns").shift(1)) / col("returns").shift(1))
-        // .otherwise(0.0)
-        // .alias("returns_pct"),
-        // col("P&L").shift(-1).keep_name(),
-        // col("balance").shift(-1).keep_name(),
-        // (col("trade_fees") + col("trade_fees").shift(-1)).keep_name(),
-    ]);
+pub fn update_trading_data(
+    trading_data: &DataFrame,
+    risk_free_returns: f64,
+    traded_symbol: &String,
+    log_from_timestamp_on: Option<NaiveDateTime>,
+) -> Result<(DataFrame, Statistics), Error> {
+    let trading_data_lf = trading_data.clone().lazy();
+    let trades_lf = calculate_trades(&trading_data_lf)?;
+
+    let mut trading_lf =
+        calculate_trading_sessions(trades_lf, traded_symbol, log_from_timestamp_on)?;
+    trading_lf = trading_lf.drop_nulls(None);
+
+    let df = trading_lf.collect()?;
+
+    let trading_stats = calculate_trading_stats(&df, risk_free_returns)?;
+
+    Ok((df, trading_stats))
+}
+
+pub fn calculate_trades(lf: &LazyFrame) -> Result<LazyFrame, Error> {
+    let lf = lf.clone().with_columns([when(
+        col("position")
+            .shift(1)
+            .is_not_null()
+            .and(col("position").neq(col("position").shift(1))),
+    )
+    .then(1)
+    .otherwise(0)
+    .alias("trade")]);
 
     Ok(lf)
 }
@@ -136,9 +210,18 @@ pub fn calculate_trades(lf: &LazyFrame, traded_symbol: &String) -> Result<LazyFr
 pub fn calculate_trading_sessions(
     lf: LazyFrame,
     traded_symbol: &String,
+    log_from_timestamp_on: Option<NaiveDateTime>,
 ) -> Result<LazyFrame, Error> {
-    let (_, _, _, price_col) = get_symbol_ohlc_cols(traded_symbol);
-    let mut lf = lf
+    let mut lf = lf.clone();
+
+    if log_from_timestamp_on.is_some() {
+        let log_from_timestamp_on = log_from_timestamp_on.unwrap();
+        let mut log_from_timestamp_on = log_from_timestamp_on.timestamp_millis();
+        log_from_timestamp_on = log_from_timestamp_on - DAY_IN_MS;
+        lf = lf.filter(col("start_time").gt_eq(lit(log_from_timestamp_on)));
+    }
+
+    lf = lf
         .with_column(col("trade").sign().cumsum(false).alias("session"))
         // extends session to the next cell, where it is closed
         .with_column(
@@ -154,10 +237,11 @@ pub fn calculate_trading_sessions(
             .otherwise(col("session"))
             .keep_name(),
         );
-    let path = "data/test".to_string();
-    let file_name = "trades_lf.csv".to_string();
-    let trades_df = lf.clone().collect()?;
-    save_csv(path, file_name, &trades_df, true)?;
+    let price_col = get_symbol_close_col(traded_symbol);
+
+    // let file_name = "trades_lf.csv".to_string();
+    // let trades_df = lf.clone().collect()?;
+    // save_csv(path, file_name, &trades_df, true)?;
     let returns_output: SpecialEq<Arc<dyn FunctionOutputField>> =
         GetOutput::from_type(DataType::Float64);
 
@@ -172,9 +256,17 @@ pub fn calculate_trading_sessions(
         col("position").first().alias("position"),
         col("returns").last().keep_name(),
         col("returns").max().alias("max_returns"),
-        (col("returns").last() / col("returns").max()).alias("returns_seized"),
+        col("returns").min().alias("min_returns"),
+        (when(col("returns").last().eq(lit(0)))
+            .then(lit(0))
+            .otherwise(
+                when(col("returns").last().gt(lit(0)))
+                    .then(col("returns").last() / col("returns").max())
+                    .otherwise(col("returns").last() / col("returns").min()),
+            ))
+        .alias("returns_seized"),
         col("units").mean().keep_name(),
-        col("P&L").last().keep_name(),
+        col("profit_and_loss").last().keep_name(),
         col("balance").last().keep_name(),
         col("returns").std(0).alias("risk"),
         col("trade_fees").sum().keep_name(),
@@ -183,7 +275,7 @@ pub fn calculate_trading_sessions(
                 |series| {
                     let positions_series: &Series = &series[1];
                     let returns_series: &Series = &series[0];
-                    let position = positions_series.head(Some(1)).mean().unwrap();
+                    let position = positions_series.head(Some(1)).mean().unwrap_or_default();
 
                     // if position is long
                     if position == 0.0 {
@@ -217,7 +309,7 @@ pub fn calculate_trading_sessions(
     ];
 
     lf = lf
-        .groupby([col("session")])
+        .group_by([col("session")])
         .agg(aggs)
         .sort("start", SortOptions::default())
         .filter(col("position").neq(0).or(col("session").eq(0)))
@@ -247,16 +339,20 @@ pub fn calculate_trading_sessions(
         //         .alias("potential_seized"),
         // )
         ;
+    // let path = "data/test".to_string();
+    // let file_name = "trades_lf.csv".to_string();
+    // let trades_df = lf.clone().collect()?;
+    // save_csv(path, file_name, &trades_df, true)?;
 
     Ok(lf)
 }
 
-pub fn calculate_benchmark_stats(
-    benchmark_data: &DataFrame,
+pub fn calculate_trading_stats(
+    trading_data: &DataFrame,
     risk_free_returns: f64,
 ) -> Result<Statistics, Error> {
-    let initial_data_filter_mask = benchmark_data.column("position")?.not_equal(0)?;
-    let df = benchmark_data.filter(&initial_data_filter_mask)?;
+    let initial_data_filter_mask = trading_data.column("position")?.not_equal(0)?;
+    let df = trading_data.filter(&initial_data_filter_mask)?;
 
     let start_series = df.column("start")?;
     let end_series = df.column("end")?;
@@ -267,8 +363,8 @@ pub fn calculate_benchmark_stats(
     let balance_series = df.column("balance")?;
 
     let success_rate = calculate_success_rate(returns_series)?;
-    let risk = risk_series.mean().unwrap();
-    let downside_deviation = downside_risk_series.mean().unwrap();
+    let risk = risk_series.mean().unwrap_or_default();
+    let downside_deviation = downside_risk_series.mean().unwrap_or_default();
 
     let (max_drawdown, max_drawdown_duration) =
         calculate_max_drawdown_and_duration(start_series, end_series, drawdown_series)?;

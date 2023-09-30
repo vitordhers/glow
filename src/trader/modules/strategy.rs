@@ -1,8 +1,8 @@
 use crate::shared::csv::save_csv;
-use crate::trader::constants::SECONDS_IN_DAY;
+use crate::trader::constants::DAY_IN_MS;
 use crate::trader::enums::modifiers::position_lock::PositionLock;
+use crate::trader::enums::modifiers::price_level::TrailingStopLoss;
 use crate::trader::enums::order_status::OrderStatus;
-use crate::trader::functions::current_timestamp_ms;
 use crate::trader::indicators::IndicatorWrapper;
 use crate::trader::models::contract::Contract;
 use crate::trader::signals::SignalWrapper;
@@ -15,7 +15,7 @@ use crate::trader::{
     models::{behavior_subject::BehaviorSubject, trade::Trade, trading_settings::TradingSettings},
     traits::{exchange::Exchange, indicator::Indicator, signal::Signal},
 };
-use chrono::NaiveDateTime;
+use chrono::{Duration as ChronoDuration, NaiveDateTime};
 use polars::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -92,19 +92,16 @@ impl Strategy {
         let tick_data = initial_tick_data_lf.cache();
         let mut initial_trading_data_lf = self.set_strategy_data(tick_data)?;
 
-        let benchmark_trading_data = self.compute_benchmark_positions(&initial_trading_data_lf)?;
+        // filter only last day positions
+        // initial last bar - 1 day
+        let last_day_datetime = initial_last_bar - ChronoDuration::milliseconds(DAY_IN_MS);
+        let initial_strategy_data_lf = initial_trading_data_lf
+            .clone()
+            .filter(col("start_time").gt_eq(lit(last_day_datetime.timestamp_millis())));
+
+        let benchmark_trading_data = self.compute_benchmark_positions(&initial_strategy_data_lf)?;
         initial_trading_data_lf =
             initial_trading_data_lf.left_join(benchmark_trading_data, "start_time", "start_time");
-
-        // get only signals from previous day
-        // let minus_one_day_timestamp = initial_last_bar.timestamp() * 1000 - SECONDS_IN_DAY * 1000;
-
-        // initial_trading_data_lf = initial_trading_data_lf.filter(
-        //     col("start_time")
-        //         .dt()
-        //         .timestamp(TimeUnit::Milliseconds)
-        //         .gt_eq(minus_one_day_timestamp),
-        // );
 
         Ok(initial_trading_data_lf)
     }
@@ -152,6 +149,10 @@ impl Strategy {
         let data = data.to_owned();
         // TODO: TRY TO IMPLEMENT THIS USING LAZYFRAMES
         let mut df = data.clone().collect()?;
+        // let path = "data/test".to_string();
+        // let file_name = "benchmark_data.csv".to_string();
+        // save_csv(path.clone(), file_name, &df, true)?;
+        // println!("@@@@@ compute_benchmark_positions {:?}", df);
 
         // uses hashset to ensure no SignalCategory is double counted
         let mut signals_cols = HashSet::new();
@@ -170,7 +171,7 @@ impl Strategy {
 
         let signals_filtered_df = df.select(&signals_cols)?;
 
-        let mut signals_cols_map = HashMap::new();
+        let mut signals_cols_map: HashMap<String, Vec<i32>> = HashMap::new();
         signals_cols.into_iter().for_each(|col| {
             signals_cols_map.insert(
                 col.clone(),
@@ -207,7 +208,10 @@ impl Strategy {
         });
 
         let start_time = Instant::now();
+        let mut current_trade: Option<Trade> = None;
         let mut current_order: Option<LeveragedOrder> = None;
+
+        let mut current_peak_returns = 0.0;
 
         // fee = balance * leverage * price * fee_rate
         // marginal fee = price * fee_rate
@@ -219,34 +223,51 @@ impl Strategy {
         let mut positions = vec![0];
         let mut actions = vec![SignalCategory::KeepPosition.get_column().to_string()];
 
-        let settings_guard = self
-            .trading_settings_arc
-            .lock()
-            .expect("compute_benchmark_positions -> trading settings settings_guard unwrap");
+        let trading_settings;
+        {
+            let settings_guard = self
+                .trading_settings_arc
+                .lock()
+                .expect("compute_benchmark_positions -> trading settings settings_guard unwrap");
+            trading_settings = settings_guard.clone();
+        }
 
-        let leverage_factor = settings_guard.leverage.get_factor();
-        let has_leverage = if leverage_factor > 1.0 { true } else { false };
+        let leverage_factor = trading_settings.leverage.get_factor();
+        let has_leverage = leverage_factor > 1.0;
 
-        let price_level_modifier_map_binding = settings_guard.price_level_modifier_map.clone();
+        let price_level_modifier_map_binding = trading_settings.price_level_modifier_map.clone();
 
-        let stop_loss_opt: Option<&PriceLevel> =
-            price_level_modifier_map_binding.get(&PriceLevel::StopLoss(0.0).get_hash_key());
-        let take_profit_opt =
-            price_level_modifier_map_binding.get(&PriceLevel::TakeProfit(0.0).get_hash_key());
+        let stop_loss_opt: Option<&PriceLevel> = price_level_modifier_map_binding.get("sl");
+        let take_profit_opt = price_level_modifier_map_binding.get("tp");
+
+        let trailing_stop_loss = price_level_modifier_map_binding.get("tsl");
+
         let dataframe_height = df.height();
 
-        let position_modifier = settings_guard.position_lock_modifier.clone();
+        let position_modifier = trading_settings.position_lock_modifier.clone();
 
-        drop(settings_guard);
+        // @@@ TODO: implement this
+        // let signals_map = get_benchmark_index_signals(&df);
+
+        // let mut signals_iter = signals_map.into_iter();
+
+        // while let Some((index, signals)) = signals_iter.next() {}
 
         for index in 0..dataframe_height {
             if index == 0 {
                 continue;
             }
 
+            // let current_order_position = current_trade
+            //     .clone()
+            //     .unwrap_or_default()
+            //     .get_current_position();
+
             let current_position = positions[index - 1];
             let current_units = units[index - 1];
             let current_balance = balances[index - 1];
+
+            // println!("@@@@ {}, {}, {}", current_position, current_units, current_balance);
 
             // position is neutral
             if current_position == 0 {
@@ -314,8 +335,15 @@ impl Strategy {
                 let mut order = current_order.clone().unwrap().clone();
                 let current_price = additional_cols_map.get(&price_col).unwrap()[index];
                 let (_, _, _, _, current_returns) = order.get_close_data(current_price).unwrap();
+                if current_returns > 0.0 && current_returns > current_peak_returns {
+                    current_peak_returns = current_returns;
+                }
                 returns.push(current_returns);
-                if has_leverage || stop_loss_opt.is_some() || take_profit_opt.is_some() {
+                if has_leverage
+                    || stop_loss_opt.is_some()
+                    || take_profit_opt.is_some()
+                    || trailing_stop_loss.is_some()
+                {
                     let min_price = additional_cols_map.get(&low_col).unwrap()[index];
                     let max_price = additional_cols_map.get(&high_col).unwrap()[index];
                     match order.check_price_level_modifiers(
@@ -324,6 +352,8 @@ impl Strategy {
                         current_price,
                         stop_loss_opt,
                         take_profit_opt,
+                        trailing_stop_loss,
+                        current_peak_returns,
                     ) {
                         Ok(order_result) => {
                             trade_fees.push(order_result.close_fee);
@@ -333,6 +363,7 @@ impl Strategy {
                             positions.push(0);
                             actions.push(order_result.signal.get_column().to_string());
                             current_order = None;
+                            current_peak_returns = 0.0;
                             continue;
                         }
                         Err(_) => {}
@@ -373,6 +404,7 @@ impl Strategy {
                             positions.push(0);
                             actions.push(order_result.signal.get_column().to_string());
                             current_order = None;
+                            current_peak_returns = 0.0;
                             continue;
                         }
                         Err(e) => {
@@ -432,9 +464,11 @@ impl Strategy {
             elapsed_millis
         );
 
+        // println!("@@@@@ compute_benchmark_positions END {:?}", df);
+
         let trade_fee_series = Series::new("trade_fees", trade_fees);
         let units_series = Series::new("units", units);
-        let profit_and_loss_series = Series::new("P&L", profit_and_loss);
+        let profit_and_loss_series = Series::new("profit_and_loss", profit_and_loss);
         let returns_series = Series::new("returns", returns);
         let balance_series = Series::new("balance", balances);
         let position_series = Series::new("position", positions);
@@ -452,7 +486,7 @@ impl Strategy {
             col("start_time"),
             col("trade_fees"),
             col("units"),
-            col("P&L"),
+            col("profit_and_loss"),
             col("returns"),
             col("balance"),
             col("position"),
@@ -484,7 +518,7 @@ impl Strategy {
         current_trading_data: DataFrame,
         last_period_tick_data: DataFrame,
     ) -> Result<DataFrame, Error> {
-        let path = "data/test".to_string();
+        // let path = "data/test".to_string();
         // let file_name = format!("update_strategy_data_b4_{}.csv", current_timestamp_ms());
         // save_csv(path.clone(), file_name, &current_trading_data, true)?;
         let mut strategy_data = current_trading_data.vstack(&last_period_tick_data)?;
@@ -559,8 +593,6 @@ impl Strategy {
 
         let last_index = data.height() - 1;
         // let penultimate_index = last_index - 1;
-        let last_start_time = data.column("start_time")?;
-        let last_start_time = last_start_time.get(last_index)?;
 
         let positions = data
             .column("position")?
@@ -626,14 +658,14 @@ impl Strategy {
                     .unwrap()[last_index]
                     == 1;
 
-            println!(
-                "is_short_close = {}, contains_short_close = {} signals_cols_map.get = {}",
-                is_short_close,
-                contains_short_close,
-                signals_cols_map
-                    .get(SignalCategory::CloseShort.get_column())
-                    .unwrap()[last_index]
-            );
+            // println!(
+            //     "is_short_close = {}, contains_short_close = {} signals_cols_map.get = {}",
+            //     is_short_close,
+            //     contains_short_close,
+            //     signals_cols_map
+            //         .get(SignalCategory::CloseShort.get_column())
+            //         .unwrap()[last_index]
+            // );
 
             // println!("{} | generate_last_position_signal -> last_index ={}, last start_time = {}, current_position = {}", current_timestamp_ms(), &last_index, last_start_time,  &current_position);
 
@@ -654,6 +686,42 @@ impl Strategy {
 
         Ok(SignalCategory::KeepPosition)
     }
+}
+
+fn get_benchmark_index_signals(df: &DataFrame) -> HashMap<usize, Vec<SignalCategory>> {
+    let mut signals_map = HashMap::new();
+
+    let signals_categories = vec![
+        SignalCategory::GoShort,
+        SignalCategory::GoLong,
+        SignalCategory::CloseLong,
+        SignalCategory::CloseShort,
+    ];
+
+    let mut iter = signals_categories.into_iter();
+
+    while let Some(signal_category) = iter.next() {
+        match df.column(signal_category.get_column()) {
+            Ok(short_col) => {
+                short_col
+                    .i32()
+                    .unwrap()
+                    .into_no_null_iter()
+                    .enumerate()
+                    .for_each(|(index, value)| {
+                        if value == 1 {
+                            signals_map
+                                .entry(index)
+                                .or_insert(Vec::new())
+                                .push(signal_category);
+                        }
+                    });
+            }
+            _ => {}
+        }
+    }
+
+    signals_map
 }
 
 fn take_position_by_balance<'a>(
@@ -891,6 +959,8 @@ impl LeveragedOrder {
         current_price: f64,
         stop_loss_opt: Option<&PriceLevel>,
         take_profit_opt: Option<&PriceLevel>,
+        trailing_stop_loss_opt: Option<&PriceLevel>,
+        current_peak_returns: f64,
     ) -> Result<OrderClose, OrderCloseError> {
         let ref_price: f64 = if self.position == -1 {
             max_price
@@ -916,7 +986,8 @@ impl LeveragedOrder {
                 );
             }
         }
-        if stop_loss_opt.is_some() || take_profit_opt.is_some() {
+        if stop_loss_opt.is_some() || take_profit_opt.is_some() || trailing_stop_loss_opt.is_some()
+        {
             let (_, _, _, _, returns) = self.get_close_data(ref_price).unwrap();
             if let Some(stop_loss) = stop_loss_opt {
                 let stop_loss_percentage = stop_loss.get_percentage();
@@ -947,10 +1018,50 @@ impl LeveragedOrder {
                     );
                 }
             }
+
+            if let Some(trailing_stop_loss) = trailing_stop_loss_opt {
+                match trailing_stop_loss {
+                    PriceLevel::TrailingStopLoss(tsl) => match tsl {
+                        TrailingStopLoss::Percent(percentage, start) => {
+                            if start < &current_peak_returns {
+                                let acceptable_returns = percentage * current_peak_returns;
+
+                                if returns <= acceptable_returns {
+                                    return self.close_order(
+                                        current_price,
+                                        PositionLock::Nil,
+                                        SignalCategory::TrailingStopLoss,
+                                    );
+                                }
+                            }
+                        }
+                        TrailingStopLoss::Stepped(percentage, start) => {
+                            if start < &current_peak_returns {
+                                let acceptable_returns =
+                                    closest_multiple_below(*percentage, current_peak_returns);
+                                if returns <= acceptable_returns {
+                                    return self.close_order(
+                                        current_price,
+                                        PositionLock::Nil,
+                                        SignalCategory::TrailingStopLoss,
+                                    );
+                                }
+                            }
+                        }
+                    },
+                    _ => {}
+                }
+            }
         }
 
         return Err(OrderCloseError::Nil);
     }
+}
+
+fn closest_multiple_below(of: f64, to: f64) -> f64 {
+    let quotient = to / of;
+    let floored = quotient.floor();
+    floored * of
 }
 
 #[derive(Debug)]

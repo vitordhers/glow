@@ -7,10 +7,10 @@ use polars::prelude::*;
 
 pub trait Indicator {
     fn name(&self) -> String;
-    fn get_indicator_columns(&self) -> Vec<String>;
+    fn get_indicator_columns(&self) -> Vec<(String, DataType)>;
     fn set_indicator_columns(&self, lf: LazyFrame) -> Result<LazyFrame, Error>;
     fn update_indicator_columns(&self, df: &DataFrame) -> Result<DataFrame, Error>;
-    fn clone_box(&self) -> Box<dyn Indicator + Send + Sync>;
+    fn get_data_offset(&self) -> u32;
 }
 
 pub fn get_resampled_ohlc_window_data(
@@ -18,24 +18,28 @@ pub fn get_resampled_ohlc_window_data(
     anchor_symbol: &String,
     window_in_mins: &u32,
 ) -> Result<LazyFrame, Error> {
-    let mut agg_expressions: Vec<Expr> = Vec::new();
+    let end_time = col("start_time").last().alias("end_time");
+    let mut agg_expressions: Vec<Expr> = vec![end_time];
     let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(anchor_symbol);
-    let (open_col_alias, high_col_alias, close_col_alias, low_col_alias) =
+    let (open_col_alias, high_col_alias, low_col_alias, close_col_alias) =
         get_symbol_window_ohlc_cols(anchor_symbol, &window_in_mins.to_string());
     let open = col(&open_col).first().alias(&open_col_alias);
     let high = col(&high_col).max().alias(&high_col_alias);
     let close = col(&close_col).last().alias(&close_col_alias);
     let low = col(&low_col).min().alias(&low_col_alias);
+    let window_count = col("start_time").count().alias("window_count");
+
     agg_expressions.push(open);
     agg_expressions.push(high);
     agg_expressions.push(close);
     agg_expressions.push(low);
+    agg_expressions.push(window_count);
 
     let window_in_nanos = *window_in_mins as i64 * SECONDS_IN_MIN * NANOS_IN_SECOND;
 
     let resampled_data = tick_data
         .clone()
-        .groupby_dynamic(
+        .group_by_dynamic(
             col("start_time"),
             vec![],
             DynamicGroupOptions {
@@ -46,7 +50,8 @@ pub fn get_resampled_ohlc_window_data(
                 offset: Duration::new(0),
                 truncate: true,
                 include_boundaries: false,
-                closed_window: ClosedWindow::Left,
+                closed_window: ClosedWindow::Left, // This should be left
+                check_sorted: false,
             },
         )
         .agg(agg_expressions);
@@ -72,7 +77,7 @@ pub fn forward_fill_lf(lf: LazyFrame, from_mins: &u32, to_mins: u32) -> Result<L
     }
 
     let result = lf
-        .groupby_dynamic(
+        .group_by_dynamic(
             col("start_time"),
             vec![],
             DynamicGroupOptions {
@@ -83,17 +88,12 @@ pub fn forward_fill_lf(lf: LazyFrame, from_mins: &u32, to_mins: u32) -> Result<L
                 offset: Duration::new(0),
                 truncate: true,
                 include_boundaries: false,
-                closed_window: ClosedWindow::Left,
+                closed_window: ClosedWindow::Left, // MUST be LEFT otherwise, indicator columns get shifted by 1 period
+                check_sorted: false,
             },
         )
         .agg(aggs)
         .with_columns(fill_null_cols);
 
     Ok(result)
-}
-
-impl Clone for Box<dyn Indicator + Send + Sync> {
-    fn clone(&self) -> Self {
-        self.clone_box()
-    }
 }

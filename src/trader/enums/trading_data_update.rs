@@ -14,6 +14,10 @@ pub enum TradingDataUpdate {
     StrategyData {
         strategy_data: DataFrame,
     },
-    EmitSignal,
-    CleanUp,
+    EmitSignal {
+        trading_data: DataFrame,
+    },
+    CleanUp {
+        trading_data: DataFrame,
+    },
 }

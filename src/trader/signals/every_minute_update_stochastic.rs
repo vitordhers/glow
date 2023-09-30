@@ -14,98 +14,44 @@ impl Signal for MultipleStochasticWithThresholdShortSignal {
 
     fn set_signal_column(&self, lf: &LazyFrame) -> Result<LazyFrame, Error> {
         let mut signal_lf = lf.clone();
+        let mut col_exprs: Vec<Expr> = vec![];
+        let mut iter = self.windows.iter().enumerate();
 
-        let signal_category = self.signal_category();
-        let column = signal_category.get_column();
+        let short_threshold_col = "short_threshold";
 
-        let suffix = format!("{}_{}", self.anchor_symbol, 5);
-        let stochastic_k_col = &format!("K%_{}", suffix);
-        let stochastic_d_col = &format!("D%_{}", suffix);
+        while let Some((index, window)) = iter.next() {
+            let suffix = format!("{}_{}", self.anchor_symbol, window);
 
-        signal_lf = signal_lf
-            .with_columns([
-                col(stochastic_k_col).gt(75).alias("open_short_1"),
-                col(stochastic_k_col)
-                    .lt(col(stochastic_k_col).shift(1))
-                    .alias("open_short_3"),
-            ])
-            .with_column(
-                when(col("open_short_1").and(col("open_short_3")))
-                    .then(1)
-                    .otherwise(0)
-                    .alias(column),
+            let stochastic_k_col = format!("K%_{}", suffix);
+            let stochastic_d_col = format!("D%_{}", suffix);
+            let windowed_threshold_col = format!("short_{}", index);
+
+            col_exprs.push(col(&windowed_threshold_col).eq(lit(1)));
+
+            signal_lf = signal_lf.with_column(
+                when(
+                    col(&stochastic_k_col)
+                        .gt(lit(80))
+                        .and(col(&stochastic_d_col).gt(lit(80)))
+                        .and(col(&stochastic_d_col).gt(col(&stochastic_k_col))),
+                )
+                .then(1)
+                .otherwise(0)
+                .alias(&windowed_threshold_col),
             );
-        signal_lf = signal_lf.select([
-            col("start_time"),
-            col(column),
-            col("open_short_1"),
-            col("open_short_3"),
-        ]);
+        }
 
-        Ok(signal_lf)
-    }
-
-    fn update_signal_column(&self, data: &DataFrame) -> Result<DataFrame, Error> {
-        let mut new_lf = data.clone().lazy();
-        new_lf = self.set_signal_column(&new_lf)?;
-        let new_df = new_lf.collect()?;
-        let mut result_df = data.clone();
-        let signal = self.signal_category();
-        let column = signal.get_column();
-        let series = new_df.column(column)?;
-        let _ = result_df.replace(&column, series.to_owned());
-
-        Ok(result_df)
-    }
-
-    fn clone_box(&self) -> Box<dyn Signal + Send + Sync> {
-        Box::new(Self {
-            windows: self.windows.clone(),
-            anchor_symbol: self.anchor_symbol.clone(),
-        })
-    }
-}
-
-#[derive(Clone)]
-pub struct MultipleStochasticWithThresholdLongSignal {
-    pub windows: Vec<u32>,
-    pub anchor_symbol: String,
-}
-
-impl Signal for MultipleStochasticWithThresholdLongSignal {
-    fn signal_category(&self) -> SignalCategory {
-        SignalCategory::GoLong
-    }
-
-    fn set_signal_column(&self, lf: &LazyFrame) -> Result<LazyFrame, Error> {
-        let mut signal_lf = lf.clone();
-
-        let signal_category = self.signal_category();
-        let column = signal_category.get_column();
-
-        let suffix = format!("{}_{}", self.anchor_symbol, 5);
-        let stochastic_k_col = &format!("K%_{}", suffix);
-        let stochastic_d_col = &format!("D%_{}", suffix);
-
-        signal_lf = signal_lf
-            .with_columns([
-                col(stochastic_k_col).lt(25).alias("open_long_1"),
-                col(stochastic_k_col)
-                    .gt(col(stochastic_k_col).shift(1))
-                    .alias("open_long_3"),
-            ])
-            .with_column(
-                when(col("open_long_1").and(col("open_long_3")))
-                    .then(1)
-                    .otherwise(0)
-                    .alias(column),
-            );
-        signal_lf = signal_lf.select([
-            col("start_time"),
-            col(column),
-            col("open_long_1"),
-            col("open_long_3"),
-        ]);
+        let and_cols_expr: Expr = col_exprs
+            .iter()
+            .fold(None, |prev: Option<Expr>, curr: &Expr| {
+                if let Some(e) = prev {
+                    return Some(e.and(curr.clone()));
+                }
+                Some(curr.clone())
+            })
+            .unwrap();
+        signal_lf = signal_lf.with_column(when(and_cols_expr).then(1).otherwise(0).alias("short"));
+        signal_lf = signal_lf.select([col("start_time"), col("short")]);
 
         Ok(signal_lf)
     }
@@ -148,25 +94,35 @@ impl Signal for MultipleStochasticWithThresholdCloseShortSignal {
     fn set_signal_column(&self, lf: &LazyFrame) -> Result<LazyFrame, Error> {
         let mut signal_lf = lf.clone();
 
-        let signal_category = self.signal_category();
-        let column = signal_category.get_column();
+        let closing_window = self.windows[self.close_window_index];
+        let suffix = format!("{}_{}", self.anchor_symbol, closing_window);
 
-        let suffix = format!("{}_{}", self.anchor_symbol, 5);
-        let stochastic_k_col = &format!("K%_{}", suffix);
-        let stochastic_d_col = &format!("D%_{}", suffix);
+        let close_k_col = &format!("K%_{}", suffix);
+        let close_d_col = &format!("D%_{}", suffix);
 
-        signal_lf = signal_lf.with_column(
-            when(
-                col(stochastic_k_col)
-                    .lt(25)
-                    .and(col(stochastic_k_col).lt_eq(col(stochastic_d_col)))
-                    .and(col(stochastic_k_col).gt(col(stochastic_k_col).shift(1))),
+        signal_lf = signal_lf
+            .with_column(
+                when(
+                    col(&close_k_col).lt(lit(20)).and(
+                        col(close_k_col)
+                            .gt(col(close_d_col))
+                            .and(col(close_k_col).shift(1).lt(col(close_d_col).shift(1))),
+                    ),
+                )
+                .then(1)
+                .otherwise(0)
+                .alias("short_close"),
             )
-            .then(1)
-            .otherwise(0)
-            .alias(column),
-        );
-        signal_lf = signal_lf.select([col("start_time"), col(column)]);
+            .select([col("start_time"), col("short_close")]);
+
+        // col(&short_close_k_col)
+        //             .gt(lit(self.lower_threshold)) // lit(self.lower_threshold) ? col("short_threshold") TODO: REVIEW this
+        //             .and(col(&short_close_k_col).gt(col(&short_close_d_col)))
+        //             .and(
+        //                 col(&short_close_k_col)
+        //                     .shift(1)
+        //                     .lt(col(&short_close_d_col).shift(1)),
+        //             ),
 
         Ok(signal_lf)
     }
@@ -194,6 +150,82 @@ impl Signal for MultipleStochasticWithThresholdCloseShortSignal {
         })
     }
 }
+
+#[derive(Clone)]
+pub struct MultipleStochasticWithThresholdLongSignal {
+    pub windows: Vec<u32>,
+    pub anchor_symbol: String,
+}
+
+impl Signal for MultipleStochasticWithThresholdLongSignal {
+    fn signal_category(&self) -> SignalCategory {
+        SignalCategory::GoLong
+    }
+
+    fn set_signal_column(&self, lf: &LazyFrame) -> Result<LazyFrame, Error> {
+        let mut signal_lf = lf.clone();
+        let mut col_exprs: Vec<Expr> = vec![];
+        let mut iter = self.windows.iter().enumerate();
+        let select_columns = vec![col("start_time"), col("long")];
+        let long_threshold_col = "long_threshold";
+
+        while let Some((index, window)) = iter.next() {
+            let suffix = format!("{}_{}", self.anchor_symbol, window);
+
+            let stochastic_k_col = format!("K%_{}", suffix);
+            let stochastic_d_col = format!("D%_{}", suffix);
+            let windowed_threshold_col = format!("long_{}", index);
+
+            signal_lf = signal_lf.with_column(
+                when(
+                    col(&stochastic_k_col)
+                        .lt(lit(20))
+                        .and(col(&stochastic_d_col).lt(lit(20)))
+                        .and(col(&stochastic_d_col).lt(col(&stochastic_k_col))),
+                )
+                .then(1)
+                .otherwise(0)
+                .alias(&windowed_threshold_col),
+            );
+
+            col_exprs.push(col(&windowed_threshold_col).eq(lit(1)));
+        }
+
+        let and_cols_expr: Expr = col_exprs
+            .iter()
+            .fold(None, |prev: Option<Expr>, curr: &Expr| {
+                if let Some(e) = prev {
+                    return Some(e.and(curr.clone()));
+                }
+                Some(curr.clone())
+            })
+            .unwrap();
+        signal_lf = signal_lf.with_column(when(and_cols_expr).then(1).otherwise(0).alias("long"));
+        signal_lf = signal_lf.select(select_columns);
+
+        Ok(signal_lf)
+    }
+
+    fn update_signal_column(&self, data: &DataFrame) -> Result<DataFrame, Error> {
+        let mut new_lf = data.clone().lazy();
+        new_lf = self.set_signal_column(&new_lf)?;
+        let new_df = new_lf.collect()?;
+        let mut result_df = data.clone();
+        let signal = self.signal_category();
+        let column = signal.get_column();
+        let series = new_df.column(column)?;
+        let _ = result_df.replace(&column, series.to_owned());
+
+        Ok(result_df)
+    }
+
+    fn clone_box(&self) -> Box<dyn Signal + Send + Sync> {
+        Box::new(Self {
+            windows: self.windows.clone(),
+            anchor_symbol: self.anchor_symbol.clone(),
+        })
+    }
+}
 #[derive(Clone)]
 pub struct MultipleStochasticWithThresholdCloseLongSignal {
     pub windows: Vec<u32>,
@@ -210,40 +242,35 @@ impl Signal for MultipleStochasticWithThresholdCloseLongSignal {
     fn set_signal_column(&self, lf: &LazyFrame) -> Result<LazyFrame, Error> {
         let mut signal_lf = lf.clone();
 
-        let signal_category = self.signal_category();
-        let column = signal_category.get_column();
+        let closing_window = self.windows[self.close_window_index];
+        let suffix = format!("{}_{}", self.anchor_symbol, closing_window);
 
-        let suffix = format!("{}_{}", self.anchor_symbol, 5);
-        let stochastic_k_col = &format!("K%_{}", suffix);
-        let stochastic_d_col = &format!("D%_{}", suffix);
+        let close_k_col = &format!("K%_{}", suffix);
+        let close_d_col = &format!("D%_{}", suffix);
 
         signal_lf = signal_lf
-            .with_columns([
-                col(stochastic_k_col).gt(75).alias("close_long_1"),
-                // col(stochastic_k_col)
-                //     .gt_eq(col(stochastic_d_col))
-                //     .alias("close_long_2"),
-                col(stochastic_k_col)
-                    .lt(col(stochastic_k_col).shift(1))
-                    .alias("close_long_3"),
-            ])
             .with_column(
                 when(
-                    col("close_long_1")
-                        // .and(col("close_long_2"))
-                        .and(col("close_long_3")),
+                    col(&close_k_col).gt(lit(80)).and(
+                        col(close_k_col)
+                            .lt(col(close_d_col))
+                            .and(col(close_k_col).shift(1).gt(col(close_d_col).shift(1))),
+                    ),
                 )
                 .then(1)
                 .otherwise(0)
-                .alias(column),
-            );
-        signal_lf = signal_lf.select([
-            col("start_time"),
-            col("close_long_1"),
-            // col("close_long_2"),
-            col("close_long_3"),
-            col(column),
-        ]);
+                .alias("long_close"),
+            )
+            .select([col("start_time"), col("long_close")]);
+
+        // col(&long_close_k_col)
+        // .lt(lit(self.upper_threshold)) // lit(self.upper_threshold) ? col("long_threshold")
+        // .and(col(&long_close_k_col).lt(col(&long_close_d_col)))
+        // .and(
+        //     col(&long_close_k_col)
+        //         .shift(1)
+        //         .gt(col(&long_close_d_col).shift(1)),
+        // ),
 
         Ok(signal_lf)
     }

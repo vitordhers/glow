@@ -37,7 +37,7 @@ pub fn current_timestamp_ms() -> u128 {
         .as_millis()
 }
 
-/// Gets Open, High, Low and Close labels for symbol.
+/// Gets the minute start timestamp for the input timestamp
 ///
 /// # Arguments
 /// * `use_milliseconds`- will receive / return the timestamp in milliseconds
@@ -74,7 +74,7 @@ pub fn timestamp_minute_start(use_milliseconds: bool, timestamp: Option<i64>) ->
     timestamp
 }
 
-/// Gets Open, High, Low and Close labels for symbol.
+/// Gets the minute end timestamp for the input timestamp
 ///
 /// # Arguments
 /// * `use_milliseconds`- will receive / return the timestamp in milliseconds
@@ -88,6 +88,11 @@ pub fn timestamp_minute_end(use_milliseconds: bool, timestamp: Option<i64>) -> i
         timestamp += 59
     }
     timestamp
+}
+
+fn current_minute_start() {
+    let current_timestamp = current_timestamp_ms();
+    
 }
 
 /// Gets Open, High, Low and Close labels for symbol.
@@ -123,6 +128,7 @@ pub fn get_symbol_close_col(symbol: &String) -> String {
     format!("{}_close", symbol)
 }
 
+/// returns open, high, low and close windowed columns names
 pub fn get_symbol_window_ohlc_cols(
     symbol: &String,
     window: &String,
@@ -138,7 +144,12 @@ pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
     lfs: L,
     filter_datetime: NaiveDateTime,
 ) -> Result<LazyFrame, Error> {
-    let result_lf = concat(lfs, true, true)?;
+    let args = UnionArgs {
+        parallel: true,
+        rechunk: true,
+        to_supertypes: false,
+    };
+    let result_lf = concat(lfs, args)?;
 
     let result_lf = result_lf.filter(
         col("start_time")
@@ -177,7 +188,9 @@ pub fn consolidate_complete_tick_data_into_lf(
     }
 
     let date_col = "start_time";
-    columns.push(Series::new(date_col, &datetimes_vec));
+    let mut series = Series::new(date_col, &datetimes_vec);
+    series.set_sorted_flag(polars::series::IsSorted::Ascending);
+    columns.push(series);
     let unique_symbols: HashSet<String> = symbols.iter().cloned().collect();
     // let unique_symbols: Vec<String> = unique_symbols.iter().cloned().collect();
     let mut opens_map = HashMap::new();
@@ -284,7 +297,9 @@ pub fn map_tick_data_to_df(
     }
 
     let start_time_col = "start_time";
-    columns.push(Series::new(start_time_col, &datetimes_vec));
+    let mut series = Series::new(start_time_col, &datetimes_vec);
+    series.set_sorted_flag(polars::series::IsSorted::Ascending);
+    columns.push(series);
 
     let unique_symbols: HashSet<String> = symbols.iter().cloned().collect();
     // let unique_symbols: Vec<String> = unique_symbols.iter().cloned().collect();
@@ -373,7 +388,7 @@ pub fn map_tick_data_to_df(
         symbols,
         bar_length,
         non_sampled_data_lf,
-        ClosedWindow::Right,
+        ClosedWindow::Left,
         Some(non_tick_data_cols_ordered),
     )?;
 
@@ -414,7 +429,7 @@ pub fn resample_tick_data_to_length(
 
     let resampled_data = data_lf
         .clone()
-        .groupby_dynamic(
+        .group_by_dynamic(
             col("start_time"),
             vec![],
             DynamicGroupOptions {
@@ -426,6 +441,7 @@ pub fn resample_tick_data_to_length(
                 truncate: true,
                 include_boundaries: false,
                 closed_window,
+                check_sorted: false,
             },
         )
         .agg(agg_expressions);

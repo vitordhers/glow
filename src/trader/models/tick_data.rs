@@ -15,12 +15,12 @@ pub struct TickData {
 pub struct LogKlines(pub Vec<TickData>);
 
 impl fmt::Display for LogKlines {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut binding = self.0.clone();
         binding.sort_by(|a, b| a.symbol.cmp(&b.symbol));
 
         let stdout = io::stdout();
-        let mut handle = stdout.lock();        
+        let mut handle = stdout.lock();
 
         for (index, item) in binding.iter().enumerate() {
             if index > 0 {
