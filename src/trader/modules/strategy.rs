@@ -95,11 +95,12 @@ impl Strategy {
         // filter only last day positions
         // initial last bar - 1 day
         let last_day_datetime = initial_last_bar - ChronoDuration::milliseconds(DAY_IN_MS);
-        let initial_strategy_data_lf = initial_trading_data_lf
+        let benchmark_filtered_data = initial_trading_data_lf
             .clone()
             .filter(col("start_time").gt_eq(lit(last_day_datetime.timestamp_millis())));
 
-        let benchmark_trading_data = self.compute_benchmark_positions(&initial_strategy_data_lf)?;
+        let benchmark_trading_data = self.compute_benchmark_positions(&benchmark_filtered_data)?;
+
         initial_trading_data_lf =
             initial_trading_data_lf.left_join(benchmark_trading_data, "start_time", "start_time");
 
@@ -189,7 +190,7 @@ impl Strategy {
         let exchange_fee_rate = exchange_ref.get_maker_fee();
         let traded_contract = exchange_ref.get_traded_contract();
 
-        let (_, high_col, low_col, price_col) = get_symbol_ohlc_cols(&traded_contract.symbol);
+        let (price_col, high_col, low_col, _) = get_symbol_ohlc_cols(&traded_contract.symbol);
         let additional_cols = vec![price_col.clone(), high_col.clone(), low_col.clone()];
 
         let additional_filtered_df = df.select(&additional_cols)?;
@@ -1022,9 +1023,10 @@ impl LeveragedOrder {
             if let Some(trailing_stop_loss) = trailing_stop_loss_opt {
                 match trailing_stop_loss {
                     PriceLevel::TrailingStopLoss(tsl) => match tsl {
-                        TrailingStopLoss::Percent(percentage, start) => {
-                            if start < &current_peak_returns {
+                        TrailingStopLoss::Percent(percentage, start_percentage) => {
+                            if start_percentage < &current_peak_returns {
                                 let acceptable_returns = percentage * current_peak_returns;
+                                let acceptable_returns = acceptable_returns.max(*start_percentage);
 
                                 if returns <= acceptable_returns {
                                     return self.close_order(
@@ -1035,10 +1037,15 @@ impl LeveragedOrder {
                                 }
                             }
                         }
-                        TrailingStopLoss::Stepped(percentage, start) => {
-                            if start < &current_peak_returns {
+                        TrailingStopLoss::Stepped(percentage, start_percentage) => {
+                            if start_percentage < &current_peak_returns {
                                 let acceptable_returns =
                                     closest_multiple_below(*percentage, current_peak_returns);
+                                let acceptable_returns = acceptable_returns.max(*start_percentage);
+                                // println!(
+                                //     "@@@ start_percentage {} current returns {}, acceptable_returns {}",
+                                //     start_percentage, returns, acceptable_returns
+                                // );
                                 if returns <= acceptable_returns {
                                     return self.close_order(
                                         current_price,
@@ -1059,6 +1066,7 @@ impl LeveragedOrder {
 }
 
 fn closest_multiple_below(of: f64, to: f64) -> f64 {
+    // println!("@@@@ closest_multiple_below of {}, to {} ", of, to);
     let quotient = to / of;
     let floored = quotient.floor();
     floored * of

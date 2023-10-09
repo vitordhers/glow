@@ -23,8 +23,9 @@ use trader::{
     exchanges::bybit::BybitExchange,
     functions::current_datetime,
     indicators::{
-        ExponentialMovingAverageIndicator, IndicatorWrapper, StochasticIndicator,
-        StochasticThresholdIndicator,
+        ema_trend::ExponentialMovingAverageTrendIndicator, stc::STCIndicator,
+        stochastic::StochasticIndicator, stochastic_threshold::StochasticThresholdIndicator,
+        tsi::TSIIndicator, IndicatorWrapper,
     },
     models::{
         behavior_subject::BehaviorSubject, execution::Execution, trade::Trade,
@@ -32,9 +33,10 @@ use trader::{
     },
     modules::{data_feed::DataFeed, performance::Performance, strategy::Strategy, trader::Trader},
     signals::{
-        MultipleStochasticWithThresholdCloseLongSignal,
-        MultipleStochasticWithThresholdCloseShortSignal, MultipleStochasticWithThresholdLongSignal,
-        MultipleStochasticWithThresholdShortSignal, SignalWrapper,
+        tsi_stc::{
+            TSISTCCloseLongSignal, TSISTCCloseShortSignal, TSISTCLongSignal, TSISTCShortSignal,
+        },
+        SignalWrapper,
     },
     traits::exchange::Exchange,
 };
@@ -49,8 +51,7 @@ use crate::trader::{enums::modifiers::price_level::TrailingStopLoss, models::con
 async fn main() {
     env_logger::init();
     dotenv().ok();
-    let anchor_symbol = String::from("BTCUSDT");
-    let trend_col = String::from("bullish_market");
+    // let trend_col = String::from("bullish_market");
     use std::env::{self};
     let max_rows = "40".to_string();
     env::set_var("POLARS_FMT_MAX_ROWS", max_rows);
@@ -59,7 +60,7 @@ async fn main() {
     let windows = vec![5]; // 5, 15, 30 // 5, 9, 12
     let upper_threshold = 70;
     let lower_threshold = 30;
-    let close_window_index = 2;
+    let close_window_index = 0;
 
     let btcusdt_contract: Contract = Contract::new(
         String::from("BTCUSDT"),
@@ -125,7 +126,7 @@ async fn main() {
 
     let start_datetime = current_datetime();
 
-    let start_date = NaiveDate::from_ymd_opt(2023, 9, 22).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2023, 9, 28).unwrap();
     let start_time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
 
     let start_datetime = NaiveDateTime::new(start_date, start_time);
@@ -133,14 +134,35 @@ async fn main() {
     let seconds_to_next_full_minute = 60 - start_datetime.timestamp() % 60;
     let trading_initial_datetime = start_datetime + Duration::seconds(seconds_to_next_full_minute);
 
-    let stochastic_indicator = StochasticIndicator {
-        name: "StochasticIndicator".into(),
-        windows: windows.clone(),
+    // let stochastic_indicator = StochasticIndicator {
+    //     name: "StochasticIndicator".into(),
+    //     windows: windows.clone(),
+    //     anchor_symbol: anchor_symbol.clone(),
+    //     starting_datetime: trading_initial_datetime,
+    //     k_window: 14,
+    //     k_smooth: 4,
+    //     d_smooth: 5,
+    // };
+
+    let anchor_symbol = String::from("BTCUSDT");
+    let traded_symbol = String::from("AGIXUSDT");
+
+    let stc_indicator = STCIndicator {
+        name: "STC indicator".to_string(),
         anchor_symbol: anchor_symbol.clone(),
-        starting_datetime: trading_initial_datetime,
-        k_window: 14,
-        k_smooth: 4,
-        d_smooth: 4,
+        windows: windows.clone(),
+        length: 12,
+        short_span: 24,
+        long_span: 50,
+        weight: 0.5,
+    };
+
+    let tsi_indicator = TSIIndicator {
+        name: "True Strength Index Indicator".to_string(),
+        anchor_symbol: anchor_symbol.clone(),
+        windows: windows.clone(),
+        long_span: 14,
+        short_span: 1,
     };
 
     // let stochastic_threshold_indicator = StochasticThresholdIndicator {
@@ -150,65 +172,62 @@ async fn main() {
     //     trend_col: trend_col.clone(),
     // };
 
-    let ewm_preindicator = ExponentialMovingAverageIndicator {
-        name: "ExponentialMovingAverageIndicator".into(),
-        anchor_symbol: anchor_symbol.clone(),
-        long_span: 50,
-        short_span: 21,
-        trend_col: trend_col.clone(),
-    };
+    // let ewm_preindicator = ExponentialMovingAverageTrendIndicator {
+    //     name: "ExponentialMovingAverageTrendIndicator".into(),
+    //     anchor_symbol: anchor_symbol.clone(),
+    //     long_span: 50,
+    //     short_span: 21,
+    //     trend_col: trend_col.clone(),
+    // };
 
     let pre_indicators: Vec<IndicatorWrapper> = vec![
-    ewm_preindicator.into()
+    // ewm_preindicator.into()
     ];
 
     let indicators: Vec<IndicatorWrapper> = vec![
-        stochastic_indicator.into(),
-        // stochastic_threshold_indicator.into(),
+        stc_indicator.into(),
+        tsi_indicator.into(), // stochastic_threshold_indicator.into(),
+                              // stochastic_indicator.into(),
     ];
 
-    let multiple_stochastic_with_threshold_short_signal =
-        MultipleStochasticWithThresholdShortSignal {
-            windows: windows.clone(),
-            anchor_symbol: anchor_symbol.clone(),
-        };
+    let signals_period = 1;
 
-    let multiple_stochastic_with_threshold_long_signal =
-        MultipleStochasticWithThresholdLongSignal {
-            windows: windows.clone(),
-            anchor_symbol: anchor_symbol.clone(),
-        };
+    let short_signal = TSISTCShortSignal {
+        windows: windows.clone(),
+        anchor_symbol: anchor_symbol.clone(),
+        period: signals_period,
+    };
 
-    let multiple_stochastic_with_threshold_close_short_signal =
-        MultipleStochasticWithThresholdCloseShortSignal {
-            anchor_symbol: anchor_symbol.clone(),
-            windows: windows.clone(),
-            upper_threshold,
-            lower_threshold,
-            close_window_index,
-        };
+    let long_signal = TSISTCLongSignal {
+        windows: windows.clone(),
+        anchor_symbol: anchor_symbol.clone(),
+        period: signals_period,
+    };
 
-    let multiple_stochastic_with_threshold_close_long_signal =
-        MultipleStochasticWithThresholdCloseLongSignal {
-            anchor_symbol: anchor_symbol.clone(),
-            windows: windows.clone(),
-            upper_threshold,
-            lower_threshold,
-            close_window_index,
-        };
+    let close_short_signal = TSISTCCloseShortSignal {
+        windows: windows.clone(),
+        anchor_symbol: anchor_symbol.clone(),
+        period: signals_period,
+    };
+
+    let close_long_signal = TSISTCCloseLongSignal {
+        windows: windows.clone(),
+        anchor_symbol: anchor_symbol.clone(),
+        period: signals_period,
+    };
 
     let signals: Vec<SignalWrapper> = vec![
-        multiple_stochastic_with_threshold_short_signal.into(),
-        multiple_stochastic_with_threshold_long_signal.into(),
-        multiple_stochastic_with_threshold_close_short_signal.into(),
-        multiple_stochastic_with_threshold_close_long_signal.into(),
+        short_signal.into(),
+        long_signal.into(),
+        close_short_signal.into(),
+        close_long_signal.into(),
     ];
 
     let bybit_exchange = BybitExchange::new(
         "Bybit".to_string(),
         contracts,
-        "BTCUSDT".to_string(),
-        "BTCUSDT".to_string(),
+        anchor_symbol.clone(),
+        traded_symbol.clone(),
         0.0002,
         0.00055,
     );
@@ -231,21 +250,21 @@ async fn main() {
 
     let signal_listener = BehaviorSubject::new(None);
     let trading_data_listener = BehaviorSubject::new(DataFrame::default());
-    
+
     let initial_leverage = Leverage::Isolated(20);
 
     let position_lock_modifier = PositionLock::Nil;
 
     let mut price_level_modifiers = HashMap::new();
-    let stop_loss: PriceLevel = PriceLevel::StopLoss(0.15);
-    let take_profit = PriceLevel::TakeProfit(0.40);
+    let stop_loss: PriceLevel = PriceLevel::StopLoss(0.4);
+    let take_profit = PriceLevel::TakeProfit(1.0);
 
     let trailing_stop_loss = TrailingStopLoss::Percent(0.5, 0.1);
     let trailing_modifier = PriceLevel::TrailingStopLoss(trailing_stop_loss);
 
     price_level_modifiers.insert(stop_loss.get_hash_key(), stop_loss);
     price_level_modifiers.insert(take_profit.get_hash_key(), take_profit);
-    price_level_modifiers.insert("tsl".to_string(), trailing_modifier);
+    // price_level_modifiers.insert("tsl".to_string(), trailing_modifier);
 
     let trading_settings_arc = Arc::new(Mutex::new(TradingSettings::new(
         OrderType::Market,

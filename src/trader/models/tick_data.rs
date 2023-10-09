@@ -41,7 +41,7 @@ impl fmt::Display for LogKlines {
         }
 
         // Move the cursor up two lines and clear each line
-        write!(handle, "\x1B[F\x1B[K\x1B[F\x1B[K").unwrap();
+        // write!(handle, "\x1B[F\x1B[K\x1B[F\x1B[K").unwrap();
 
         // handle.flush().unwrap(); // Flush stdout to remove both lines
 

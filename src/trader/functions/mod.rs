@@ -92,7 +92,6 @@ pub fn timestamp_minute_end(use_milliseconds: bool, timestamp: Option<i64>) -> i
 
 fn current_minute_start() {
     let current_timestamp = current_timestamp_ms();
-    
 }
 
 /// Gets Open, High, Low and Close labels for symbol.
@@ -514,16 +513,39 @@ pub fn parse_http_kline_into_tick_data(
 }
 
 pub fn timestamp_end_to_daily_timestamp_sec_intervals(
+    initial_fetch_offset: i64,
     timestamp_end: i64, //secs
+    days_for_analysis: i64,
     limit: i64,
     granularity: i64, // mins
 ) -> Vec<i64> {
-    let timestamp_start = timestamp_end - (MINUTES_IN_DAY * SECONDS_IN_MIN);
-    let step = limit * SECONDS_IN_MIN / granularity;
+    let mut timestamp_start = timestamp_end - (days_for_analysis * MINUTES_IN_DAY * SECONDS_IN_MIN);
+    timestamp_start -= initial_fetch_offset * SECONDS_IN_MIN / granularity;
 
-    (timestamp_start..=timestamp_end)
-        .step_by(step as usize)
-        .collect()
+    let timestamp_step = limit * SECONDS_IN_MIN / granularity;
+
+    stepped_range_inclusive(timestamp_start, timestamp_end, timestamp_step)
+}
+
+fn stepped_range_inclusive(start: i64, end: i64, step: i64) -> Vec<i64> {
+    let mut next_val = start;
+    let last_step = end - (end - start) % step; // Finds the starting point of the last step
+
+    let mut result = Vec::new();
+
+    while next_val <= end {
+        result.push(next_val);
+
+        // If the current value is the start of the last step and is not the end,
+        // then the next value should be the end value.
+        if next_val == last_step && next_val != end {
+            next_val = end;
+        } else {
+            next_val += step;
+        }
+    }
+
+    result
 }
 
 pub fn round_down_nth_decimal(num: f64, n: i32) -> f64 {

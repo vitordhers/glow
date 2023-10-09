@@ -26,7 +26,7 @@ use crate::trader::models::trade::Trade;
 
 use crate::trader::signals::SignalWrapper;
 use crate::trader::traits::exchange::Exchange;
-use crate::trader::traits::indicator::Indicator;
+use crate::trader::traits::indicator::{self, Indicator};
 use crate::trader::traits::signal::Signal;
 use chrono::{Duration as ChronoDuration, NaiveDateTime, Timelike, Utc};
 use futures_util::SinkExt;
@@ -114,8 +114,6 @@ impl DataFeed {
             }
         }
 
-        let initial_fetch_offset = indicators_offset.into_iter().max().unwrap_or_default();
-
         for signal in signals {
             let field = Field::new(signal.signal_category().get_column(), DataType::Int32);
             schema_fields.push(field);
@@ -152,6 +150,8 @@ impl DataFeed {
             "{} | 💹 Initializing DataFeed -> trades might be open after {:?}",
             initial_datetime, last_bar
         );
+
+        let initial_fetch_offset = indicators_offset.into_iter().max().unwrap_or_default();
 
         DataFeed {
             bar_length,
@@ -246,27 +246,40 @@ impl DataFeed {
     }
 
     async fn fetch_historical_data(&self) -> Result<LazyFrame, Error> {
-        let limit: i64 = 720; // TODO: limit hardcoded
+        let limit: i64 = 1000; // TODO: limit hardcoded
+
+        let granularity = 1;
 
         let timestamp_end = self.last_bar.timestamp();
-        let timestamp_intervals =
-            timestamp_end_to_daily_timestamp_sec_intervals(timestamp_end, limit, 1); // TODO: granularity hardcoded
+        let timestamp_intervals = timestamp_end_to_daily_timestamp_sec_intervals(
+            self.initial_fetch_offset as i64,
+            timestamp_end,
+            1,
+            limit,
+            granularity,
+        ); // TODO: granularity hardcoded
         let mut tick_data = vec![];
         let symbols = self.get_current_symbols();
 
         for (i, value) in timestamp_intervals.iter().enumerate() {
             let start: i64;
-            let current_limit: i64;
             if i == 0 {
-                // if first iteration, grab time offset by initial_fetch_offset
-                start = (value - self.initial_fetch_offset as i64 * SECONDS_IN_MIN) * 1000;
-                current_limit = self.initial_fetch_offset as i64;
-            } else {
-                current_limit = limit;
-                start = &timestamp_intervals[i - 1] * 1000;
+                continue;
             }
+            start = &timestamp_intervals[i - 1] * 1000;
 
-            let mut end = (&timestamp_intervals[i] * 1000) - 1;
+            let mut end = &timestamp_intervals[i] * 1000;
+
+            let current_limit = granularity * (((end - start) / 1000) / SECONDS_IN_MIN);
+
+            // println!(
+            //     "@@@@@ START {:?}, END {:?}, current_limit {}",
+            //     NaiveDateTime::from_timestamp_millis(start),
+            //     NaiveDateTime::from_timestamp_millis(end),
+            //     current_limit
+            // );
+
+            end -= 1;
 
             if value == timestamp_intervals.last().unwrap() {
                 end -= self.bar_length.as_secs() as i64 * 1000;
