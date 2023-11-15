@@ -7,4 +7,8 @@ pub enum OrderStatus {
     PartiallyClosed,
     Closed,
     Cancelled,
+    StoppedBR, // stop bankruptcy
+    StoppedSL, // stop loss
+    StoppedTP, // taking profit
+    StoppedTSL // trailing stop loss
 }

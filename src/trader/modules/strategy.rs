@@ -1,17 +1,15 @@
 use crate::shared::csv::save_csv;
 use crate::trader::constants::DAY_IN_MS;
-use crate::trader::enums::modifiers::position_lock::PositionLock;
-use crate::trader::enums::modifiers::price_level::TrailingStopLoss;
 use crate::trader::enums::order_status::OrderStatus;
+use crate::trader::enums::side::Side;
 use crate::trader::indicators::IndicatorWrapper;
-use crate::trader::models::contract::Contract;
 use crate::trader::signals::SignalWrapper;
 use crate::trader::{
     enums::{
         balance::Balance, modifiers::price_level::PriceLevel, signal_category::SignalCategory,
     },
     errors::Error,
-    functions::{calculate_remainder, get_symbol_ohlc_cols},
+    functions::get_symbol_ohlc_cols,
     models::{behavior_subject::BehaviorSubject, trade::Trade, trading_settings::TradingSettings},
     traits::{exchange::Exchange, indicator::Indicator, signal::Signal},
 };
@@ -109,7 +107,9 @@ impl Strategy {
 
     pub fn set_strategy_data(&self, tick_data: LazyFrame) -> Result<LazyFrame, Error> {
         let mut lf = self.set_pre_indicators_data(&tick_data)?;
+        lf = lf.cache();
         lf = self.set_indicators_data(&lf)?;
+        lf = lf.cache();
         lf = self.set_signals_data(&lf)?;
         Ok(lf)
     }
@@ -160,19 +160,34 @@ impl Strategy {
         for signal in self.signals.clone().into_iter() {
             signals_cols.insert(String::from(signal.signal_category().get_column()));
         }
-        let contains_short =
-            signals_cols.contains(&SignalCategory::GoShort.get_column().to_string());
-        let contains_long = signals_cols.contains(&SignalCategory::GoLong.get_column().to_string());
-        let contains_short_close =
-            signals_cols.contains(&SignalCategory::CloseShort.get_column().to_string());
-        let contains_long_close =
-            signals_cols.contains(&SignalCategory::CloseLong.get_column().to_string());
+        let contains_short = signals_cols.contains(SignalCategory::GoShort.get_column());
+        let contains_long = signals_cols.contains(SignalCategory::GoLong.get_column());
+        let contains_short_close = signals_cols.contains(SignalCategory::CloseShort.get_column());
+        let contains_long_close = signals_cols.contains(SignalCategory::CloseLong.get_column());
         let contains_position_close =
-            signals_cols.contains(&SignalCategory::ClosePosition.get_column().to_string());
+            signals_cols.contains(SignalCategory::ClosePosition.get_column());
+
+        let contains_position_revert =
+            signals_cols.contains(SignalCategory::RevertPosition.get_column());
+
+        let start_timestamps_vec = df
+            .column("start_time")
+            .unwrap()
+            .datetime()
+            .unwrap()
+            .into_no_null_iter()
+            .collect::<Vec<i64>>();
+
+        let end_timestamps_vec = start_timestamps_vec
+            .clone()
+            .into_iter()
+            .map(|start_timestamp| start_timestamp - 1)
+            .collect::<Vec<i64>>();
 
         let signals_filtered_df = df.select(&signals_cols)?;
 
         let mut signals_cols_map: HashMap<String, Vec<i32>> = HashMap::new();
+
         signals_cols.into_iter().for_each(|col| {
             signals_cols_map.insert(
                 col.clone(),
@@ -187,11 +202,17 @@ impl Strategy {
         });
 
         let exchange_ref = self.exchange_listener.ref_value();
-        let exchange_fee_rate = exchange_ref.get_maker_fee();
         let traded_contract = exchange_ref.get_traded_contract();
 
-        let (price_col, high_col, low_col, _) = get_symbol_ohlc_cols(&traded_contract.symbol);
-        let additional_cols = vec![price_col.clone(), high_col.clone(), low_col.clone()];
+        let (open_col, high_col, low_col, close_col) =
+            get_symbol_ohlc_cols(&traded_contract.symbol);
+
+        let additional_cols = vec![
+            open_col.clone(),
+            high_col.clone(),
+            low_col.clone(),
+            close_col.clone(),
+        ];
 
         let additional_filtered_df = df.select(&additional_cols)?;
         let mut additional_cols_map = HashMap::new();
@@ -209,10 +230,6 @@ impl Strategy {
         });
 
         let start_time = Instant::now();
-        let mut current_trade: Option<Trade> = None;
-        let mut current_order: Option<LeveragedOrder> = None;
-
-        let mut current_peak_returns = 0.0;
 
         // fee = balance * leverage * price * fee_rate
         // marginal fee = price * fee_rate
@@ -238,14 +255,27 @@ impl Strategy {
 
         let price_level_modifier_map_binding = trading_settings.price_level_modifier_map.clone();
 
-        let stop_loss_opt: Option<&PriceLevel> = price_level_modifier_map_binding.get("sl");
-        let take_profit_opt = price_level_modifier_map_binding.get("tp");
+        let stop_loss: Option<&PriceLevel> = price_level_modifier_map_binding.get("sl");
+        // let stop_loss_percentage = if stop_loss.is_some() {
+        //     let stop_loss = stop_loss.unwrap();
+        //     Some(stop_loss.get_percentage())
+        // } else {
+        //     None
+        // };
+
+        let take_profit = price_level_modifier_map_binding.get("tp");
+        // let take_profit_percentage = if take_profit.is_some() {
+        //     let take_profit = take_profit.unwrap();
+        //     Some(take_profit.get_percentage())
+        // } else {
+        //     None
+        // };
 
         let trailing_stop_loss = price_level_modifier_map_binding.get("tsl");
 
         let dataframe_height = df.height();
 
-        let position_modifier = trading_settings.position_lock_modifier.clone();
+        // let position_modifier = trading_settings.position_lock_modifier.clone();
 
         // @@@ TODO: implement this
         // let signals_map = get_benchmark_index_signals(&df);
@@ -253,6 +283,60 @@ impl Strategy {
         // let mut signals_iter = signals_map.into_iter();
 
         // while let Some((index, signals)) = signals_iter.next() {}
+
+        let open_prices_col = additional_cols_map.get(&open_col).unwrap();
+        // let high_prices_col = additional_cols_map.get(&high_col).unwrap();
+        let close_prices_col = additional_cols_map.get(&close_col).unwrap();
+        // let low_prices_col = additional_cols_map.get(&low_col).unwrap();
+
+        let shorts_col = if contains_short {
+            signals_cols_map
+                .get(SignalCategory::GoShort.get_column())
+                .unwrap()
+                .clone()
+        } else {
+            vec![0; dataframe_height]
+        };
+
+        let longs_col = if contains_long {
+            signals_cols_map
+                .get(SignalCategory::GoLong.get_column())
+                .unwrap()
+                .clone()
+        } else {
+            vec![0; dataframe_height]
+        };
+
+        // let position_closes_col = if contains_position_close {
+        //     signals_cols_map
+        //         .get(SignalCategory::ClosePosition.get_column())
+        //         .unwrap()
+        //         .clone()
+        // } else {
+        //     vec![0; dataframe_height]
+        // };
+
+        let short_closes_col = if contains_short_close {
+            signals_cols_map
+                .get(SignalCategory::CloseShort.get_column())
+                .unwrap()
+                .clone()
+        } else {
+            vec![0; dataframe_height]
+        };
+
+        let long_closes_col = if contains_long_close {
+            signals_cols_map
+                .get(SignalCategory::CloseLong.get_column())
+                .unwrap()
+                .clone()
+        } else {
+            vec![0; dataframe_height]
+        };
+
+        let mut current_trade: Option<Trade> = None;
+        let mut current_peak_returns = 0.0;
+        // let mut current_position_signal = "";
 
         for index in 0..dataframe_height {
             if index == 0 {
@@ -273,146 +357,279 @@ impl Strategy {
             // position is neutral
             if current_position == 0 {
                 // and changed to short
-                if contains_short && signals_cols_map.get("short").unwrap()[index] == 1 {
-                    let current_price = additional_cols_map.get(&price_col).unwrap()[index];
-                    let order = take_position_by_balance(
-                        traded_contract,
-                        -1,
-                        current_price,
-                        current_balance,
-                        exchange_fee_rate,
-                        leverage_factor,
-                    );
+                if shorts_col[index - 1] == 1 {
+                    let start_timestamp = start_timestamps_vec[index];
+                    let end_timestamp = end_timestamps_vec[index];
+                    let open_price = open_prices_col[index];
+                    let close_price = close_prices_col[index];
 
-                    if order.position == -1 {
-                        trade_fees.push(order.open_fee);
-                        units.push(order.units);
-                        profit_and_loss.push(0.0);
-                        let (_, _, _, _, current_returns) =
-                            order.get_close_data(current_price).unwrap();
-                        returns.push(current_returns);
-                        balances.push(f64::max(
-                            0.0,
-                            current_balance - order.get_order_cost(None) + order.balance_remainder,
-                        ));
-                        positions.push(order.position);
-                        actions.push(SignalCategory::GoShort.get_column().to_string());
-                        current_order = Some(order);
-                        continue;
+                    match exchange_ref.create_benchmark_open_order(
+                        start_timestamp,
+                        Side::Sell,
+                        current_balance,
+                        open_price,
+                    ) {
+                        Ok(open_order) => {
+                            let open_trade: Trade = open_order.clone().into();
+                            trade_fees.push(open_trade.get_executed_fees());
+                            units.push(open_order.units);
+                            let (_, trade_returns) = open_trade
+                                .calculate_current_pnl_and_returns(end_timestamp, close_price);
+                            profit_and_loss.push(0.0);
+                            returns.push(trade_returns);
+                            let open_order_cost = open_order.get_order_cost();
+                            if open_order_cost.is_none() {
+                                panic!("open_order_cost is none {:?}", open_order);
+                            }
+                            let open_order_cost = open_order_cost.unwrap();
+
+                            balances.push(f64::max(0.0, current_balance - open_order_cost));
+
+                            positions.push(open_order.side.into());
+                            actions.push(SignalCategory::GoShort.get_column().to_string());
+                            current_trade = Some(open_trade);
+                            // current_position_signal = shorts_col[index - 1];
+                            continue;
+                        }
+                        Err(error) => {
+                            println!("create_new_benchmark_open_order error {:?}", error);
+                        }
                     }
                 }
                 // and changed to long
-                if contains_long && signals_cols_map.get("long").unwrap()[index] == 1 {
-                    let current_price = additional_cols_map.get(&price_col).unwrap()[index];
-                    let order = take_position_by_balance(
-                        traded_contract,
-                        1,
-                        current_price,
-                        current_balance,
-                        exchange_fee_rate,
-                        leverage_factor,
-                    );
+                if longs_col[index - 1] == 1 {
+                    let start_timestamp = start_timestamps_vec[index];
+                    let end_timestamp = end_timestamps_vec[index];
+                    let open_price = open_prices_col[index];
+                    let close_price = close_prices_col[index];
 
-                    if order.position == 1 {
-                        trade_fees.push(order.open_fee);
-                        units.push(order.units);
-                        profit_and_loss.push(0.0);
-                        let (_, _, _, _, current_returns) =
-                            order.get_close_data(current_price).unwrap();
-                        returns.push(current_returns);
-                        balances.push(f64::max(
-                            0.0,
-                            current_balance - order.get_order_cost(None) + order.balance_remainder,
-                        ));
-                        positions.push(order.position);
-                        actions.push(SignalCategory::GoLong.get_column().to_string());
-                        current_order = Some(order);
-                        continue;
+                    match exchange_ref.create_benchmark_open_order(
+                        start_timestamp,
+                        Side::Buy,
+                        current_balance,
+                        open_price,
+                    ) {
+                        Ok(open_order) => {
+                            let open_trade: Trade = open_order.clone().into();
+                            trade_fees.push(open_trade.get_executed_fees());
+                            units.push(open_order.units);
+                            let (_, trade_returns) = open_trade
+                                .calculate_current_pnl_and_returns(end_timestamp, close_price);
+                            profit_and_loss.push(0.0);
+                            returns.push(trade_returns);
+                            let open_order_cost = open_order.get_order_cost();
+                            if open_order_cost.is_none() {
+                                panic!("open_order_cost is none {:?}", open_order);
+                            }
+                            let open_order_cost = open_order_cost.unwrap();
+
+                            balances.push(f64::max(0.0, current_balance - open_order_cost));
+
+                            positions.push(open_order.side.into());
+                            actions.push(SignalCategory::GoLong.get_column().to_string());
+                            current_trade = Some(open_trade);
+                            // current_position_signal = longs_col[index - 1];
+                            continue;
+                        }
+                        Err(error) => {
+                            println!("create_new_benchmark_open_order error {:?}", error);
+                        }
                     }
                 }
+
                 returns.push(0.0);
-                // and kept neutral
             } else {
-                let mut order = current_order.clone().unwrap().clone();
-                let current_price = additional_cols_map.get(&price_col).unwrap()[index];
-                let (_, _, _, _, current_returns) = order.get_close_data(current_price).unwrap();
-                if current_returns > 0.0 && current_returns > current_peak_returns {
-                    current_peak_returns = current_returns;
-                }
-                returns.push(current_returns);
+                let trade = current_trade.clone().unwrap();
+                let current_side = trade.open_order.side;
+
+                // TRANSACTION modifiers (stop loss, take profit) should be checked for closing positions regardless of signals
+
                 if has_leverage
-                    || stop_loss_opt.is_some()
-                    || take_profit_opt.is_some()
+                    || stop_loss.is_some()
+                    || take_profit.is_some()
                     || trailing_stop_loss.is_some()
                 {
-                    let min_price = additional_cols_map.get(&low_col).unwrap()[index];
-                    let max_price = additional_cols_map.get(&high_col).unwrap()[index];
-                    match order.check_price_level_modifiers(
-                        min_price,
-                        max_price,
-                        current_price,
-                        stop_loss_opt,
-                        take_profit_opt,
+                    // let min_price = low_prices_col[index];
+                    // let max_price = high_prices_col[index];
+                    let prev_close_price = close_prices_col[index - 1];
+                    let prev_end_timestamp = end_timestamps_vec[index - 1];
+                    match trade.check_price_level_modifiers(
+                        &exchange_ref,
+                        prev_end_timestamp,
+                        prev_close_price,
+                        stop_loss,
+                        take_profit,
                         trailing_stop_loss,
                         current_peak_returns,
                     ) {
-                        Ok(order_result) => {
-                            trade_fees.push(order_result.close_fee);
-                            units.push(0.0);
-                            profit_and_loss.push(order_result.profit_and_loss);
-                            balances.push(current_balance + order_result.amount);
-                            positions.push(0);
-                            actions.push(order_result.signal.get_column().to_string());
-                            current_order = None;
-                            current_peak_returns = 0.0;
-                            continue;
+                        Ok(updated_trade) => {
+                            if updated_trade.is_some() {
+                                let closed_trade = updated_trade.unwrap();
+                                let close_order = closed_trade.clone().close_order.unwrap();
+
+                                trade_fees.push(close_order.get_executed_order_fee());
+                                units.push(0.0);
+
+                                let (pnl, trade_returns) = closed_trade.calculate_pnl_and_returns();
+                                returns.push(trade_returns);
+
+                                profit_and_loss.push(pnl);
+                                let order_cost = closed_trade.open_order.get_order_cost().unwrap();
+                                balances.push(current_balance + order_cost + pnl);
+                                positions.push(0);
+                                let action = match close_order.status {
+                                    OrderStatus::StoppedBR => SignalCategory::LeverageBankrupcty,
+                                    OrderStatus::StoppedSL => SignalCategory::StopLoss,
+                                    OrderStatus::StoppedTP => SignalCategory::TakeProfit,
+                                    OrderStatus::StoppedTSL => SignalCategory::TrailingStopLoss,
+                                    _ => SignalCategory::KeepPosition,
+                                };
+
+                                actions.push(action.get_column().to_string());
+                                current_peak_returns = 0.0;
+                                current_trade = None;
+                                // current_position_signal = "";
+                                continue;
+                            }
                         }
                         Err(_) => {}
                     }
                 }
-                // TRANSACTION modifiers (stop loss, take profit) should be checked for closing positions regardless of signals
-                // this is the place to implement it
 
-                // position is not closed
-                let is_position_close = contains_position_close
-                    && signals_cols_map.get("position_close").unwrap()[index] == 1;
-                let is_long_close = current_position == 1
-                    && contains_long_close
-                    && signals_cols_map.get("long_close").unwrap()[index] == 1;
-                let is_short_close = current_position == -1
-                    && contains_short_close
-                    && signals_cols_map.get("short_close").unwrap()[index] == 1;
-                if is_position_close || is_long_close || is_short_close {
-                    let current_price = additional_cols_map.get(&price_col).unwrap()[index];
+                // position wasn't stopped
+                // let was_position_closed =
+                //     position_closes_col[index - 1] == 1 && current_side != Side::Nil;
+                let was_long_closed = long_closes_col[index - 1] == 1 && current_side == Side::Buy;
+                let was_short_closed =
+                    short_closes_col[index - 1] == 1 && current_side == Side::Sell;
 
-                    let close_signal = if is_position_close {
-                        SignalCategory::ClosePosition
-                    } else if is_short_close {
-                        SignalCategory::CloseShort
-                    } else if is_long_close {
+                let was_position_reverted = trading_settings.sinals_revert_its_opposite && (longs_col[index - 1] == 1
+                    && current_side == Side::Sell)
+                    || (shorts_col[index - 1] == 1 && current_side == Side::Buy);
+
+                if
+                // was_position_closed ||
+                was_long_closed || was_short_closed || was_position_reverted {
+                    let close_signal = if was_position_reverted {
+                        SignalCategory::RevertPosition
+                    } else if was_long_closed {
                         SignalCategory::CloseLong
-                    } else {
+                    } else if was_short_closed {
+                        SignalCategory::CloseShort
+                    }
+                    // else if was_position_closed {
+                    //     SignalCategory::ClosePosition
+                    // }
+                    else {
                         SignalCategory::KeepPosition
                     };
 
-                    match order.close_order(current_price, position_modifier.clone(), close_signal)
-                    {
-                        Ok(order_result) => {
-                            trade_fees.push(order_result.close_fee);
-                            units.push(0.0);
-                            profit_and_loss.push(order_result.profit_and_loss);
-                            balances.push(current_balance + order_result.amount);
-                            positions.push(0);
-                            actions.push(order_result.signal.get_column().to_string());
-                            current_order = None;
-                            current_peak_returns = 0.0;
+                    let current_timestamp = start_timestamps_vec[index];
+                    let open_price = open_prices_col[index];
+
+                    match exchange_ref.create_benchmark_close_order(
+                        current_timestamp,
+                        &trade.id,
+                        open_price,
+                        trade.open_order.clone(),
+                        OrderStatus::Closed,
+                    ) {
+                        Ok(close_order) => {
+                            if close_signal != SignalCategory::RevertPosition {
+                                let updated_trade = trade.update_trade(close_order.clone())?;
+
+                                trade_fees.push(close_order.get_executed_order_fee());
+                                units.push(0.0);
+                                let (pnl, trade_returns) =
+                                    updated_trade.calculate_pnl_and_returns();
+                                profit_and_loss.push(pnl);
+                                returns.push(trade_returns);
+                                let order_cost = trade.open_order.get_order_cost().unwrap();
+
+                                balances.push(current_balance + order_cost + pnl);
+                                positions.push(0);
+                                actions.push(close_signal.get_column().to_string());
+                                current_trade = None;
+                                // current_position_signal = "";
+                                current_peak_returns = 0.0;
+                            } else {
+                                let end_timestamp = end_timestamps_vec[index];
+                                let close_price = close_prices_col[index];
+
+                                let updated_trade = trade.update_trade(close_order.clone())?;
+
+                                let mut total_fee = close_order.get_executed_order_fee();
+                                let (pnl, trade_returns) =
+                                    updated_trade.calculate_pnl_and_returns();
+                                profit_and_loss.push(pnl);
+                                returns.push(trade_returns);
+
+                                let order_cost = trade.open_order.get_order_cost().unwrap();
+                                let after_close_balance = current_balance + order_cost + pnl;
+
+                                match exchange_ref.create_benchmark_open_order(
+                                    end_timestamp,
+                                    close_order.side,
+                                    after_close_balance,
+                                    close_price,
+                                ) {
+                                    Ok(open_order) => {
+                                        let open_trade: Trade = open_order.clone().into();
+                                        total_fee += open_trade.get_executed_fees();
+
+                                        units.push(open_order.units);
+
+                                        let open_order_cost = open_order.get_order_cost();
+                                        if open_order_cost.is_none() {
+                                            panic!("open_order_cost is none {:?}", open_order);
+                                        }
+                                        let open_order_cost = open_order_cost.unwrap();
+
+                                        balances.push(f64::max(
+                                            0.0,
+                                            after_close_balance - open_order_cost,
+                                        ));
+
+                                        positions.push(open_order.side.into());
+                                        actions.push(close_signal.get_column().to_string());
+                                        current_trade = Some(open_trade);
+                                    }
+                                    Err(_) => {
+                                        units.push(0.0);
+                                        balances.push(after_close_balance);
+                                        positions.push(0);
+                                        actions.push(
+                                            SignalCategory::ClosePosition.get_column().to_string(),
+                                        );
+                                        current_trade = None;
+                                    }
+                                }
+
+                                trade_fees.push(total_fee);
+                                current_peak_returns = 0.0;
+                            }
+
                             continue;
                         }
-                        Err(e) => {
-                            println!("ORDER CLOSE WARNING: {:?}", e)
+                        Err(error) => {
+                            println!("create_benchmark_close_order WARNING: {:?}", error)
                         }
                     }
                 }
+
+                let curr_close_price = close_prices_col[index];
+                let curr_end_timestamp = end_timestamps_vec[index];
+
+                // TRANSACTION modifiers (stop loss, take profit) should be checked for closing positions regardless of signals
+
+                let (_, curr_returns) =
+                    trade.calculate_current_pnl_and_returns(curr_end_timestamp, curr_close_price);
+
+                if curr_returns > 0.0 && curr_returns > current_peak_returns {
+                    current_peak_returns = curr_returns;
+                }
+
+                returns.push(curr_returns);
             }
 
             trade_fees.push(0.0);
@@ -465,8 +682,6 @@ impl Strategy {
             elapsed_millis
         );
 
-        // println!("@@@@@ compute_benchmark_positions END {:?}", df);
-
         let trade_fee_series = Series::new("trade_fees", trade_fees);
         let units_series = Series::new("units", units);
         let profit_and_loss_series = Series::new("profit_and_loss", profit_and_loss);
@@ -482,6 +697,11 @@ impl Strategy {
         let df = df.with_column(balance_series)?;
         let df = df.with_column(position_series)?;
         let df = df.with_column(action_series)?;
+
+        // let path = "data/test".to_string();
+        // let file_name = "benchmark_data.csv".to_string();
+        // save_csv(path.clone(), file_name, &df, true)?;
+        // println!("@@@@@ compute_benchmark_positions {:?}", df);
 
         let result = df.clone().lazy().select([
             col("start_time"),
@@ -725,365 +945,358 @@ fn get_benchmark_index_signals(df: &DataFrame) -> HashMap<usize, Vec<SignalCateg
     signals_map
 }
 
-fn take_position_by_balance<'a>(
-    contract: &'a Contract,
-    position: i32,
-    price: f64,
-    balance: f64,
-    fee_rate: f64,
-    leverage_factor: f64,
-) -> LeveragedOrder {
-    LeveragedOrder::new(
-        contract,
-        position,
-        None,
-        Some(balance),
-        price,
-        leverage_factor,
-        fee_rate,
-    )
-}
+// fn take_position_by_balance<'a>(
+//     contract: &'a Contract,
+//     position: i32,
+//     price: f64,
+//     balance: f64,
+//     fee_rate: f64,
+//     leverage_factor: f64,
+// ) -> LeveragedOrder {
+//     LeveragedOrder::new(
+//         contract,
+//         position,
+//         None,
+//         Some(balance),
+//         price,
+//         leverage_factor,
+//         fee_rate,
+//     )
+// }
 
-#[derive(Clone, Debug)]
-pub struct LeveragedOrder {
-    contract: Contract,
-    status: OrderStatus,
-    pub position: i32,
-    pub units: f64, // non-levered
-    pub price: f64,
-    pub bankruptcy_price: f64,
-    pub leverage_factor: f64,
-    pub fee_rate: f64,
-    pub open_fee: f64,
-    pub close_fee: f64,
-    pub balance_remainder: f64,
-}
+// #[derive(Clone, Debug)]
+// pub struct LeveragedOrder {
+//     contract: Contract,
+//     status: OrderStatus,
+//     pub position: i32,
+//     pub units: f64, // non-levered
+//     pub price: f64,
+//     pub bankruptcy_price: f64,
+//     pub leverage_factor: f64,
+//     pub fee_rate: f64,
+//     pub open_fee: f64,
+//     pub close_fee: f64,
+//     pub balance_remainder: f64,
+// }
 
-impl LeveragedOrder {
-    pub fn new(
-        contract: &Contract,
-        position: i32,
-        units_opt: Option<f64>,
-        balance_opt: Option<f64>,
-        price: f64,
-        leverage_factor: f64,
-        fee_rate: f64,
-    ) -> Self {
-        let mut units = if let Some(_units) = units_opt {
-            _units
-        } else if let Some(_balance) = balance_opt {
-            // Order Cost = Initial Margin + Fee to Open Position + Fee to Close Position
-            // Initial Margin = (Order Price × Order Quantity) / Leverage
-            // Fee to Open Position = Order Quantity × Order Price × Taker Fee Rate
-            // Fee to Close Position = Order Quantity × Bankruptcy Price × Taker Fee Rate
-            // Order Cost × Leverage / [Order Price × (0.0012 × Leverage + 1.0006)]
+// impl LeveragedOrder {
+//     pub fn new(
+//         contract: &Contract,
+//         position: i32,
+//         units_opt: Option<f64>,
+//         balance_opt: Option<f64>,
+//         price: f64,
+//         leverage_factor: f64,
+//         fee_rate: f64,
+//     ) -> Self {
+//         let mut units = if let Some(_units) = units_opt {
+//             _units
+//         } else if let Some(_balance) = balance_opt {
+//             // Order Cost = Initial Margin + Fee to Open Position + Fee to Close Position
+//             // Initial Margin = (Order Price × Order Quantity) / Leverage
+//             // Fee to Open Position = Order Quantity × Order Price × Taker Fee Rate
+//             // Fee to Close Position = Order Quantity × Bankruptcy Price × Taker Fee Rate
+//             // Order Cost × Leverage / [Order Price × (0.0012 × Leverage + 1.0006)]
 
-            // _balance / ((price / leverage_factor) + (price * fee_rate) + (default_price * fee_rate))
-            let position_mod = if position == -1 {
-                fee_rate
-            } else if position == 1 {
-                -fee_rate
-            } else {
-                0.0
-            };
-            _balance * leverage_factor
-                / (price * (((2.0 * fee_rate) * leverage_factor) + (1.0 + position_mod)))
-        } else {
-            0.0
-        };
+//             // _balance / ((price / leverage_factor) + (price * fee_rate) + (default_price * fee_rate))
+//             let position_mod = if position == -1 {
+//                 fee_rate
+//             } else if position == 1 {
+//                 -fee_rate
+//             } else {
+//                 0.0
+//             };
+//             _balance * leverage_factor
+//                 / (price * (((2.0 * fee_rate) * leverage_factor) + (1.0 + position_mod)))
+//         } else {
+//             0.0
+//         };
 
-        let fract_units = calculate_remainder(units, contract.minimum_order_size);
+//         let fract_units = calculate_remainder(units, contract.minimum_order_size);
 
-        units -= fract_units;
+//         units -= fract_units;
 
-        if units == 0.0
-            || units < contract.minimum_order_size
-            || units > contract.maximum_order_size
-            || leverage_factor > contract.max_leverage
-        {
-            println!("Some contract constraints stopped the order from being placed");
-            if units == 0.0 {
-                println!("units == 0.0 -> {}", units == 0.0)
-            };
-            if units < contract.minimum_order_size {
-                println!(
-                    "units < contract.minimum_order_size -> {}",
-                    units < contract.minimum_order_size
-                );
-            }
-            if units > contract.maximum_order_size {
-                println!(
-                    "units > contract.maximum_order_size -> {}",
-                    units > contract.maximum_order_size
-                );
-            }
-            if leverage_factor > contract.max_leverage {
-                println!(
-                    "leverage_factor > contract.max_leverage -> {}",
-                    leverage_factor > contract.max_leverage
-                );
-            }
-            return LeveragedOrder {
-                contract: contract.clone(),
-                status: OrderStatus::Cancelled,
-                units: 0.0,
-                price,
-                bankruptcy_price: 0.0,
-                leverage_factor,
-                fee_rate,
-                position: 0,
-                open_fee: 0.0,
-                close_fee: 0.0,
-                balance_remainder: 0.0,
-            };
-        }
-        let balance_remainder = fract_units * price / leverage_factor;
-        let open_fee = units * price * fee_rate;
-        let bankruptcy_price = if position == -1 {
-            // Bankruptcy Price for Short Position = Order Price × ( Leverage + 1) / Leverage
-            price * (leverage_factor + 1.0) / leverage_factor
-        } else if position == 1 {
-            // Bankruptcy Price for Long Position = Order Price × ( Leverage − 1) / Leverage
-            price * (leverage_factor - 1.0) / leverage_factor
-        } else {
-            0.0
-        };
-        let close_fee = units * bankruptcy_price * fee_rate;
+//         if units == 0.0
+//             || units < contract.minimum_order_size
+//             || units > contract.maximum_order_size
+//             || leverage_factor > contract.max_leverage
+//         {
+//             println!("Some contract constraints stopped the order from being placed");
+//             if units == 0.0 {
+//                 println!("units == 0.0 -> {}", units == 0.0)
+//             };
+//             if units < contract.minimum_order_size {
+//                 println!(
+//                     "units < contract.minimum_order_size -> {}",
+//                     units < contract.minimum_order_size
+//                 );
+//             }
+//             if units > contract.maximum_order_size {
+//                 println!(
+//                     "units > contract.maximum_order_size -> {}",
+//                     units > contract.maximum_order_size
+//                 );
+//             }
+//             if leverage_factor > contract.max_leverage {
+//                 println!(
+//                     "leverage_factor > contract.max_leverage -> {}",
+//                     leverage_factor > contract.max_leverage
+//                 );
+//             }
+//             return LeveragedOrder {
+//                 contract: contract.clone(),
+//                 status: OrderStatus::Cancelled,
+//                 units: 0.0,
+//                 price,
+//                 bankruptcy_price: 0.0,
+//                 leverage_factor,
+//                 fee_rate,
+//                 position: 0,
+//                 open_fee: 0.0,
+//                 close_fee: 0.0,
+//                 balance_remainder: 0.0,
+//             };
+//         }
+//         let balance_remainder = fract_units * price / leverage_factor;
+//         let open_fee = units * price * fee_rate;
+//         let bankruptcy_price = if position == -1 {
+//             // Bankruptcy Price for Short Position = Order Price × ( Leverage + 1) / Leverage
+//             price * (leverage_factor + 1.0) / leverage_factor
+//         } else if position == 1 {
+//             // Bankruptcy Price for Long Position = Order Price × ( Leverage − 1) / Leverage
+//             price * (leverage_factor - 1.0) / leverage_factor
+//         } else {
+//             0.0
+//         };
+//         let close_fee = units * bankruptcy_price * fee_rate;
 
-        LeveragedOrder {
-            contract: contract.clone(),
-            status: OrderStatus::Filled,
-            units,
-            price,
-            bankruptcy_price,
-            leverage_factor,
-            fee_rate,
-            position,
-            open_fee,
-            close_fee,
-            balance_remainder,
-        }
-    }
+//         LeveragedOrder {
+//             contract: contract.clone(),
+//             status: OrderStatus::Filled,
+//             units,
+//             price,
+//             bankruptcy_price,
+//             leverage_factor,
+//             fee_rate,
+//             position,
+//             open_fee,
+//             close_fee,
+//             balance_remainder,
+//         }
+//     }
 
-    pub fn get_order_value(&self) -> f64 {
-        self.units * self.price
-    }
+//     pub fn get_order_value(&self) -> f64 {
+//         self.units * self.price
+//     }
 
-    pub fn get_order_cost(&self, close_price_opt: Option<f64>) -> f64 {
-        let im = self.get_order_value() / self.leverage_factor;
-        if let Some(close_price) = close_price_opt {
-            im + self.open_fee + (self.units * close_price * self.fee_rate)
-        } else {
-            im + self.open_fee + self.close_fee
-        }
-    }
+//     pub fn get_order_cost(&self, close_price_opt: Option<f64>) -> f64 {
+//         let im = self.get_order_value() / self.leverage_factor;
+//         if let Some(close_price) = close_price_opt {
+//             im + self.open_fee + (self.units * close_price * self.fee_rate)
+//         } else {
+//             im + self.open_fee + self.close_fee
+//         }
+//     }
 
-    pub fn get_close_data(
-        &self,
-        close_price: f64,
-    ) -> Result<(f64, f64, f64, f64, f64), OrderCloseError> {
-        let revenue = if self.position == -1 {
-            self.units * (self.price - close_price)
-        } else if self.position == 1 {
-            self.units * (close_price - self.price)
-        } else {
-            return Err(OrderCloseError::InvalidInitialPosition);
-        };
-        // Closed P&L = Position P&L - Fee to open - Fee to close - Sum of all funding fees paid/received
-        // Fee to open = Qty x Entry price x 0.06% = 1.44 USDT paid out
-        // Fee to close = Qty x Exit price x 0.06% = 1.2 USDT paid out
-        // Sum of all funding fees paid/received = 2.10 USDT paid out
-        let close_fee = self.units * close_price * self.fee_rate;
-        let profit_and_loss = revenue - self.open_fee - close_fee;
-        let order_cost = self.get_order_cost(Some(close_price));
-        let amount = f64::max(0.0, order_cost + profit_and_loss);
-        let returns = (amount / order_cost) - 1.0;
-        Ok((revenue, close_fee, profit_and_loss, amount, returns))
-    }
+//     pub fn get_close_data(
+//         &self,
+//         close_price: f64,
+//     ) -> Result<(f64, f64, f64, f64, f64), OrderCloseError> {
+//         let revenue = if self.position == -1 {
+//             self.units * (self.price - close_price)
+//         } else if self.position == 1 {
+//             self.units * (close_price - self.price)
+//         } else {
+//             return Err(OrderCloseError::InvalidInitialPosition);
+//         };
+//         // Closed P&L = Position P&L - Fee to open - Fee to close - Sum of all funding fees paid/received
+//         // Fee to open = Qty x Entry price x 0.06% = 1.44 USDT paid out
+//         // Fee to close = Qty x Exit price x 0.06% = 1.2 USDT paid out
+//         // Sum of all funding fees paid/received = 2.10 USDT paid out
+//         let close_fee = self.units * close_price * self.fee_rate;
+//         let profit_and_loss = revenue - self.open_fee - close_fee;
+//         let order_cost = self.get_order_cost(Some(close_price));
+//         let amount = f64::max(0.0, order_cost + profit_and_loss);
+//         let returns = (amount / order_cost) - 1.0;
+//         Ok((revenue, close_fee, profit_and_loss, amount, returns))
+//     }
 
-    pub fn close_order(
-        &mut self,
-        close_price: f64,
-        lock: PositionLock,
-        signal: SignalCategory,
-    ) -> Result<OrderClose, OrderCloseError> {
-        let (revenue, close_fee, profit_and_loss, amount, returns) =
-            self.get_close_data(close_price).unwrap();
+//     pub fn close_order(
+//         &mut self,
+//         close_price: f64,
+//         lock: PositionLock,
+//         signal: SignalCategory,
+//     ) -> Result<OrderClose, OrderCloseError> {
+//         let (revenue, close_fee, profit_and_loss, amount, returns) =
+//             self.get_close_data(close_price).unwrap();
 
-        match lock {
-            PositionLock::Nil => {
-                self.close_fee = close_fee;
-                Ok(OrderClose {
-                    close_fee,
-                    returns,
-                    profit_and_loss,
-                    amount,
-                    signal,
-                })
-            }
-            PositionLock::Fee => {
-                if self.open_fee + close_fee >= revenue.abs() {
-                    // keeps position
-                    Err(OrderCloseError::FeeLock)
-                } else {
-                    self.close_fee = close_fee;
-                    Ok(OrderClose {
-                        close_fee,
-                        returns,
-                        profit_and_loss,
-                        amount,
-                        signal,
-                    })
-                }
-            }
-            PositionLock::Loss => {
-                if profit_and_loss <= 0.0 {
-                    Err(OrderCloseError::LossLock)
-                } else {
-                    self.close_fee = close_fee;
-                    Ok(OrderClose {
-                        close_fee,
-                        returns,
-                        profit_and_loss,
-                        amount,
-                        signal,
-                    })
-                }
-            }
-        }
-    }
+//         match lock {
+//             PositionLock::Nil => {
+//                 self.close_fee = close_fee;
+//                 Ok(OrderClose {
+//                     close_fee,
+//                     returns,
+//                     profit_and_loss,
+//                     amount,
+//                     signal,
+//                 })
+//             }
+//             PositionLock::Fee => {
+//                 if self.open_fee + close_fee >= revenue.abs() {
+//                     // keeps position
+//                     Err(OrderCloseError::FeeLock)
+//                 } else {
+//                     self.close_fee = close_fee;
+//                     Ok(OrderClose {
+//                         close_fee,
+//                         returns,
+//                         profit_and_loss,
+//                         amount,
+//                         signal,
+//                     })
+//                 }
+//             }
+//             PositionLock::Loss => {
+//                 if profit_and_loss <= 0.0 {
+//                     Err(OrderCloseError::LossLock)
+//                 } else {
+//                     self.close_fee = close_fee;
+//                     Ok(OrderClose {
+//                         close_fee,
+//                         returns,
+//                         profit_and_loss,
+//                         amount,
+//                         signal,
+//                     })
+//                 }
+//             }
+//         }
+//     }
 
-    pub fn check_price_level_modifiers(
-        &mut self,
-        min_price: f64,
-        max_price: f64,
-        current_price: f64,
-        stop_loss_opt: Option<&PriceLevel>,
-        take_profit_opt: Option<&PriceLevel>,
-        trailing_stop_loss_opt: Option<&PriceLevel>,
-        current_peak_returns: f64,
-    ) -> Result<OrderClose, OrderCloseError> {
-        let ref_price: f64 = if self.position == -1 {
-            max_price
-        } else if self.position == 1 {
-            min_price
-        } else {
-            return Err(OrderCloseError::InvalidInitialPosition);
-        };
+//     pub fn check_price_level_modifiers(
+//         &mut self,
+//         min_price: f64,
+//         max_price: f64,
+//         current_price: f64,
+//         stop_loss_opt: Option<&PriceLevel>,
+//         take_profit_opt: Option<&PriceLevel>,
+//         trailing_stop_loss_opt: Option<&PriceLevel>,
+//         current_peak_returns: f64,
+//     ) -> Result<OrderClose, OrderCloseError> {
+//         let ref_price: f64 = if self.position == -1 {
+//             max_price
+//         } else if self.position == 1 {
+//             min_price
+//         } else {
+//             return Err(OrderCloseError::InvalidInitialPosition);
+//         };
 
-        if self.leverage_factor > 1.0 {
-            if self.position == -1 && self.bankruptcy_price <= ref_price {
-                return self.close_order(
-                    ref_price,
-                    PositionLock::Nil,
-                    SignalCategory::LeverageBankrupcty,
-                );
-            }
-            if self.position == 1 && self.bankruptcy_price >= ref_price {
-                return self.close_order(
-                    ref_price,
-                    PositionLock::Nil,
-                    SignalCategory::LeverageBankrupcty,
-                );
-            }
-        }
-        if stop_loss_opt.is_some() || take_profit_opt.is_some() || trailing_stop_loss_opt.is_some()
-        {
-            let (_, _, _, _, returns) = self.get_close_data(ref_price).unwrap();
-            if let Some(stop_loss) = stop_loss_opt {
-                let stop_loss_percentage = stop_loss.get_percentage();
-                if returns < 0.0 && stop_loss_percentage <= returns.abs() {
-                    println!(
-                        "Stop loss took effect: returns = {}, stop loss percentage = {}",
-                        returns, stop_loss_percentage
-                    );
-                    return self.close_order(
-                        ref_price,
-                        PositionLock::Nil,
-                        SignalCategory::StopLoss,
-                    );
-                }
-            }
+//         if self.leverage_factor > 1.0 {
+//             if self.position == -1 && self.bankruptcy_price <= ref_price {
+//                 return self.close_order(
+//                     ref_price,
+//                     PositionLock::Nil,
+//                     SignalCategory::LeverageBankrupcty,
+//                 );
+//             }
+//             if self.position == 1 && self.bankruptcy_price >= ref_price {
+//                 return self.close_order(
+//                     ref_price,
+//                     PositionLock::Nil,
+//                     SignalCategory::LeverageBankrupcty,
+//                 );
+//             }
+//         }
+//         if stop_loss_opt.is_some() || take_profit_opt.is_some() || trailing_stop_loss_opt.is_some()
+//         {
+//             let (_, _, _, _, returns) = self.get_close_data(ref_price).unwrap();
+//             if let Some(stop_loss) = stop_loss_opt {
+//                 let stop_loss_percentage = stop_loss.get_percentage();
+//                 if returns < 0.0 && stop_loss_percentage <= returns.abs() {
+//                     println!(
+//                         "Stop loss took effect: returns = {}, stop loss percentage = {}",
+//                         returns, stop_loss_percentage
+//                     );
+//                     return self.close_order(
+//                         ref_price,
+//                         PositionLock::Nil,
+//                         SignalCategory::StopLoss,
+//                     );
+//                 }
+//             }
 
-            if let Some(take_profit) = take_profit_opt {
-                let take_profit_percentage = take_profit.get_percentage();
-                if returns > 0.0 && take_profit_percentage <= returns.abs() {
-                    println!(
-                        "Take profit took effect: returns = {}, take profit percentage = {}",
-                        returns, take_profit_percentage
-                    );
-                    return self.close_order(
-                        current_price,
-                        PositionLock::Nil,
-                        SignalCategory::TakeProfit,
-                    );
-                }
-            }
+//             if let Some(take_profit) = take_profit_opt {
+//                 let take_profit_percentage = take_profit.get_percentage();
+//                 if returns > 0.0 && take_profit_percentage <= returns.abs() {
+//                     println!(
+//                         "Take profit took effect: returns = {}, take profit percentage = {}",
+//                         returns, take_profit_percentage
+//                     );
+//                     return self.close_order(
+//                         current_price,
+//                         PositionLock::Nil,
+//                         SignalCategory::TakeProfit,
+//                     );
+//                 }
+//             }
 
-            if let Some(trailing_stop_loss) = trailing_stop_loss_opt {
-                match trailing_stop_loss {
-                    PriceLevel::TrailingStopLoss(tsl) => match tsl {
-                        TrailingStopLoss::Percent(percentage, start_percentage) => {
-                            if start_percentage < &current_peak_returns {
-                                let acceptable_returns = percentage * current_peak_returns;
-                                let acceptable_returns = acceptable_returns.max(*start_percentage);
+//             if let Some(trailing_stop_loss) = trailing_stop_loss_opt {
+//                 match trailing_stop_loss {
+//                     PriceLevel::TrailingStopLoss(tsl) => match tsl {
+//                         TrailingStopLoss::Percent(percentage, start_percentage) => {
+//                             if start_percentage < &current_peak_returns {
+//                                 let acceptable_returns = percentage * current_peak_returns;
+//                                 let acceptable_returns = acceptable_returns.max(*start_percentage);
 
-                                if returns <= acceptable_returns {
-                                    return self.close_order(
-                                        current_price,
-                                        PositionLock::Nil,
-                                        SignalCategory::TrailingStopLoss,
-                                    );
-                                }
-                            }
-                        }
-                        TrailingStopLoss::Stepped(percentage, start_percentage) => {
-                            if start_percentage < &current_peak_returns {
-                                let acceptable_returns =
-                                    closest_multiple_below(*percentage, current_peak_returns);
-                                let acceptable_returns = acceptable_returns.max(*start_percentage);
-                                // println!(
-                                //     "@@@ start_percentage {} current returns {}, acceptable_returns {}",
-                                //     start_percentage, returns, acceptable_returns
-                                // );
-                                if returns <= acceptable_returns {
-                                    return self.close_order(
-                                        current_price,
-                                        PositionLock::Nil,
-                                        SignalCategory::TrailingStopLoss,
-                                    );
-                                }
-                            }
-                        }
-                    },
-                    _ => {}
-                }
-            }
-        }
+//                                 if returns <= acceptable_returns {
+//                                     return self.close_order(
+//                                         current_price,
+//                                         PositionLock::Nil,
+//                                         SignalCategory::TrailingStopLoss,
+//                                     );
+//                                 }
+//                             }
+//                         }
+//                         TrailingStopLoss::Stepped(percentage, start_percentage) => {
+//                             if start_percentage < &current_peak_returns {
+//                                 let acceptable_returns =
+//                                     closest_multiple_below(*percentage, current_peak_returns);
+//                                 let acceptable_returns = acceptable_returns.max(*start_percentage);
+//                                 // println!(
+//                                 //     "@@@ start_percentage {} current returns {}, acceptable_returns {}",
+//                                 //     start_percentage, returns, acceptable_returns
+//                                 // );
+//                                 if returns <= acceptable_returns {
+//                                     return self.close_order(
+//                                         current_price,
+//                                         PositionLock::Nil,
+//                                         SignalCategory::TrailingStopLoss,
+//                                     );
+//                                 }
+//                             }
+//                         }
+//                     },
+//                     _ => {}
+//                 }
+//             }
+//         }
 
-        return Err(OrderCloseError::Nil);
-    }
-}
+//         return Err(OrderCloseError::Nil);
+//     }
+// }
 
-fn closest_multiple_below(of: f64, to: f64) -> f64 {
-    // println!("@@@@ closest_multiple_below of {}, to {} ", of, to);
-    let quotient = to / of;
-    let floored = quotient.floor();
-    floored * of
-}
-
-#[derive(Debug)]
-pub struct OrderClose {
-    pub close_fee: f64,
-    pub profit_and_loss: f64,
-    pub returns: f64,
-    pub amount: f64,
-    pub signal: SignalCategory,
-}
-#[derive(Debug)]
-pub enum OrderCloseError {
-    Nil,
-    InvalidInitialPosition,
-    FeeLock,
-    LossLock,
-}
+// #[derive(Debug)]
+// pub struct OrderClose {
+//     pub close_fee: f64,
+//     pub profit_and_loss: f64,
+//     pub returns: f64,
+//     pub amount: f64,
+//     pub signal: SignalCategory,
+// }
+// #[derive(Debug)]
+// pub enum OrderCloseError {
+//     Nil,
+//     InvalidInitialPosition,
+//     FeeLock,
+//     LossLock,
+// }

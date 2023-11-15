@@ -8,12 +8,16 @@ use crate::trader::{
     enums::{
         balance::Balance,
         modifiers::{leverage::Leverage, position_lock::PositionLock},
+        order_status::OrderStatus,
         order_type::OrderType,
         side::Side,
         trade_status::TradeStatus,
     },
     errors::Error,
-    models::{contract::Contract, execution::Execution, order::Order, trade::Trade},
+    models::{
+        contract::Contract, execution::Execution, order::Order, trade::Trade,
+        trading_settings::TradingSettings,
+    },
 };
 
 use super::ws_processer::WsProcesser;
@@ -23,30 +27,56 @@ pub trait Exchange {
     fn clone_box(&self) -> Box<dyn Exchange + Send + Sync>;
     fn get_anchor_contract(&self) -> &Contract;
     fn get_traded_contract(&self) -> &Contract;
+    fn get_trading_settings(&self) -> TradingSettings;
     fn get_current_symbols(&self) -> Vec<String>;
     fn get_taker_fee(&self) -> f64;
     fn get_maker_fee(&self) -> f64;
+    fn calculate_open_order_units_and_balance_remainder(
+        &self,
+        side: Side,
+        order_cost: f64,
+        price: f64,
+    ) -> Result<(f64, f64), Error>;
+
+    fn get_order_fee_rate(&self, order_type: OrderType) -> (f64, bool);
+
+    fn calculate_order_fees(
+        &self,
+        order_type: OrderType,
+        side: Side,
+        units: f64,
+        price: f64,
+    ) -> ((f64, f64), f64, bool);
+
+    fn calculate_order_stop_loss_price(&self, side: Side, price: f64) -> Option<f64>;
+
+    fn calculate_order_take_profit_price(&self, side: Side, price: f64) -> Option<f64>;
     /// This function creates a new order from a given amount of USDT
     ///
     /// # Arguments
     ///
-    /// * `order_type`: Order Type, being Market or Limit.
     /// * `side`: Position side, being Buy or Sell.
     /// * `amount`: Amount in USDT for opening the position, paying the Opening Fee, Closing Fee provision and Initial Margin.
     /// * `price_opt`: (Optional) Price for opening the position. Required for OrderType::Limit.
-    /// * `stop_loss_opt`: (Optional) Amount in USDT for opening the position, paying the Opening Fee, Closing Fee provision and Initial Margin.
-    /// * `take_profit_opt`: (Optional)Amount in USDT for opening the position, paying the Opening Fee, Closing Fee provision and Initial Margin.
     ///
-    fn create_new_open_order(
+    fn create_open_order(&self, side: Side, order_cost: f64, price: f64) -> Result<Order, Error>;
+
+    fn create_benchmark_open_order(
         &self,
-        order_type: OrderType,
+        timestamp: i64,
         side: Side,
-        amount: f64,
-        leverage_factor: f64,
+        order_cost: f64,
         price: f64,
-        stop_loss_percentage_opt: Option<f64>,
-        take_profit_percentage_opt: Option<f64>,
-    ) -> Option<Order>;
+    ) -> Result<Order, Error>;
+
+    fn create_benchmark_close_order(
+        &self,
+        timestamp: i64,
+        trade_id: &String,
+        close_price: f64,
+        open_order: Order,
+        final_status: OrderStatus,
+    ) -> Result<Order, Error>;
 
     fn get_ws_url(&self) -> Result<Url, Error>;
 
@@ -95,12 +125,8 @@ pub trait Exchange {
     async fn open_order(
         &self,
         side: Side,
-        order_type: OrderType,
-        quantity: f64,
+        amount: f64,
         expected_price: f64,
-        leverage_factor: f64,
-        stop_loss_percentage_opt: Option<f64>,
-        take_profit_percentage_opt: Option<f64>,
     ) -> Result<Order, Error>;
 
     async fn amend_order(
@@ -112,13 +138,7 @@ pub trait Exchange {
         updated_take_profit_price: Option<f64>,
     ) -> Result<bool, Error>;
 
-    async fn try_close_position(
-        &self,
-        trade: &Trade,
-        order_type: OrderType,
-        est_price: f64,
-        position_lock: PositionLock,
-    ) -> Result<Order, Error>;
+    async fn try_close_position(&self, trade: &Trade, est_price: f64) -> Result<Order, Error>;
 
     /// this function is meant to be run by trades with status TradeStatus::PartiallyOpen and TradeStatus::CloseOrderStandBy
     async fn cancel_order(&self, order_id: String) -> Result<bool, Error>;

@@ -1,5 +1,8 @@
-use crate::trader::enums::{
-    order_status::OrderStatus, order_type::OrderType, time_in_force::TimeInForce,
+use crate::trader::{
+    enums::{
+        order_status::OrderStatus, order_type::OrderType, side::Side, time_in_force::TimeInForce,
+    },
+    errors::{CustomError, Error},
 };
 
 use super::execution::Execution;
@@ -11,16 +14,19 @@ pub struct Order {
     pub id: String,
     pub symbol: String,
     pub status: OrderStatus,
-    pub is_close: bool,
-    pub is_stop: bool,
     pub order_type: OrderType,
+    pub side: Side,
+    pub time_in_force: TimeInForce,
     pub units: f64,
-    pub avg_price: Option<f64>,
-    pub position: i32,
-    pub executions: Vec<Execution>,
+    pub leverage_factor: f64,
     pub stop_loss_price: Option<f64>,
     pub take_profit_price: Option<f64>,
-    pub time_in_force: TimeInForce,
+    pub avg_price: Option<f64>,
+    pub taker_fee_rate: f64,
+    pub executions: Vec<Execution>,
+    pub balance_remainder: f64,
+    pub is_stop: bool,
+    pub is_close: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -31,16 +37,19 @@ impl Order {
         id: String,
         symbol: String,
         status: OrderStatus,
-        is_close: bool,
-        is_stop: bool,
         order_type: OrderType,
-        position: i32,
+        side: Side,
+        time_in_force: TimeInForce,
         units: f64,
-        avg_price: Option<f64>,
-        executions: Vec<Execution>,
+        leverage_factor: f64,
         stop_loss_price: Option<f64>,
         take_profit_price: Option<f64>,
-        time_in_force: TimeInForce,
+        avg_price: Option<f64>,
+        executions: Vec<Execution>,
+        taker_fee_rate: f64,
+        balance_remainder: f64,
+        is_close: bool,
+        is_stop: bool,
         created_at: i64,
         updated_at: i64,
     ) -> Self {
@@ -49,18 +58,72 @@ impl Order {
             id,
             symbol,
             status,
-            is_close,
-            is_stop,
             order_type,
+            side,
+            time_in_force,
             units,
-            avg_price,
-            position,
-            executions,
+            leverage_factor,
             stop_loss_price,
             take_profit_price,
-            time_in_force,
+            avg_price,
+            taker_fee_rate,
+            executions,
+            balance_remainder,
+            is_close,
+            is_stop,
             created_at,
             updated_at,
+        }
+    }
+
+    fn get_order_initial_margin(&self) -> Option<f64> {
+        let order_value = self.get_order_value();
+        if order_value.is_none() {
+            return None;
+        }
+        let order_value = order_value.unwrap();
+        Some(order_value / self.leverage_factor)
+    }
+
+    pub fn get_order_cost(&self) -> Option<f64> {
+        let initial_margin = self.get_order_initial_margin();
+        if initial_margin.is_none() {
+            return None;
+        }
+        let initial_margin = initial_margin.unwrap();
+
+        if self.avg_price.is_none() {
+            return None;
+        }
+        let open_price = self.avg_price.unwrap();
+
+        let bankruptcy_price = self.get_bankruptcy_price();
+        if bankruptcy_price.is_none() {
+            return None;
+        }
+
+        let bankruptcy_price = bankruptcy_price.unwrap();
+        let open_position_fee = self.units * open_price * self.taker_fee_rate;
+        let close_position_fee = self.units * bankruptcy_price * self.taker_fee_rate;
+
+        Some(initial_margin + open_position_fee + close_position_fee)
+    }
+
+    pub fn get_bankruptcy_price(&self) -> Option<f64> {
+        if self.side == Side::Buy {
+            if self.avg_price.is_none() {
+                return None;
+            }
+            let price = self.avg_price.unwrap();
+            Some(price * (self.leverage_factor - 1.0) / self.leverage_factor)
+        } else if self.side == Side::Sell {
+            if self.avg_price.is_none() {
+                return None;
+            }
+            let price = self.avg_price.unwrap();
+            Some(price * (self.leverage_factor + 1.0) / self.leverage_factor)
+        } else {
+            None
         }
     }
 
@@ -85,6 +148,14 @@ impl Order {
         })
     }
 
+    pub fn get_order_value(&self) -> Option<f64> {
+        if self.avg_price.is_none() {
+            return None;
+        }
+        let price = self.avg_price.unwrap();
+        Some(price * self.units)
+    }
+
     pub fn get_executed_order_value(&self) -> f64 {
         match self.status {
             OrderStatus::Cancelled | OrderStatus::StandBy | OrderStatus::Closed => 0.0,
@@ -92,9 +163,6 @@ impl Order {
                 acc + (execution.qty * execution.price)
             }),
         }
-        // self.executions.iter().fold(0.0, |acc, execution| {
-        //     acc + (execution.qty * execution.price)
-        // })
     }
 
     pub fn get_estimate_close_order_fee(&self, fee_rate: f64, est_price: f64) -> f64 {

@@ -6,11 +6,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dotenv::dotenv;
 pub mod shared;
 mod trader;
 use polars::prelude::DataFrame;
+use regex::Regex;
+use std::io;
+use std::io::{stdin, stdout, Read, Write};
 use trader::{
     enums::{
         balance::Balance,
@@ -22,22 +25,13 @@ use trader::{
     },
     exchanges::bybit::BybitExchange,
     functions::current_datetime,
-    indicators::{
-        ema_trend::ExponentialMovingAverageTrendIndicator, stc::STCIndicator,
-        stochastic::StochasticIndicator, stochastic_threshold::StochasticThresholdIndicator,
-        tsi::TSIIndicator, IndicatorWrapper,
-    },
+    indicators::IndicatorWrapper,
     models::{
         behavior_subject::BehaviorSubject, execution::Execution, trade::Trade,
         trading_settings::TradingSettings,
     },
     modules::{data_feed::DataFeed, performance::Performance, strategy::Strategy, trader::Trader},
-    signals::{
-        tsi_stc::{
-            TSISTCCloseLongSignal, TSISTCCloseShortSignal, TSISTCLongSignal, TSISTCShortSignal,
-        },
-        SignalWrapper,
-    },
+    signals::SignalWrapper,
     traits::exchange::Exchange,
 };
 
@@ -45,22 +39,31 @@ use std::marker::Send;
 
 // mod optimization;
 
-use crate::trader::{enums::modifiers::price_level::TrailingStopLoss, models::contract::Contract};
+use crate::trader::{
+    enums::modifiers::price_level::TrailingStopLoss,
+    indicators::fast_slow_rmas::FastSlowRelativeMovingAverages,
+    models::contract::Contract,
+    signals::{
+        MultipleStochasticWithThresholdCloseLongSignal,
+        MultipleStochasticWithThresholdCloseShortSignal, MultipleStochasticWithThresholdLongSignal,
+        MultipleStochasticWithThresholdShortSignal,
+    },
+};
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
     dotenv().ok();
+
+    let is_test_mode = true;
+
     // let trend_col = String::from("bullish_market");
     use std::env::{self};
     let max_rows = "40".to_string();
     env::set_var("POLARS_FMT_MAX_ROWS", max_rows);
 
     // ARGS
-    let windows = vec![5]; // 5, 15, 30 // 5, 9, 12
-    let upper_threshold = 70;
-    let lower_threshold = 30;
-    let close_window_index = 0;
+    let windows = vec![1]; // 5, 15, 30 // 5, 9, 12
 
     let btcusdt_contract: Contract = Contract::new(
         String::from("BTCUSDT"),
@@ -118,21 +121,83 @@ async fn main() {
     );
 
     let mut contracts = HashMap::new();
-    contracts.insert(btcusdt_contract.symbol.clone(), btcusdt_contract);
-    contracts.insert(agixusdt_contract.symbol.clone(), agixusdt_contract);
-    contracts.insert(arbusdt_contract.symbol.clone(), arbusdt_contract);
-    contracts.insert(linkusdt_contract.symbol.clone(), linkusdt_contract);
-    contracts.insert(ethusdt_contract.symbol.clone(), ethusdt_contract);
+    contracts.insert(btcusdt_contract.symbol.clone(), btcusdt_contract.clone());
+    contracts.insert(agixusdt_contract.symbol.clone(), agixusdt_contract.clone());
+    contracts.insert(arbusdt_contract.symbol.clone(), arbusdt_contract.clone());
+    contracts.insert(linkusdt_contract.symbol.clone(), linkusdt_contract.clone());
+    contracts.insert(ethusdt_contract.symbol.clone(), ethusdt_contract.clone());
 
-    let start_datetime = current_datetime();
+    let start_datetime;
 
-    let start_date = NaiveDate::from_ymd_opt(2023, 9, 28).unwrap();
-    let start_time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+    if !is_test_mode {
+        start_datetime = current_datetime();
+    } else {
+        println!("Glow test suite - v0.01.");
+        println!("Ao Nosso Senhor Jesus Cristo, toda honra e toda glória 🙏");
+        println!("em memória de Pedro Borges de Medeiros");
 
-    let start_datetime = NaiveDateTime::new(start_date, start_time);
+        let start_date: NaiveDate;
+
+        loop {
+            println!("Insira uma data no formato dd/mm/yyyy, anterior ao dia de hoje, para realizar o teste.");
+
+            let mut input = String::new();
+
+            let date_pattern = r"^(0?[1-9]|[12][0-9]|3[01])[\/\-](0?[1-9]|1[012])[\/\-]\d{4}$";
+
+            let date_regex = Regex::new(date_pattern).unwrap();
+
+            io::stdin()
+                .read_line(&mut input)
+                .expect("Insira um número válido!");
+
+            if date_regex.is_match(&input.trim()) {
+                let date_parts: Vec<&str> = input.trim().split('/').collect();
+
+                if date_parts.len() == 3 {
+                    // Extract day, month, and year as integers
+                    let day = date_parts[0].parse().unwrap();
+                    let month = date_parts[1].parse().unwrap();
+                    let year = date_parts[2].parse().unwrap();
+
+                    let mut parsed_date = NaiveDate::from_ymd_opt(year, month, day).unwrap();
+                    parsed_date = parsed_date + Duration::days(1);
+
+                    let current_date = Local::now().date_naive();
+
+                    if parsed_date < current_date {
+                        start_date = parsed_date;
+                        break;
+                    } else {
+                        println!(
+                            "Data inválida! Insira uma data anterior ao dia de hoje {:?}.",
+                            current_date
+                        );
+                        continue;
+                    }
+                } else {
+                    println!("Data inválida! Use o formato dd/mm/yyyy.");
+                    continue;
+                }
+            } else {
+                println!("Data inválida! Use o formato dd/mm/yyyy");
+                continue;
+            }
+        }
+
+        let start_time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+
+        start_datetime = NaiveDateTime::new(start_date, start_time);
+    }
 
     let seconds_to_next_full_minute = 60 - start_datetime.timestamp() % 60;
     let trading_initial_datetime = start_datetime + Duration::seconds(seconds_to_next_full_minute);
+
+    let anchor_contract = linkusdt_contract.clone();
+    let traded_contract = linkusdt_contract.clone();
+
+    let anchor_symbol = anchor_contract.symbol.clone();
+    let traded_symbol = traded_contract.symbol.clone();
 
     // let stochastic_indicator = StochasticIndicator {
     //     name: "StochasticIndicator".into(),
@@ -140,94 +205,91 @@ async fn main() {
     //     anchor_symbol: anchor_symbol.clone(),
     //     starting_datetime: trading_initial_datetime,
     //     k_window: 14,
-    //     k_smooth: 4,
-    //     d_smooth: 5,
+    //     k_smooth: 2,
+    //     d_smooth: 2,
     // };
 
-    let anchor_symbol = String::from("BTCUSDT");
-    let traded_symbol = String::from("AGIXUSDT");
+    let cloud_length = 20;
 
-    let stc_indicator = STCIndicator {
-        name: "STC indicator".to_string(),
-        anchor_symbol: anchor_symbol.clone(),
-        windows: windows.clone(),
-        length: 12,
-        short_span: 24,
-        long_span: 50,
-        weight: 0.5,
+    let fast_slow_mas_indicator = FastSlowRelativeMovingAverages {
+        name: "FastSlowRelativeMovingAverages".to_string(),
+        contract: traded_contract,
+        fast_period: 20,
+        slow_period: 200,
+        cloud_length,
+        momentum_diff_span: 5,
     };
 
-    let tsi_indicator = TSIIndicator {
-        name: "True Strength Index Indicator".to_string(),
-        anchor_symbol: anchor_symbol.clone(),
-        windows: windows.clone(),
-        long_span: 14,
-        short_span: 1,
-    };
+    let pre_indicators: Vec<IndicatorWrapper> = vec![];
 
-    // let stochastic_threshold_indicator = StochasticThresholdIndicator {
-    //     name: "StochasticThresholdIndicator".into(),
-    //     upper_threshold,
-    //     lower_threshold,
-    //     trend_col: trend_col.clone(),
-    // };
+    let indicators: Vec<IndicatorWrapper> = vec![fast_slow_mas_indicator.into()];
 
-    // let ewm_preindicator = ExponentialMovingAverageTrendIndicator {
-    //     name: "ExponentialMovingAverageTrendIndicator".into(),
-    //     anchor_symbol: anchor_symbol.clone(),
-    //     long_span: 50,
-    //     short_span: 21,
-    //     trend_col: trend_col.clone(),
-    // };
+    let multiple_stochastic_with_threshold_short_signal =
+        MultipleStochasticWithThresholdShortSignal {
+            windows: windows.clone(),
+            anchor_symbol: anchor_symbol.clone(),
+            cloud_length,
+        };
 
-    let pre_indicators: Vec<IndicatorWrapper> = vec![
-    // ewm_preindicator.into()
-    ];
+    let multiple_stochastic_with_threshold_long_signal =
+        MultipleStochasticWithThresholdLongSignal {
+            windows: windows.clone(),
+            anchor_symbol: anchor_symbol.clone(),
+            cloud_length,
+        };
 
-    let indicators: Vec<IndicatorWrapper> = vec![
-        stc_indicator.into(),
-        tsi_indicator.into(), // stochastic_threshold_indicator.into(),
-                              // stochastic_indicator.into(),
-    ];
+    let multiple_stochastic_with_threshold_close_short_signal =
+        MultipleStochasticWithThresholdCloseShortSignal {
+            anchor_symbol: anchor_symbol.clone(),
+            windows: windows.clone(),
+            cloud_length,
+        };
 
-    let signals_period = 1;
-
-    let short_signal = TSISTCShortSignal {
-        windows: windows.clone(),
-        anchor_symbol: anchor_symbol.clone(),
-        period: signals_period,
-    };
-
-    let long_signal = TSISTCLongSignal {
-        windows: windows.clone(),
-        anchor_symbol: anchor_symbol.clone(),
-        period: signals_period,
-    };
-
-    let close_short_signal = TSISTCCloseShortSignal {
-        windows: windows.clone(),
-        anchor_symbol: anchor_symbol.clone(),
-        period: signals_period,
-    };
-
-    let close_long_signal = TSISTCCloseLongSignal {
-        windows: windows.clone(),
-        anchor_symbol: anchor_symbol.clone(),
-        period: signals_period,
-    };
+    let multiple_stochastic_with_threshold_close_long_signal =
+        MultipleStochasticWithThresholdCloseLongSignal {
+            anchor_symbol: anchor_symbol.clone(),
+            windows: windows.clone(),
+            cloud_length,
+        };
 
     let signals: Vec<SignalWrapper> = vec![
-        short_signal.into(),
-        long_signal.into(),
-        close_short_signal.into(),
-        close_long_signal.into(),
+        multiple_stochastic_with_threshold_short_signal.into(),
+        multiple_stochastic_with_threshold_long_signal.into(),
+        multiple_stochastic_with_threshold_close_short_signal.into(),
+        multiple_stochastic_with_threshold_close_long_signal.into(),
     ];
+
+    let initial_leverage = Leverage::Isolated(8);
+
+    let position_lock_modifier = PositionLock::Nil;
+
+    let mut price_level_modifiers = HashMap::new();
+    let stop_loss: PriceLevel = PriceLevel::StopLoss(0.3);
+    // let take_profit = PriceLevel::TakeProfit(0.7);
+
+    // let trailing_stop_loss = TrailingStopLoss::Percent(0.5, 0.05);
+    // let trailing_modifier = PriceLevel::TrailingStopLoss(trailing_stop_loss);
+
+    // price_level_modifiers.insert(stop_loss.get_hash_key(), stop_loss);
+    // price_level_modifiers.insert(take_profit.get_hash_key(), take_profit);
+    // price_level_modifiers.insert("tsl".to_string(), trailing_modifier);
+
+    let trading_settings_arc = Arc::new(Mutex::new(TradingSettings::new(
+        OrderType::Market,
+        OrderType::Market,
+        initial_leverage.clone(),
+        position_lock_modifier,
+        price_level_modifiers,
+        0.95, // CHANGE ALLOCATION,
+        false
+    )));
 
     let bybit_exchange = BybitExchange::new(
         "Bybit".to_string(),
         contracts,
         anchor_symbol.clone(),
         traded_symbol.clone(),
+        &trading_settings_arc,
         0.0002,
         0.00055,
     );
@@ -250,30 +312,6 @@ async fn main() {
 
     let signal_listener = BehaviorSubject::new(None);
     let trading_data_listener = BehaviorSubject::new(DataFrame::default());
-
-    let initial_leverage = Leverage::Isolated(20);
-
-    let position_lock_modifier = PositionLock::Nil;
-
-    let mut price_level_modifiers = HashMap::new();
-    let stop_loss: PriceLevel = PriceLevel::StopLoss(0.4);
-    let take_profit = PriceLevel::TakeProfit(1.0);
-
-    let trailing_stop_loss = TrailingStopLoss::Percent(0.5, 0.1);
-    let trailing_modifier = PriceLevel::TrailingStopLoss(trailing_stop_loss);
-
-    price_level_modifiers.insert(stop_loss.get_hash_key(), stop_loss);
-    price_level_modifiers.insert(take_profit.get_hash_key(), take_profit);
-    // price_level_modifiers.insert("tsl".to_string(), trailing_modifier);
-
-    let trading_settings_arc = Arc::new(Mutex::new(TradingSettings::new(
-        OrderType::Market,
-        OrderType::Market,
-        initial_leverage.clone(),
-        position_lock_modifier,
-        price_level_modifiers,
-        0.95, // CHANGE ALLOCATION
-    )));
 
     let strategy = Strategy::new(
         "Stepped Stochastic Strategy".into(),
@@ -311,6 +349,7 @@ async fn main() {
         start_datetime,
         indicators,
         signals,
+        is_test_mode,
     );
 
     let leverage_listener = BehaviorSubject::new(initial_leverage);
@@ -331,7 +370,7 @@ async fn main() {
         &current_trade_listener,
         &leverage_listener,
         &log_level,
-        true,
+        is_test_mode,
     );
 
     let _ = trader.init().await;

@@ -26,7 +26,7 @@ use crate::trader::models::trade::Trade;
 
 use crate::trader::signals::SignalWrapper;
 use crate::trader::traits::exchange::Exchange;
-use crate::trader::traits::indicator::{self, Indicator};
+use crate::trader::traits::indicator::Indicator;
 use crate::trader::traits::signal::Signal;
 use chrono::{Duration as ChronoDuration, NaiveDateTime, Timelike, Utc};
 use futures_util::SinkExt;
@@ -65,6 +65,7 @@ pub struct DataFeed {
     pub update_order_listener: BehaviorSubject<Option<OrderAction>>,
     pub update_executions_listener: BehaviorSubject<Vec<Execution>>,
     pub current_trade_listener: BehaviorSubject<Option<Trade>>,
+    pub is_test_mode: bool,
 }
 
 impl DataFeed {
@@ -82,6 +83,7 @@ impl DataFeed {
         initial_datetime: NaiveDateTime,
         indicators: Vec<IndicatorWrapper>,
         signals: Vec<SignalWrapper>,
+        is_test_mode: bool,
     ) -> DataFeed {
         let mut schema_fields: Vec<Field> = vec![];
 
@@ -144,8 +146,6 @@ impl DataFeed {
 
         let last_bar = initial_datetime + ChronoDuration::seconds(seconds_to_next_full_minute);
 
-        println!("LAST BAR {:?}", last_bar);
-
         println!(
             "{} | 💹 Initializing DataFeed -> trades might be open after {:?}",
             initial_datetime, last_bar
@@ -169,60 +169,64 @@ impl DataFeed {
             update_order_listener: update_order_listener.clone(),
             update_executions_listener: update_executions_listener.clone(),
             current_trade_listener: current_trade_listener.clone(),
+            is_test_mode,
         }
     }
 
     pub async fn init(&mut self) -> Result<(), Error> {
-        let exchange_socket_error_arc = self.exchange_socket_error_arc.clone();
-        let current_trade_listener = self.current_trade_listener.clone();
-        let exchange_listener = self.exchange_listener.clone();
-        let update_balance_listener = self.update_balance_listener.clone();
-        let update_order_listener = self.update_order_listener.clone();
-        let update_executions_listener = self.update_executions_listener.clone();
-
-        let exchange_ws_handle = spawn(async move {
-            handle_exchange_websocket_reconnect(
-                exchange_socket_error_arc,
-                current_trade_listener,
-                exchange_listener,
-                update_balance_listener,
-                update_order_listener,
-                update_executions_listener,
-            )
-            .await
-        });
-
-        let http = self.http.clone();
-        let symbols = self.get_current_symbols();
-        // let trading_data_listener = self.trading_data_listener.clone();
-        let last_error_ts_arc = Arc::new(Mutex::new(None));
-        let bar_length = self.bar_length.clone();
-        let trading_data_update_listener: BehaviorSubject<TradingDataUpdate> =
-            self.trading_data_update_listener.clone();
-        let last_bar = self.last_bar;
-        let trading_data_schema = self.trading_data_schema.clone();
-
-        let binance_ws_handle = spawn(async move {
-            handle_market_websocket_reconnect(
-                &http,
-                last_bar,
-                bar_length,
-                symbols,
-                &trading_data_schema,
-                last_error_ts_arc,
-                trading_data_update_listener,
-            )
-            .await
-        });
-
         let data_feed_clone = self.clone();
         let benchmark_handle = spawn(async move {
             data_feed_clone.fetch_benchmark_data().await;
         });
 
+        if !self.is_test_mode {
+            let http = self.http.clone();
+            let symbols = self.get_current_symbols();
+            // let trading_data_listener = self.trading_data_listener.clone();
+            let last_error_ts_arc = Arc::new(Mutex::new(None));
+            let bar_length = self.bar_length.clone();
+            let trading_data_update_listener: BehaviorSubject<TradingDataUpdate> =
+                self.trading_data_update_listener.clone();
+            let last_bar = self.last_bar;
+            let trading_data_schema = self.trading_data_schema.clone();
+
+            let binance_ws_handle = spawn(async move {
+                handle_market_websocket_reconnect(
+                    &http,
+                    last_bar,
+                    bar_length,
+                    symbols,
+                    &trading_data_schema,
+                    last_error_ts_arc,
+                    trading_data_update_listener,
+                )
+                .await
+            });
+
+            let exchange_socket_error_arc = self.exchange_socket_error_arc.clone();
+            let current_trade_listener = self.current_trade_listener.clone();
+            let exchange_listener = self.exchange_listener.clone();
+            let update_balance_listener = self.update_balance_listener.clone();
+            let update_order_listener = self.update_order_listener.clone();
+            let update_executions_listener = self.update_executions_listener.clone();
+
+            let exchange_ws_handle = spawn(async move {
+                handle_exchange_websocket_reconnect(
+                    exchange_socket_error_arc,
+                    current_trade_listener,
+                    exchange_listener,
+                    update_balance_listener,
+                    update_order_listener,
+                    update_executions_listener,
+                )
+                .await
+            });
+
+            let _ = binance_ws_handle.await;
+            let _ = exchange_ws_handle.await;
+        }
+
         let _ = benchmark_handle.await;
-        let _ = binance_ws_handle.await;
-        let _ = exchange_ws_handle.await;
 
         Ok(())
     }
@@ -271,13 +275,6 @@ impl DataFeed {
             let mut end = &timestamp_intervals[i] * 1000;
 
             let current_limit = granularity * (((end - start) / 1000) / SECONDS_IN_MIN);
-
-            // println!(
-            //     "@@@@@ START {:?}, END {:?}, current_limit {}",
-            //     NaiveDateTime::from_timestamp_millis(start),
-            //     NaiveDateTime::from_timestamp_millis(end),
-            //     current_limit
-            // );
 
             end -= 1;
 
@@ -423,7 +420,7 @@ async fn handle_exchange_websocket(
 
                             match action {
                                 ProcesserAction::Nil => {},
-                                ProcesserAction::Auth { success } => {
+                                ProcesserAction::Auth { success: _ } => {
                                     // println!("{:?} | Exchange websocket authentication success: {}", current_datetime(), success);
                                 },
                                 ProcesserAction::Execution { executions } => {
@@ -690,16 +687,6 @@ async fn handle_market_websocket(
                     trading_data_update_listener.next(trading_data_update);
                 }
             },
-            // _ = ticks_process_interval.tick() => {
-            //     if staging_ticks.len() == 0 {
-            //         continue;
-            //     }
-            //     // let last_start_time = staging_ticks.iter().last().unwrap().start_time;
-            //     ticks_data_to_process.next(staging_ticks.clone());
-            //     staging_ticks.clear();
-            //     last_bar = last_bar + ChronoDuration::from_std(bar_length).unwrap();
-
-            // },
             _ = sleep_until(query_deadline) => {
                 query_deadline = Instant::now() + Duration::from_secs(SECONDS_IN_DAY as u64);
                 if timeout_executed {
@@ -739,15 +726,10 @@ async fn handle_market_websocket(
 
                 timeout_executed = true
             },
-            // _ = heartbeat_interval.tick() => {
-            //     println!("pong message must be sent");
-            //     wss.send(item)
-            // }
+
 
         }
     }
-
-    // Ok(())
 }
 
 pub fn process_tick_data_df(

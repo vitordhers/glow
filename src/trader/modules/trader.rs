@@ -102,26 +102,26 @@ impl Trader {
         let leverage_listener = self.leverage_listener.clone();
 
         // TODO: CHECK THIS QUERY
-        let leverage_change_handle = spawn(async move {
-            let mut subscription = leverage_listener.subscribe();
-            while let Some(leverage) = subscription.next().await {
-                let exchange_binding = exchange_listener.value();
-                let result = exchange_binding.set_leverage(leverage.clone()).await;
-                match result {
-                    Ok(success) => {
-                        if success {
-                            let mut settings_guard = trading_settings_arc
-                                .lock()
-                                .expect("leverage_change_handle -> trading setting deadlock");
-                            settings_guard.leverage = leverage;
-                        }
-                    }
-                    Err(error) => {
-                        println!("leverage_change_handle error {:?}", error);
-                    }
-                }
-            }
-        });
+        // let leverage_change_handle = spawn(async move {
+        //     let mut subscription = leverage_listener.subscribe();
+        //     while let Some(leverage) = subscription.next().await {
+        //         let exchange_binding = exchange_listener.value();
+        //         let result = exchange_binding.set_leverage(leverage.clone()).await;
+        //         match result {
+        //             Ok(success) => {
+        //                 if success {
+        //                     let mut settings_guard = trading_settings_arc
+        //                         .lock()
+        //                         .expect("leverage_change_handle -> trading setting deadlock");
+        //                     settings_guard.leverage = leverage;
+        //                 }
+        //             }
+        //             Err(error) => {
+        //                 println!("leverage_change_handle error {:?}", error);
+        //             }
+        //         }
+        //     }
+        // });
 
         let signal_listener = self.signal_listener.clone();
         let current_trade_listener = self.current_trade_listener.clone();
@@ -137,7 +137,7 @@ impl Trader {
             trading_data_listener,
             current_balance_listener,
             trading_settings_arc,
-            self.is_data_gather_only
+            self.is_data_gather_only,
         )
         .await;
 
@@ -247,18 +247,18 @@ async fn get_current_trade_update_handle(
                     let close_order = current_trade.clone().close_order.unwrap();
                     let (pnl, returns) = current_trade.calculate_pnl_and_returns();
                     println!(
-                        "\n{:?} | 📕 Closed Order {:?} position ({:?} units), profit/loss: {}, returns: {}",
+                        "\n{:?} | 📕 Closed Order {:?} side ({:?} units), profit/loss: {}, returns: {}",
                         current_datetime(),
-                        Side::from(current_trade.open_order.position),
+                        current_trade.open_order.side,
                         &close_order.units,
                         pnl,
                         returns
                     );
                 } else {
                     println!(
-                        "\n{:?} | ❌ Current Order position {:?} cancelled successfully!",
+                        "\n{:?} | ❌ Current Order side {:?} cancelled successfully!",
                         current_datetime(),
-                        Side::from(current_trade.open_order.position),
+                        current_trade.open_order.side,
                     );
                 }
 
@@ -354,11 +354,11 @@ async fn process_last_signal(
         let current_trade_status = current_trade.status();
         match current_trade_status {
             TradeStatus::New => {
-                if (signal == SignalCategory::CloseLong && current_trade.open_order.position == 1)
+                if (signal == SignalCategory::CloseLong && current_trade.open_order.side == Side::Buy)
                     || (signal == SignalCategory::CloseShort
-                        && current_trade.open_order.position == -1)
+                        && current_trade.open_order.side == Side::Sell)
                     || (signal == SignalCategory::ClosePosition
-                        && current_trade.open_order.position != 0)
+                        && current_trade.open_order.side != Side::Nil)
                 {
                     match exchange
                         .cancel_order(current_trade.open_order.id.clone())
@@ -368,8 +368,8 @@ async fn process_last_signal(
                             if cancel_result {
                                 println!(
                                     "\n{:?} | ⚠️ Current order {:?} position, without executions, will be cancelled as it received a close signal.",
-                                    current_datetime(),
-                                    Side::from(current_trade.open_order.position)
+                                    current_datetime(), 
+                                    current_trade.open_order.side
                                 );
                                 Ok(())
                             } else {
@@ -385,8 +385,8 @@ async fn process_last_signal(
                         }
                     }
                 } else if (signal == SignalCategory::GoLong
-                    && current_trade.open_order.position == -1)
-                    || (signal == SignalCategory::GoShort && current_trade.open_order.position == 1)
+                    && current_trade.open_order.side == Side::Sell)
+                    || (signal == SignalCategory::GoShort && current_trade.open_order.side == Side::Buy)
                 {
                     match exchange
                         .cancel_order(current_trade.open_order.id.clone())
@@ -397,7 +397,7 @@ async fn process_last_signal(
                                 println!(
                                     "\n{:?} | ⚠️ Current idle order {:?} position, without executions, will be cancelled as it received an opposite side open signal.",
                                     current_datetime(),
-                                    Side::from(current_trade.open_order.position)
+                                    current_trade.open_order.side
                                 );
 
                                 let wallet_balance = current_balance.value().wallet_balance;
@@ -419,7 +419,7 @@ async fn process_last_signal(
                                         println!(
                                             "\n{:?} | ♻️ Current idle order, {:?} position, will be recycled as it received an opposite side open signal.",
                                             current_datetime(),
-                                            Side::from(current_trade.open_order.position)
+                                            current_trade.open_order.side
                                         );
                                         Ok(())
                                     }
@@ -489,9 +489,7 @@ async fn process_last_signal(
                 match exchange
                     .try_close_position(
                         &current_trade,
-                        trading_settings.close_order_type,
                         last_price,
-                        trading_settings.position_lock_modifier,
                     )
                     .await
                 {
@@ -566,12 +564,8 @@ async fn open_order(
     match exchange
         .open_order(
             side,
-            trading_settings.open_order_type.clone(),
             allocation,
             last_price,
-            leverage_factor,
-            stop_loss_percentage_opt,
-            take_profit_percentage_opt,
         )
         .await
     {
@@ -807,7 +801,7 @@ async fn get_update_order_handle(
                                                 "\n{:?} | {} Position {:?} was stopped. Profit and loss = {}, returns = {}",
                                                 current_datetime(),
                                                 icon,
-                                                Side::from(updated_trade.open_order.position),
+                                                updated_trade.open_order.side,
                                                 pnl,
                                                 returns
                                             );
@@ -845,13 +839,11 @@ async fn get_update_order_handle(
                                 println!(
                                     "\n{:?} | 📖 Opened {:?} order ({:?} units)",
                                     current_datetime(),
-                                    Side::from(updated_order.position),
+                                    updated_order.side,
                                     &updated_order.units,
                                 );
 
                                 let new_trade = Trade::new(
-                                    &updated_order.symbol.clone(),
-                                    trading_settings_guard.leverage.get_factor(),
                                     updated_order,
                                     None,
                                 );
@@ -1098,7 +1090,7 @@ fn update_trading_data(
                     units_vec[index] = Some(current_units);
                     pnl_vec[index] = Some(profit_and_loss);
                     returns_vec[index] = Some(current_returns);
-                    positions_vec[index] = Some(current_trade.open_order.position);
+                    positions_vec[index] = Some(current_trade.open_order.side.into());
                 }
             }
         }

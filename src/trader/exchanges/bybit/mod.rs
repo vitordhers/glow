@@ -23,6 +23,7 @@ use crate::trader::models::contract::Contract;
 use crate::trader::models::execution::Execution;
 use crate::trader::models::order::Order;
 use crate::trader::models::trade::Trade;
+use crate::trader::models::trading_settings::TradingSettings;
 use crate::trader::traits::exchange::Exchange;
 use crate::trader::traits::ws_processer::WsProcesser;
 
@@ -35,6 +36,7 @@ use serde_json::{from_str, Value};
 use serde_urlencoded::to_string;
 use std::collections::HashMap;
 use std::env::{self};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::sleep;
@@ -57,6 +59,7 @@ pub mod tests;
 pub struct BybitExchange {
     pub name: String,
     pub contracts: HashMap<String, Contract>,
+    pub trading_settings_arc: Arc<Mutex<TradingSettings>>,
     anchor_contract_symbol: String,
     traded_contract_symbol: String,
     pub maker_fee_rate: f64,
@@ -74,6 +77,7 @@ impl BybitExchange {
         contracts: HashMap<String, Contract>,
         anchor_contract_symbol: String,
         traded_contract_symbol: String,
+        trading_settings_arc: &Arc<Mutex<TradingSettings>>,
         maker_fee_rate: f64,
         taker_fee_rate: f64,
     ) -> Self {
@@ -100,6 +104,7 @@ impl BybitExchange {
         Self {
             name,
             contracts,
+            trading_settings_arc: trading_settings_arc.clone(),
             anchor_contract_symbol,
             traded_contract_symbol,
             maker_fee_rate,
@@ -172,6 +177,7 @@ impl Exchange for BybitExchange {
         Box::new(Self {
             name: self.name.clone(),
             contracts: self.contracts.clone(),
+            trading_settings_arc: self.trading_settings_arc.clone(),
             anchor_contract_symbol: self.anchor_contract_symbol.clone(),
             traded_contract_symbol: self.traded_contract_symbol.clone(),
             maker_fee_rate: self.maker_fee_rate,
@@ -198,6 +204,10 @@ impl Exchange for BybitExchange {
 
     fn get_traded_contract(&self) -> &Contract {
         self.contracts.get(&self.traded_contract_symbol).unwrap()
+    }
+
+    fn get_trading_settings(&self) -> TradingSettings {
+        self.trading_settings_arc.lock().unwrap().clone()
     }
 
     fn get_current_symbols(&self) -> Vec<String> {
@@ -258,7 +268,14 @@ impl Exchange for BybitExchange {
 
     fn get_processer(&self) -> Box<dyn WsProcesser + Send + Sync + 'static> {
         let traded_symbol = self.get_traded_contract().symbol.clone();
-        Box::new(BybitWsProcesser::new(traded_symbol))
+        let trading_settings = self.get_trading_settings();
+        let leverage_factor = trading_settings.leverage.get_factor();
+        let taker_fee = self.get_taker_fee();
+        Box::new(BybitWsProcesser::new(
+            traded_symbol,
+            leverage_factor,
+            taker_fee,
+        ))
     }
 
     async fn fetch_order_executions(
@@ -421,7 +438,14 @@ impl Exchange for BybitExchange {
 
                         if let Some(order_response) = order_response_opt {
                             let executed_qty = order_response.cum_exec_qty;
-                            let mut order: Order = order_response.into();
+                            let trading_settings = self.get_trading_settings();
+                            let leverage_factor = trading_settings.leverage.get_factor();
+
+                            let mut order: Order = order_response.new_order_from_response_data(
+                                leverage_factor,
+                                self.get_taker_fee(),
+                            );
+
                             let mut executions = vec![];
                             if fetch_executions && executed_qty > 0.0 {
                                 let fetched_executions = self
@@ -521,8 +545,9 @@ impl Exchange for BybitExchange {
                                     if let Some(order_response) = order_response_opt {
                                         let mut executions = vec![];
                                         let executed_qty = order_response.cum_exec_qty;
-
-                                        let mut order: Order = order_response.into();
+                                        let trading_settings = self.get_trading_settings();
+                                        let leverage_factor = trading_settings.leverage.get_factor();
+                                        let mut order: Order = order_response.new_order_from_response_data(leverage_factor, self.get_taker_fee());
 
                                         if fetch_executions && executed_qty > 0.0 {
                                             let fetched_executions = self
@@ -643,7 +668,7 @@ impl Exchange for BybitExchange {
                     let position_response_opt = parsed_response.result.list.into_iter().next();
 
                     if let Some(position) = position_response_opt {
-                        if position.side == Side::None {
+                        if position.side == Side::Nil {
                             return Ok(None);
                         } else {
                             let latest_order = self
@@ -671,12 +696,7 @@ impl Exchange for BybitExchange {
                                 }
                             }
 
-                            let trade = Trade::new(
-                                &traded_symbol,
-                                position.leverage,
-                                open_order,
-                                close_order,
-                            );
+                            let trade = Trade::new(open_order, close_order);
 
                             Ok(Some(trade))
                         }
@@ -777,10 +797,15 @@ impl Exchange for BybitExchange {
                                         }
                                     }
                                 }
-                                OrderStatus::PartiallyClosed | OrderStatus::Closed => {
+                                OrderStatus::PartiallyClosed
+                                | OrderStatus::Closed
+                                | OrderStatus::StoppedBR
+                                | OrderStatus::StoppedSL
+                                | OrderStatus::StoppedTP
+                                | OrderStatus::StoppedTSL => {
                                     let error = format!(
-                                        r#"fetch_trade_state -> TradeStatus::New -> open order has OrderStatus::PartiallyClosed | OrderStatus::Closed status {:?}"#,
-                                        open_order
+                                        r#"fetch_trade_state -> TradeStatus::New -> open order has {:?} status"#,
+                                        last_status
                                     );
                                     return Err(Error::CustomError(CustomError::new(error)));
                                 }
@@ -806,10 +831,15 @@ impl Exchange for BybitExchange {
                                         }
                                     }
                                 }
-                                OrderStatus::PartiallyClosed | OrderStatus::Closed => {
+                                OrderStatus::PartiallyClosed
+                                | OrderStatus::Closed
+                                | OrderStatus::StoppedBR
+                                | OrderStatus::StoppedSL
+                                | OrderStatus::StoppedTP
+                                | OrderStatus::StoppedTSL => {
                                     let error = format!(
-                                        r#"fetch_trade_state -> TradeStatus::PartiallyOpen -> open order has OrderStatus::PartiallyClosed | OrderStatus::Closed status {:?}"#,
-                                        open_order
+                                        r#"fetch_trade_state -> TradeStatus::PartiallyOpen -> open order has {:?} status"#,
+                                        last_status
                                     );
                                     return Err(Error::CustomError(CustomError::new(error)));
                                 }
@@ -833,8 +863,7 @@ impl Exchange for BybitExchange {
                             }
                         }
 
-                        let trade =
-                            Trade::new(&traded_symbol, position.leverage, open_order, close_order);
+                        let trade = Trade::new(open_order, close_order);
 
                         Ok(trade)
 
@@ -1024,16 +1053,14 @@ impl Exchange for BybitExchange {
     async fn open_order(
         &self,
         side: Side,
-        order_type: OrderType,
         amount: f64,
         expected_price: f64,
-        leverage_factor: f64,
-        stop_loss_percentage_opt: Option<f64>,
-        take_profit_percentage_opt: Option<f64>,
     ) -> Result<Order, Error> {
+        let trading_settings = self.get_trading_settings();
         let traded_contract = self.get_traded_contract();
+
         let mut expected_price = expected_price;
-        if order_type == OrderType::Limit {
+        if trading_settings.open_order_type == OrderType::Limit {
             if side == Side::Sell {
                 // add last price marginally in order to realize maker_fee
                 let tick_decimals = count_decimal_places(traded_contract.tick_size);
@@ -1059,26 +1086,18 @@ impl Exchange for BybitExchange {
             return Err(error);
         }
 
-        let order = self.create_new_open_order(
-            order_type,
-            side,
-            amount,
-            leverage_factor,
-            expected_price,
-            stop_loss_percentage_opt,
-            take_profit_percentage_opt,
-        );
+        let mut order = self.create_open_order(side, amount, expected_price)?;
 
-        if order.is_none() {
-            let error = Error::CustomError(CustomError::new(format!(
-                "open_order -> open order wasn't created!"
-            )));
+        // if order.is_none() {
+        //     let error = Error::CustomError(CustomError::new(format!(
+        //         "open_order -> open order wasn't created!"
+        //     )));
 
-            println!("{:?}", error);
-            return Err(error);
-        }
+        //     println!("{:?}", error);
+        //     return Err(error);
+        // }
 
-        let mut order = order.unwrap();
+        // let mut order = order.unwrap();
 
         let http = self.get_http_client();
         let timestamp = Utc::now().timestamp() * 1000;
@@ -1260,21 +1279,17 @@ impl Exchange for BybitExchange {
         }
     }
 
-    async fn try_close_position(
-        &self,
-        trade: &Trade,
-        close_order_type: OrderType,
-        est_price: f64,
-        position_lock_modifier: PositionLock,
-    ) -> Result<Order, Error> {
+    async fn try_close_position(&self, trade: &Trade, est_price: f64) -> Result<Order, Error> {
         let mut est_price = est_price;
         let traded_contract = self.get_traded_contract();
+        let trading_settings = self.get_trading_settings();
+        let close_order_type = trading_settings.close_order_type;
 
         if close_order_type == OrderType::Limit {
-            if trade.open_order.position == -1 {
+            if trade.open_order.side == Side::Sell {
                 // close order will have open order opposite side, subtract last price marginally in order to realize maker_fee
                 est_price -= traded_contract.minimum_order_size
-            } else if trade.open_order.position == 1 {
+            } else if trade.open_order.side == Side::Buy {
                 // close order will have open order opposite side, add last price marginally in order to realize maker_fee
                 est_price += traded_contract.minimum_order_size;
             }
@@ -1286,11 +1301,11 @@ impl Exchange for BybitExchange {
             self.maker_fee_rate
         };
 
-        let mut close_order = trade.new_close_order(close_order_type, est_price);
+        let mut close_order = trade.new_close_order(close_order_type, est_price)?;
 
         // println!("try_close_position -> close order = {:?}", close_order);
 
-        match position_lock_modifier {
+        match trading_settings.position_lock_modifier {
             PositionLock::Nil => {}
             PositionLock::Fee => {
                 // since we didn't assign close_order to trade, it makes sense to get unrealized profit and loss
@@ -1551,16 +1566,227 @@ impl Exchange for BybitExchange {
         }
     }
 
-    fn create_new_open_order(
+    fn create_open_order(&self, side: Side, order_cost: f64, price: f64) -> Result<Order, Error> {
+        let trading_settings = self.get_trading_settings();
+        let leverage_factor = trading_settings.leverage.get_factor();
+        let open_order_type = trading_settings.open_order_type;
+        let (units, balance_remainder) =
+            self.calculate_open_order_units_and_balance_remainder(side, order_cost, price)?;
+
+        let ((open_fee, _), fee_rate, is_maker) =
+            self.calculate_order_fees(open_order_type, side, units, price);
+
+        let contract = self.get_traded_contract();
+
+        let timestamp = Utc::now().timestamp() * 1000;
+        let id = format!(
+            "{}_{}_{}",
+            &contract.symbol,
+            timestamp,
+            OrderStage::Open.to_string()
+        );
+        let position: i32 = side.into();
+        let avg_price = if open_order_type == OrderType::Limit {
+            Some(price)
+        } else {
+            None
+        };
+        let stop_loss_price = self.calculate_order_stop_loss_price(side, price);
+
+        let take_profit_price = self.calculate_order_take_profit_price(side, price);
+
+        let time_in_force = if open_order_type == OrderType::Limit {
+            TimeInForce::GTC
+        } else {
+            TimeInForce::IOC
+        };
+
+        let order = Order::new(
+            "".to_string(),
+            id,
+            contract.symbol.clone(),
+            OrderStatus::StandBy,
+            open_order_type.clone(),
+            side,
+            time_in_force,
+            units,
+            leverage_factor,
+            stop_loss_price,
+            take_profit_price,
+            avg_price,
+            vec![],
+            self.get_taker_fee(),
+            balance_remainder,
+            false,
+            false,
+            timestamp,
+            timestamp,
+        );
+        Ok(order)
+    }
+
+    fn create_benchmark_open_order(
         &self,
-        order_type: OrderType,
+        timestamp: i64,
         side: Side,
-        amount: f64,
-        leverage_factor: f64,
+        order_cost: f64,
         price: f64,
-        stop_loss_percentage_opt: Option<f64>,
-        take_profit_percentage_opt: Option<f64>,
-    ) -> Option<Order> {
+    ) -> Result<Order, Error> {
+        let trading_settings = self.get_trading_settings();
+        let leverage_factor = trading_settings.leverage.get_factor();
+        let open_order_type = trading_settings.open_order_type;
+        let (units, balance_remainder) =
+            self.calculate_open_order_units_and_balance_remainder(side, order_cost, price)?;
+
+        let ((open_fee, _), fee_rate, is_maker) =
+            self.calculate_order_fees(open_order_type, side, units, price);
+
+        let contract = self.get_traded_contract();
+
+        let id = format!(
+            "{}_{}_{}",
+            &contract.symbol,
+            timestamp,
+            OrderStage::Open.to_string()
+        );
+
+        let avg_price = Some(price);
+
+        let stop_loss_price = self.calculate_order_stop_loss_price(side, price);
+
+        let take_profit_price = self.calculate_order_take_profit_price(side, price);
+
+        let time_in_force = if open_order_type == OrderType::Limit {
+            TimeInForce::GTC
+        } else {
+            TimeInForce::IOC
+        };
+
+        let order_uuid = format!("benchmark_open_order_{}", timestamp);
+
+        let benchmark_execution = Execution::new(
+            id.clone(),
+            order_uuid.clone(),
+            open_order_type,
+            timestamp,
+            price,
+            units,
+            open_fee,
+            fee_rate,
+            is_maker,
+            0.0,
+        );
+
+        let order = Order::new(
+            order_uuid,
+            id,
+            contract.symbol.clone(),
+            OrderStatus::Filled,
+            open_order_type,
+            side,
+            time_in_force,
+            units,
+            leverage_factor,
+            stop_loss_price,
+            take_profit_price,
+            avg_price,
+            vec![benchmark_execution],
+            self.get_taker_fee(),
+            balance_remainder,
+            false,
+            false,
+            timestamp,
+            timestamp,
+        );
+        Ok(order)
+    }
+
+    fn create_benchmark_close_order(
+        &self,
+        timestamp: i64,
+        trade_id: &String,
+        close_price: f64,
+        open_order: Order,
+        final_status: OrderStatus,
+    ) -> Result<Order, Error> {
+        let trading_settings = self.get_trading_settings();
+        let close_order_type = match final_status {
+            OrderStatus::StoppedBR
+            | OrderStatus::StoppedSL
+            | OrderStatus::StoppedTP
+            | OrderStatus::StoppedTSL => trading_settings.close_order_type,
+            _ => OrderType::Market,
+        };
+        let id = format!("{}_{}", trade_id, OrderStage::Close.to_string());
+        let time_in_force = if close_order_type == OrderType::Market {
+            TimeInForce::IOC
+        } else {
+            TimeInForce::GTC
+        };
+
+        let close_side = open_order.side.get_opposite_side()?;
+
+        let ((_, close_fee), fee_rate, is_maker) =
+            self.calculate_order_fees(close_order_type, close_side, open_order.units, close_price);
+
+        let order_uuid = format!("pending_order_uuid_{}", timestamp);
+
+        let benchmark_execution = Execution::new(
+            id.clone(),
+            order_uuid.clone(),
+            close_order_type,
+            timestamp,
+            close_price,
+            open_order.units,
+            close_fee,
+            fee_rate,
+            is_maker,
+            open_order.units,
+        );
+
+        let executions = vec![benchmark_execution];
+
+        let avg_price = Some(close_price);
+
+        let is_stop = final_status == OrderStatus::StoppedBR
+            || final_status == OrderStatus::StoppedSL
+            || final_status == OrderStatus::StoppedTP
+            || final_status == OrderStatus::StoppedTSL;
+
+        let order = Order::new(
+            order_uuid,
+            id,
+            open_order.symbol.clone(),
+            final_status,
+            close_order_type,
+            close_side,
+            time_in_force,
+            open_order.units,
+            open_order.leverage_factor,
+            None,
+            None,
+            avg_price,
+            executions,
+            0.0,
+            0.0,
+            true,
+            is_stop,
+            timestamp,
+            timestamp,
+        );
+
+        Ok(order)
+    }
+
+    fn calculate_open_order_units_and_balance_remainder(
+        &self,
+        side: Side,
+        order_cost: f64,
+        price: f64,
+    ) -> Result<(f64, f64), Error> {
+        let trading_settings = self.get_trading_settings();
+        let leverage_factor = trading_settings.leverage.get_factor();
+        let open_order_type = trading_settings.open_order_type;
         // Order Cost = Initial Margin + Fee to Open Position + Fee to Close Position
         // Initial Margin = (Order Price × Order Quantity) / Leverage
         // Fee to Open Position = Order Quantity × Order Price × Taker Fee Rate
@@ -1569,23 +1795,25 @@ impl Exchange for BybitExchange {
 
         // _balance / ((price / leverage_factor) + (price * fee_rate) + (default_price * fee_rate))
         let contract = self.get_traded_contract();
-        let (maker_fee_rate, taker_fee_rate) = (self.get_maker_fee(), self.get_taker_fee());
-        let fee_rate = if order_type == OrderType::Limit {
-            maker_fee_rate
-        } else {
+        let taker_fee_rate = self.get_taker_fee();
+
+        // let (fee_rate, is_maker) = self.get_order_fee_rate(open_order_type);
+
+        let fee_position_modifier = if side == Side::Sell {
             taker_fee_rate
-        };
-
-        let position_mod = if side == Side::Sell {
-            fee_rate
         } else if side == Side::Buy {
-            -fee_rate
+            -taker_fee_rate
         } else {
-            return None;
+            let error = format!(
+                "calculate_order_units_and_balance_remainder -> Invalid side {:?}",
+                side
+            );
+            return Err(Error::CustomError(CustomError::new(error)));
         };
 
-        let mut units = amount * leverage_factor
-            / (price * (((2.0 * fee_rate) * leverage_factor) + (1.0 + position_mod)));
+        let mut units = order_cost * leverage_factor
+            / (price
+                * (((2.0 * taker_fee_rate) * leverage_factor) + (1.0 + fee_position_modifier)));
 
         let fract_units = calculate_remainder(units, contract.minimum_order_size);
 
@@ -1599,64 +1827,96 @@ impl Exchange for BybitExchange {
             || leverage_factor > contract.max_leverage
         {
             println!("Some contract constraints stopped the order from being placed");
+            let error;
             if units == 0.0 {
-                println!("units == 0.0 -> {}", units == 0.0)
-            };
-            if units < contract.minimum_order_size {
-                println!(
+                error = format!("units == 0.0 -> {}", units == 0.0);
+            } else if units < contract.minimum_order_size {
+                error = format!(
                     "units < contract.minimum_order_size -> {} | units = {}, minimum order size = {}",
                     units < contract.minimum_order_size,
                     units,
                     contract.minimum_order_size
                 );
-            }
-            if units > contract.maximum_order_size {
-                println!(
+            } else if units > contract.maximum_order_size {
+                error = format!(
                     "units > contract.maximum_order_size -> {} | units = {}, maximum order size = {}",
                     units > contract.maximum_order_size,
                     units,
                     contract.maximum_order_size
                 );
+            } else if leverage_factor > contract.max_leverage {
+                error = format!(
+                        "leverage_factor > contract.max_leverage -> {}  | leverage_factor = {}, max_leverage = {}",
+                        leverage_factor > contract.max_leverage,
+                        leverage_factor,
+                        contract.max_leverage
+                    );
             }
-            if leverage_factor > contract.max_leverage {
-                println!(
-                    "leverage_factor > contract.max_leverage -> {}  | leverage_factor = {}, max_leverage = {}",
-                    leverage_factor > contract.max_leverage,
-                    leverage_factor,
-                    contract.max_leverage
-                );
-            }
-            return None;
+            let error = format!("calculate_order_units -> Invalid side {:?}", side);
+
+            return Err(Error::CustomError(CustomError::new(error)));
         }
 
-        // let balance_remainder = fract_units * price / leverage_factor;
+        let balance_remainder = fract_units * price / leverage_factor;
         // let open_fee = units * price * fee_rate;
-        // let bankruptcy_price = if side == -1 {
+        // let bankruptcy_price = if side == Side::Sell {
         //     // Bankruptcy Price for Short Position = Order Price × ( Leverage + 1) / Leverage
         //     price * (leverage_factor + 1.0) / leverage_factor
-        // } else if position == 1 {
+        // } else if side == Side::Buy {
         //     // Bankruptcy Price for Long Position = Order Price × ( Leverage − 1) / Leverage
         //     price * (leverage_factor - 1.0) / leverage_factor
         // } else {
         //     0.0
         // };
         // let close_fee = units * bankruptcy_price * fee_rate;
-        let timestamp = Utc::now().timestamp() * 1000;
-        // let symbol = contract.symbol;
-        let id = format!(
-            "{}_{}_{}",
-            &contract.symbol,
-            timestamp,
-            OrderStage::Open.to_string()
-        );
-        let position: i32 = side.into();
-        let avg_price = if order_type == OrderType::Limit {
-            Some(price)
+
+        return Ok((units, balance_remainder));
+    }
+
+    fn get_order_fee_rate(&self, order_type: OrderType) -> (f64, bool) {
+        let maker_fee_rate = self.get_maker_fee();
+        let taker_fee_rate = self.get_taker_fee();
+
+        if order_type == OrderType::Limit {
+            (maker_fee_rate, true)
         } else {
-            None
+            (taker_fee_rate, false)
+        }
+    }
+
+    fn calculate_order_fees(
+        &self,
+        order_type: OrderType,
+        side: Side,
+        units: f64,
+        price: f64,
+    ) -> ((f64, f64), f64, bool) {
+        let trading_settings = self.get_trading_settings();
+        let leverage_factor = trading_settings.leverage.get_factor();
+        let (fee_rate, is_maker) = self.get_order_fee_rate(order_type);
+        let open_fee = units * price * fee_rate;
+        let bankruptcy_price = if side == Side::Sell {
+            // Bankruptcy Price for Short Position = Order Price × ( Leverage + 1) / Leverage
+            price * (leverage_factor + 1.0) / leverage_factor
+        } else if side == Side::Buy {
+            // Bankruptcy Price for Long Position = Order Price × ( Leverage − 1) / Leverage
+            price * (leverage_factor - 1.0) / leverage_factor
+        } else {
+            0.0
         };
-        let stop_loss_price_opt = match stop_loss_percentage_opt {
-            Some(stop_loss_percentage) => {
+        let close_fee = units * bankruptcy_price * fee_rate;
+
+        ((open_fee, close_fee), fee_rate, is_maker)
+    }
+
+    fn calculate_order_stop_loss_price(&self, side: Side, price: f64) -> Option<f64> {
+        let contract = self.get_traded_contract();
+        let trading_settings = self.get_trading_settings();
+        let stop_loss = trading_settings.price_level_modifier_map.get("sl");
+        let leverage_factor = trading_settings.leverage.get_factor();
+        match stop_loss {
+            Some(stop_loss) => {
+                let stop_loss_percentage = stop_loss.get_percentage();
                 // short
                 // factor 60%
                 // price * (leverage_factor + (1.0 * stop_loss_percentage)) / leverage_factor
@@ -1695,9 +1955,17 @@ impl Exchange for BybitExchange {
                 Some(stop_loss_price)
             }
             None => None,
-        };
-        let take_profit_price_opt = match take_profit_percentage_opt {
-            Some(take_profit_percentage) => {
+        }
+    }
+
+    fn calculate_order_take_profit_price(&self, side: Side, price: f64) -> Option<f64> {
+        let contract = self.get_traded_contract();
+        let trading_settings = self.get_trading_settings();
+        let take_profit = trading_settings.price_level_modifier_map.get("tp");
+        let leverage_factor = trading_settings.leverage.get_factor();
+        match take_profit {
+            Some(take_profit) => {
+                let take_profit_percentage = take_profit.get_percentage();
                 // short
                 // factor 80%
                 // price * (leverage_factor - (1.0 * take_profit_percentage)) / leverage_factor
@@ -1736,31 +2004,7 @@ impl Exchange for BybitExchange {
                 Some(take_profit_price)
             }
             None => None,
-        };
-        let time_in_force = if order_type == OrderType::Limit {
-            TimeInForce::GTC
-        } else {
-            TimeInForce::IOC
-        };
-        let order = Order::new(
-            "".to_string(),
-            id,
-            contract.symbol.clone(),
-            OrderStatus::StandBy,
-            false,
-            false,
-            order_type.clone(),
-            position,
-            units,
-            avg_price,
-            vec![],
-            stop_loss_price_opt,
-            take_profit_price_opt,
-            time_in_force,
-            timestamp,
-            timestamp,
-        );
-        Some(order)
+        }
     }
 
     fn get_ws_ping_interval(&self) -> u64 {
@@ -1782,11 +2026,17 @@ impl Exchange for BybitExchange {
 
 struct BybitWsProcesser {
     traded_symbol: String,
+    leverage_factor: f64,
+    taker_fee_rate: f64,
 }
 
 impl BybitWsProcesser {
-    fn new(traded_symbol: String) -> Self {
-        BybitWsProcesser { traded_symbol }
+    fn new(traded_symbol: String, leverage_factor: f64, taker_fee_rate: f64) -> Self {
+        BybitWsProcesser {
+            traded_symbol,
+            leverage_factor,
+            taker_fee_rate,
+        }
     }
 }
 
@@ -1830,10 +2080,16 @@ impl WsProcesser for BybitWsProcesser {
                 match order_response_opt {
                     Some(order_response) => {
                         if order_response.is_cancel() {
-                            let cancelled_order = order_response.into();
+                            let cancelled_order = order_response.new_order_from_response_data(
+                                self.leverage_factor,
+                                self.taker_fee_rate,
+                            );
                             ProcesserAction::CancelOrder { cancelled_order }
                         } else {
-                            let updated_order: Order = order_response.into();
+                            let updated_order: Order = order_response.new_order_from_response_data(
+                                self.leverage_factor,
+                                self.taker_fee_rate,
+                            );
                             if updated_order.is_stop {
                                 ProcesserAction::StopOrder {
                                     stop_order: updated_order,

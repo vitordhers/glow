@@ -6,11 +6,11 @@ use serde::Deserialize;
 use std::fmt::Debug;
 
 use crate::trader::constants::DAY_IN_MS;
-use crate::trader::functions::{get_symbol_close_col, round_down_nth_decimal};
+use crate::trader::functions::{get_symbol_ohlc_cols, round_down_nth_decimal};
 use crate::trader::models::behavior_subject::BehaviorSubject;
 use crate::trader::traits::exchange::Exchange;
 use crate::{shared::csv::save_csv, trader::errors::Error};
-use std::env;
+use std::{env, fmt};
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -120,7 +120,9 @@ impl Performance {
         );
 
         let trading_journey_start = self.trading_initial_datetime.timestamp_millis();
-        let filter_mask = trading_data.column("start_time")?.gt_eq(trading_journey_start)?;
+        let filter_mask = trading_data
+            .column("start_time")?
+            .gt_eq(trading_journey_start)?;
         let trading_data = trading_data.filter(&filter_mask)?;
 
         let path = get_current_env_log_path();
@@ -168,7 +170,7 @@ pub fn calculate_benchmark_data(
 
     let benchmark_stats = calculate_trading_stats(&df, risk_free_returns)?;
 
-    println!("\n Benchmark stats {:?}", benchmark_stats);
+    println!("\n📋 Benchmark stats \n{}", benchmark_stats);
 
     Ok((df, benchmark_stats))
 }
@@ -237,7 +239,7 @@ pub fn calculate_trading_sessions(
             .otherwise(col("session"))
             .keep_name(),
         );
-    let price_col = get_symbol_close_col(traded_symbol);
+    let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(traded_symbol);
 
     // let file_name = "trades_lf.csv".to_string();
     // let trades_df = lf.clone().collect()?;
@@ -248,10 +250,10 @@ pub fn calculate_trading_sessions(
     let aggs = [
         col("start_time").first().alias("start"),
         col("start_time").last().alias("end"),
-        col(&price_col).first().alias("start_price"),
-        col(&price_col).last().alias("end_price"),
-        col(&price_col).min().alias("min_price"),
-        col(&price_col).max().alias("max_price"),
+        col(&open_col).first().alias("start_price"),
+        col(&close_col).last().alias("end_price"),
+        col(&low_col).min().alias("min_price"),
+        col(&high_col).max().alias("max_price"),
         col("action").last().alias("close_signal"),
         col("position").first().alias("position"),
         col("returns").last().keep_name(),
@@ -361,8 +363,11 @@ pub fn calculate_trading_stats(
     let downside_risk_series = df.column("downside_risk")?;
     let drawdown_series = df.column("drawdown")?;
     let balance_series = df.column("balance")?;
+    let current_balance = df.column("balance")?.f64()?.tail(Some(1)).to_vec()[0].unwrap();
+    let current_balance = round_down_nth_decimal(current_balance, 6);
 
     let success_rate = calculate_success_rate(returns_series)?;
+
     let risk = risk_series.mean().unwrap_or_default();
     let downside_deviation = downside_risk_series.mean().unwrap_or_default();
 
@@ -377,6 +382,7 @@ pub fn calculate_trading_stats(
 
     Ok(Statistics::new(
         success_rate,
+        current_balance,
         risk,
         downside_deviation,
         risk_adjusted_return,
@@ -533,6 +539,7 @@ pub async fn get_latest_us_treasury_bills_yearly_rate(http: &Client) -> Result<f
 #[derive(Clone, Debug)]
 pub struct Statistics {
     success_rate: f64,
+    current_balance: f64,
     risk: f64,
     downside_deviation: f64,
     risk_adjusted_return: f64,
@@ -543,9 +550,40 @@ pub struct Statistics {
     calmar_ratio: f64,
 }
 
+impl fmt::Display for Statistics {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            r#"
+🏆 Success rate (%): {:.2}
+💰 Last balance (USDT): {:.4}
+📊 Risk: {:.6}
+📐 Downside deviation: {:.6}
+📏 Risk adjusted return: {:.6}
+📉 Max drawndown (%): {:.4}
+⏳ Max drawdown duration: {}h{}
+📝 Sharpe: {:.2}
+📝 Sortino: {:.2}
+📝 Calmar: {:.2}"#,
+            self.success_rate,
+            self.current_balance,
+            self.risk,
+            self.downside_deviation,
+            self.risk_adjusted_return,
+            self.max_drawdown,
+            self.max_drawdown_duration.num_hours(),
+            self.max_drawdown_duration.num_minutes() % 60,
+            self.sharpe_ratio,
+            self.sortino_ratio,
+            self.calmar_ratio
+        )
+    }
+}
+
 impl Statistics {
     fn new(
         success_rate: f64,
+        current_balance: f64,
         risk: f64,
         downside_deviation: f64,
         risk_adjusted_return: f64,
@@ -557,6 +595,7 @@ impl Statistics {
     ) -> Self {
         Statistics {
             success_rate,
+            current_balance,
             risk,
             downside_deviation,
             risk_adjusted_return,
@@ -573,6 +612,7 @@ impl Default for Statistics {
     fn default() -> Self {
         Self {
             success_rate: 0.0,
+            current_balance: 0.0,
             risk: 0.0,
             downside_deviation: 0.0,
             risk_adjusted_return: 0.0,

@@ -123,6 +123,10 @@ pub fn get_symbol_ohlc_cols(symbol: &String) -> (String, String, String, String)
     return (open_col, high_col, low_col, close_col);
 }
 
+pub fn get_symbol_open_col(symbol: &String) -> String {
+    format!("{}_open", symbol)
+}
+
 pub fn get_symbol_close_col(symbol: &String) -> String {
     format!("{}_close", symbol)
 }
@@ -751,4 +755,11 @@ pub async fn update_position_data_on_faulty_exchange_ws(
     // let update_action = UpdateAction::Balance(balance);
     update_balance_listener.next(Some(balance));
     Ok(())
+}
+
+pub fn closest_multiple_below(of: f64, to: f64) -> f64 {
+    // println!("@@@@ closest_multiple_below of {}, to {} ", of, to);
+    let quotient = to / of;
+    let floored = quotient.floor();
+    floored * of
 }

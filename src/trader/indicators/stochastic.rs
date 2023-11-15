@@ -1,11 +1,11 @@
 use chrono::{NaiveDateTime, Timelike};
 use polars::prelude::*;
 
-use crate::trader::{
+use crate::{trader::{
     errors::Error,
     functions::{get_symbol_ohlc_cols, get_symbol_window_ohlc_cols, round_down_nth_decimal},
     traits::indicator::{forward_fill_lf, get_resampled_ohlc_window_data, Indicator},
-};
+}, shared::csv::save_csv};
 
 use super::functions::get_calculation_minutes;
 
@@ -104,7 +104,7 @@ impl Indicator for StochasticIndicator {
             let lowest_col = &format!("rolling_{}_lowest_{}", k_window, window);
             let highest_col = &format!("rolling_{}_highest_{}", k_window, window);
 
-            let resampled_lf = resampled_data
+            let mut resampled_lf = resampled_data
                 .with_columns([
                     col(&high_col)
                         .rolling_max(rolling_k_opts.clone())
@@ -124,7 +124,7 @@ impl Indicator for StochasticIndicator {
                 )
                 .with_column(
                     col(&k_non_shifted_column)
-                        .shift(1)
+                        // .shift(1)
                         .round(2)
                         .alias(&k_column),
                 )
@@ -137,19 +137,19 @@ impl Indicator for StochasticIndicator {
                         .alias(&d_non_shifted_column),
                 ]);
 
-            // let log_df = resampled_lf.clone().collect()?;
+            let log_df = resampled_lf.clone().collect()?;
 
-            // let path = "data/test".to_string();
-            // let file_name = format!("log_resampled_window_{}.csv", window);
-            // save_csv(path.clone(), file_name, &log_df, true)?;
+            let path = "data/test".to_string();
+            let file_name = format!("stochastic_resampled_window_{}.csv", window);
+            save_csv(path.clone(), file_name, &log_df, true)?;
 
-            // resampled_lf = resampled_lf.select(vec![
-            //     col("start_time"),
-            //     col(&k_column),
-            //     col(&k_non_shifted_column),
-            //     col(&d_column),
-            //     col(&d_non_shifted_column),
-            // ]);
+            resampled_lf = resampled_lf.select(vec![
+                col("start_time"),
+                col(&k_column),
+                col(&k_non_shifted_column),
+                col(&d_column),
+                col(&d_non_shifted_column),
+            ]);
 
             let resampled_lf_with_full_mins = lf_full_mins
                 .clone()
@@ -341,6 +341,7 @@ impl Indicator for StochasticIndicator {
                 (window * self.k_window) // 14 * 15 = 
                     + (window * (self.k_smooth - 1))
                     + (window * (self.d_smooth - 1))
+                    + 1440
             }
             None => 0,
         }

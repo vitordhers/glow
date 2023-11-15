@@ -216,30 +216,6 @@ pub struct OrderResponseData {
     pub sl_limit_price: Option<f64>, // The limit order price when stop loss price is triggered
 }
 
-impl From<OrderResponseData> for Order {
-    fn from(value: OrderResponseData) -> Self {
-        Order {
-            uuid: value.order_id,
-            id: value.order_link_id,
-            symbol: value.symbol,
-            status: OrderStatus::StandBy,
-            is_close: value.reduce_only,
-            is_stop: value.stop_order_type != StopOrderType::Empty
-                && value.stop_order_type != StopOrderType::Nil,
-            order_type: value.order_type,
-            units: value.qty,
-            avg_price: value.avg_price,
-            position: value.side.into(),
-            executions: vec![],
-            stop_loss_price: value.stop_loss_price,
-            take_profit_price: value.take_profit_price,
-            time_in_force: value.time_in_force,
-            created_at: value.created_time,
-            updated_at: value.updated_time,
-        }
-    }
-}
-
 impl OrderResponseData {
     pub fn is_cancel(&self) -> bool {
         self.cancel_type != CancelType::Nil
@@ -250,6 +226,64 @@ impl OrderResponseData {
             BybitOrderStatus::Untriggered => true,
             _ => false,
         }
+    }
+
+    pub fn new_order_from_response_data(&self, leverage_factor: f64, taker_fee_rate: f64) -> Order {
+        let is_stop;
+        let status = if self.reduce_only {
+            if self.is_cancel() {
+                is_stop = false;
+                OrderStatus::Cancelled
+            } else {
+                if self.stop_order_type != StopOrderType::Empty {
+                    is_stop = false;
+                    if self.leaves_qty > 0.0 {
+                        OrderStatus::PartiallyClosed
+                    } else {
+                        OrderStatus::Closed
+                    }
+                } else {
+                    is_stop = true;
+                    match self.stop_order_type {
+                        StopOrderType::StopLoss => OrderStatus::StoppedSL,
+                        StopOrderType::TakeProfit => OrderStatus::StoppedTP,
+                        StopOrderType::TrailingStop => OrderStatus::StoppedTSL,
+                        StopOrderType::Stop => OrderStatus::StoppedBR,
+                        _ => unreachable!(),
+                    }
+                }
+            }
+        } else {
+            is_stop = false;
+
+            if self.leaves_qty > 0.0 {
+                OrderStatus::PartiallyFilled
+            } else {
+                OrderStatus::Filled
+            }
+        };
+
+        Order::new(
+            self.order_id.clone(),
+            self.order_link_id.clone(),
+            self.symbol.clone(),
+            status,
+            self.order_type,
+            self.side,
+            self.time_in_force,
+            self.qty,
+            leverage_factor,
+            self.stop_loss_price,
+            self.take_profit_price,
+            self.avg_price,
+            vec![],
+            taker_fee_rate,
+            0.0,
+            self.reduce_only,
+            is_stop,
+            self.created_time,
+            self.updated_time,
+        )
     }
 }
 
@@ -527,7 +561,7 @@ impl From<Order> for CreateOrderDto {
             order.id.clone(),
             "linear".to_string(),
             order.symbol,
-            order.position.into(),
+            order.side,
             order.id.contains("close"),
             order.order_type,
             order.units,

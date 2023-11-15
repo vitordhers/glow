@@ -88,7 +88,7 @@ impl From<PolarsError> for Error {
 
 impl From<ReqwestError> for Error {
     fn from(reqwest_error: ReqwestError) -> Self {
-        println!("Reqwest Error = {:?}", reqwest_error.to_string());
+        println!("Reqwest Error = {}", reqwest_error.to_string());
         Error::ReqwestError(reqwest_error)
     }
 }

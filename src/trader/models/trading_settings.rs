@@ -13,6 +13,7 @@ pub struct TradingSettings {
     pub position_lock_modifier: PositionLock,
     pub price_level_modifier_map: HashMap<String, PriceLevel>,
     pub allocation_percentage: f64,
+    pub sinals_revert_its_opposite: bool,
 }
 
 impl TradingSettings {
@@ -23,6 +24,7 @@ impl TradingSettings {
         position_lock_modifier: PositionLock,
         price_level_modifier_map: HashMap<String, PriceLevel>,
         allocation_percentage: f64,
+        sinals_revert_its_opposite: bool
     ) -> Self {
         TradingSettings {
             open_order_type,
@@ -31,6 +33,7 @@ impl TradingSettings {
             position_lock_modifier,
             price_level_modifier_map,
             allocation_percentage,
+            sinals_revert_its_opposite
         }
     }
 }
