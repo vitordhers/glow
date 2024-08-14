@@ -1,0 +1,18 @@
+[package]
+name = "backtest"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+cli = { workspace = true }
+common = { workspace = true }
+dialoguer = { workspace = true }
+exchanges = { workspace = true }
+modules = { workspace = true }
+polars = { workspace = true }
+regex = { workspace = true }
+strategy = { workspace = true }
+tokio = { workspace = true }

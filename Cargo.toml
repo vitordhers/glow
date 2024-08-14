@@ -1,11 +1,15 @@
-[package]
-name = "trader"
-version = "0.1.0"
+[workspace]
+members = ["trader", "backtest", "optimization"]
+resolver = "2"
+
+[workspace.package]
+name = "glow"
+authors = ["Vitor Dhers"]
+version = "0.0.2"
 edition = "2021"
+license = "GPL"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
+[workspace.dependencies]
 async-trait = "0.1.68"
 chrono = "0.4.31"
 dotenv = "0.15.0"
@@ -27,9 +31,9 @@ polars = { version = "0.33.2", features = [
     "round_series",
     "abs",
     "cum_agg",
-    "is_in"
+    "is_in",
 ] }
-polars-lazy = { version = "0.33.2", features = ["rolling_window"] } # prev 0.33.2
+polars-lazy = { version = "0.33.2", features = ["rolling_window"] }
 reqwest = { version = "0.11.16", features = ["json", "gzip"] }
 serde = { version = "1.0.160", features = ["derive"] }
 serde_json = "1.0.96"
@@ -44,11 +48,28 @@ sha2 = "0.10.7"
 serde_urlencoded = "0.7.1"
 itertools = "0.11.0"
 regex = "1.4"
+dialoguer = "0.11.0"
+
+[workspace.dependencies.cli]
+path = "cli"
+
+[workspace.dependencies.common]
+path = "shared/common"
+
+[workspace.dependencies.exchanges]
+path = "shared/exchanges"
+
+[workspace.dependencies.glow_error]
+path = "shared/error"
+
+[workspace.dependencies.modules]
+path = "shared/modules"
+
+[workspace.dependencies.strategy]
+path = "strategy"
+
+
 
 [profile.release]
 opt-level = 3 # Optimization level 3 (max optimization)
 debug = false # Disable debugging information
-
-[profile.test_benchmark]
-RUSTFLAGS = "-A warnings"
-inherits = "dev"

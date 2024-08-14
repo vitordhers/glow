@@ -1,0 +1,12 @@
+[package]
+name = "strategy"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+common = { workspace = true }
+glow_error = { workspace = true }
+polars = { workspace = true }

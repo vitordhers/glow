@@ -1,0 +1,15 @@
+[package]
+name = "trader"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+common = { workspace = true }
+dotenv = { workspace = true }
+env_logger = { workspace = true }
+polars = { workspace = true }
+regex = { workspace = true }
+tokio = { workspace = true }

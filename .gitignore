@@ -2,3 +2,6 @@
 src/signals
 src/indicators
 data/test
+.zed
+.vscode
+Cargo.lock

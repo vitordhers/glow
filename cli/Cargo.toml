@@ -1,0 +1,17 @@
+[package]
+name = "cli"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+common = { workspace = true }
+dialoguer = { workspace = true }
+exchanges = { workspace = true }
+glow_error = { workspace = true }
+polars = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+strategy = { workspace = true }
