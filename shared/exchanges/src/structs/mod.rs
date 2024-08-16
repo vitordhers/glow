@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use common::structs::Contract;
+use common::{enums::symbol_id::SymbolId, structs::Contract};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ApiCredentials {
@@ -24,5 +24,5 @@ pub struct ExchangeConfig {
 pub struct ExchangeContext {
     pub taker_fee: f64,
     pub maker_fee: f64,
-    pub contracts: HashMap<&'static str, Contract>,
+    pub contracts: HashMap<SymbolId, Contract>,
 }

@@ -10,7 +10,9 @@ chrono = { workspace = true }
 cli = { workspace = true }
 common = { workspace = true }
 dialoguer = { workspace = true }
+dotenv = { workspace = true }
 exchanges = { workspace = true }
+futures-util = { workspace = true }
 modules = { workspace = true }
 polars = { workspace = true }
 regex = { workspace = true }

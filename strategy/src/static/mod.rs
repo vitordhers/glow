@@ -1,11 +1,38 @@
+use crate::{
+    enums::StrategyId,
+    preindicators::{ema::EMA, PreIndicatorWrapper},
+    structs::Strategy,
+};
 use std::{collections::HashMap, sync::LazyLock};
-use crate::{preindicators::PreIndicatorWrapper, Strategy};
 
-pub static STRATEGIES_MAP: LazyLock<HashMap<&'static str, Symbol>> = LazyLock::new(|| {
+pub static STRATEGIES_MAP: LazyLock<HashMap<StrategyId, Strategy>> = LazyLock::new(|| {
     let mut strategies_map = HashMap::new();
 
-    PreIndicatorWrapper::Ema(())
-    let simple_trend_strategy_preindicators = vec![];
-    let simple_trend_strategy = Strategy::new("Simple Trend Strategy", preindicators, indicators, signals)
+    {
+        let name = "Simple Trend Strategy";
+        let simple_trend_preindicators = vec![PreIndicatorWrapper::Ema(EMA::default())];
+        let simple_trend_indicators = vec![];
+        let simple_trend_signals = vec![];
+        let simple_trend_strategy = Strategy::new(
+            name,
+            simple_trend_preindicators,
+            simple_trend_indicators,
+            simple_trend_signals,
+        );
+        strategies_map.insert(StrategyId::SimpleTrend, simple_trend_strategy);
+    }
+
     strategies_map
 });
+
+pub fn get_default_strategy() -> Strategy {
+    let default_strategy = &StrategyId::default();
+
+    STRATEGIES_MAP
+        .get(&StrategyId::default())
+        .expect(&format!(
+            "Default Strategy {:?} to exist at STRATEGIES MAP",
+            default_strategy
+        ))
+        .clone()
+}

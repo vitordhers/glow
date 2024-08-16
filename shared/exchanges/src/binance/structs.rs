@@ -14,7 +14,7 @@ use common::{
         current_datetime, current_timestamp, get_fetch_timestamps_interval,
         map_and_downsample_ticks_data_to_df,
     },
-    structs::{BehaviorSubject, LogKlines, TickData},
+    structs::{BehaviorSubject, LogKlines, Symbol, SymbolsPair, TickData},
     traits::exchange::DataProviderExchange,
 };
 use futures_util::SinkExt;
@@ -45,7 +45,7 @@ pub struct BinanceDataProvider {
     minimum_klines_for_benchmarking: u32,
     staged_ticks: HashMap<u32, Vec<TickData>>, // TODO: change to array to avoid heap allocation
     symbols: (&'static str, &'static str),
-    unique_symbols: Vec<&'static str>,
+    unique_symbols: Vec<&'static Symbol>,
     ticks_to_commit: BehaviorSubject<Vec<TickData>>, // TODO: change to array to avoid heap allocation
     trading_data_update_listener: BehaviorSubject<TradingDataUpdate>,
 }
@@ -56,14 +56,12 @@ impl BinanceDataProvider {
         kline_duration: Duration,
         last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
         minimum_klines_for_benchmarking: u32,
-        symbols: (&'static str, &'static str),
+        symbols_pair: SymbolsPair,
         trading_data_update_listener: &BehaviorSubject<TradingDataUpdate>,
     ) -> Self {
         // let wss = Self::connect_websocket().await.expect("wss to be provided");
-        let mut unique_symbols = HashSet::new();
-        unique_symbols.insert(symbols.0);
-        unique_symbols.insert(symbols.1);
-        let unique_symbols = unique_symbols.into_iter().collect();
+        let symbols = &symbols_pair.get_tuple();
+        let unique_symbols = symbols_pair.get_unique_symbols();
 
         Self {
             http: Client::new(),
@@ -72,7 +70,7 @@ impl BinanceDataProvider {
             last_ws_error_ts: last_ws_error_ts.clone(),
             minimum_klines_for_benchmarking,
             staged_ticks: HashMap::new(),
-            symbols,
+            symbols: *symbols,
             ticks_to_commit: BehaviorSubject::new(vec![]),
             // trading_data_schema,
             trading_data_update_listener: trading_data_update_listener.clone(),
@@ -83,7 +81,7 @@ impl BinanceDataProvider {
     async fn fetch_benchmark_available_data(
         http: &Client,
         kline_data_schema: Schema,
-        unique_symbols: &Vec<&'static str>,
+        unique_symbols: &Vec<&Symbol>,
         minimum_klines_for_benchmarking: u32,
         kline_duration_in_secs: i64,
         benchmark_end_ts: i64,           // seconds
@@ -126,7 +124,7 @@ impl BinanceDataProvider {
 
             for symbol in unique_symbols {
                 let fetched_klines =
-                    Self::fetch_data(http, symbol, start_ts, end_ts, current_limit).await?;
+                    Self::fetch_data(http, symbol.name, start_ts, end_ts, current_limit).await?;
                 tick_data.extend(fetched_klines);
             }
         }
@@ -193,7 +191,7 @@ impl DataProviderExchange for BinanceDataProvider {
             .unique_symbols
             .clone()
             .into_iter()
-            .map(|s| s.to_string())
+            .map(|s| s.name.to_string())
             .collect();
 
         let subscribe_message = WsOutgoingMessage {
@@ -368,7 +366,7 @@ impl DataProviderExchange for BinanceDataProvider {
 
 
                     for symbol in &self.unique_symbols {
-                        let symbol_kline_data = Self::fetch_data(&self.http, symbol, start_ms, end_ms, current_limit).await?;
+                        let symbol_kline_data = Self::fetch_data(&self.http, symbol.name, start_ms, end_ms, current_limit).await?;
                         kline_data.extend(symbol_kline_data);
                     }
 

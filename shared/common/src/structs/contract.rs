@@ -1,3 +1,4 @@
+use super::Symbol;
 use chrono::{Duration, NaiveDateTime, NaiveTime};
 
 #[derive(Clone, Debug)]
@@ -9,7 +10,7 @@ pub struct Contract {
     pub maximum_order_size: f64, // in contract Symbol
     pub minimum_order_size: f64, // in contract Symbol
     pub next_funding: Option<NaiveTime>,
-    pub symbol: &'static str,
+    pub symbol: &'static Symbol,
     pub tick_size: f64, // in USDT
 }
 
@@ -22,7 +23,7 @@ impl Contract {
         maximum_order_size: f64,
         minimum_order_size: f64,
         next_funding: Option<NaiveTime>,
-        symbol: &'static str,
+        symbol: &'static Symbol,
         tick_size: f64,
     ) -> Self {
         Contract {

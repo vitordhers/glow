@@ -1,8 +1,9 @@
 use chrono::NaiveDateTime;
 use polars::prelude::{DataFrame, LazyFrame};
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum TradingDataUpdate {
+    #[default]
     None,
     BenchmarkData {
         initial_tick_data_lf: LazyFrame,

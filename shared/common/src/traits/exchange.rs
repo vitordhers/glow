@@ -5,9 +5,10 @@ use crate::{
         order_status::OrderStatus,
         order_type::OrderType,
         side::Side,
+        symbol_id::SymbolId,
         trade_status::TradeStatus,
     },
-    structs::{Contract, Execution, Order, Trade, TradingSettings},
+    structs::{Contract, Execution, Order, Symbol, Trade, TradingSettings},
 };
 use chrono::NaiveDateTime;
 use glow_error::GlowError;
@@ -37,28 +38,28 @@ pub trait TraderHelper {
         price: f64,
     ) -> Result<(f64, f64), GlowError>;
 
-    fn get_contracts(&self) -> &HashMap<&str, Contract>;
+    fn get_contracts(&self) -> &HashMap<SymbolId, Contract>;
     fn get_anchor_contract(&self) -> &Contract {
         let contracts = self.get_contracts();
         contracts
-            .get(self.get_anchor_symbol())
+            .get(&self.get_anchor_symbol().id)
             .expect("Exchange to have anchor contract")
     }
-    fn get_anchor_symbol(&self) -> &'static str {
+    fn get_anchor_symbol(&self) -> &'static Symbol {
         let trading_settings = self.get_trading_settings();
         trading_settings.get_anchor_symbol()
     }
     fn get_traded_contract(&self) -> &Contract {
         let contracts = self.get_contracts();
         contracts
-            .get(self.get_anchor_symbol())
+            .get(&self.get_traded_symbol().id)
             .expect("Exchange to have anchor contract")
     }
-    fn get_traded_symbol(&self) -> &'static str {
+    fn get_traded_symbol(&self) -> &'static Symbol {
         let trading_settings = self.get_trading_settings();
         trading_settings.get_traded_symbol()
     }
-    fn get_unique_symbols(&self) -> Vec<&'static str> {
+    fn get_unique_symbols(&self) -> Vec<&'static Symbol> {
         let trading_settings = self.get_trading_settings();
         trading_settings.get_unique_symbols()
     }
@@ -75,6 +76,7 @@ pub trait TraderHelper {
     fn get_order_fee_rate(&self, order_type: OrderType) -> (f64, bool);
 }
 
+// TODO: change this name
 pub trait TraderExchange: TraderHelper {
     /// This function creates a new order from a given amount of USDT
     ///
@@ -211,7 +213,7 @@ pub trait DataProviderExchange {
         &mut self,
         wss: WebSocketStream<MaybeTlsStream<TcpStream>>,
         benchmark_end: NaiveDateTime,
-        trading_data_schema: &Schema
+        trading_data_schema: &Schema,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
 
     fn init(
@@ -220,6 +222,6 @@ pub trait DataProviderExchange {
         benchmark_start: Option<NaiveDateTime>, // seconds
         kline_data_schema: Schema,
         run_benchmark_only: bool,
-        trading_data_schema: Schema
+        trading_data_schema: Schema,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
 }

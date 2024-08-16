@@ -113,20 +113,21 @@ fn current_minute_start() {
 /// * `Close symbol` - Close symbol column.
 ///
 
-pub fn get_symbol_ohlc_cols(
-    symbol: &str,
-) -> (&'static str, &'static str, &'static str, &'static str) {
-    let Symbol {
-        name: _,
-        open,
-        high,
-        low,
-        close,
-    } = SYMBOLS_MAP
-        .get(symbol)
-        .expect(&format!("symbol {} to exist", symbol));
-    return (open, high, low, close);
-}
+// TODO: DEPRECATE THIS
+// pub fn get_symbol_ohlc_cols(
+//     symbol: &str,
+// ) -> (&'static str, &'static str, &'static str, &'static str) {
+//     let Symbol {
+//         name: _,
+//         open,
+//         high,
+//         low,
+//         close,
+//     } = SYMBOLS_MAP
+//         .get(symbol)
+//         .expect(&format!("symbol {} to exist", symbol));
+//     return (open, high, low, close);
+// }
 
 pub fn get_symbol_open_col(symbol: &str) -> &'static str {
     let symbol = SYMBOLS_MAP
@@ -177,7 +178,7 @@ pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
 }
 
 fn map_ticks_data_to_df(
-    unique_symbols: &Vec<&'static str>,
+    unique_symbols: &Vec<&Symbol>,
     ticks_data: &Vec<TickData>,
     schema_to_comply: &Schema,
 ) -> Result<DataFrame, GlowError> {
@@ -202,14 +203,14 @@ fn map_ticks_data_to_df(
     let mut low_cols_map = HashMap::new();
 
     for symbol in unique_symbols {
-        let (o, h, l, c) = get_symbol_ohlc_cols(symbol);
+        let (o, h, l, c) = symbol.get_ohlc_cols();
         open_cols_map.insert(o, vec![] as Vec<Option<f64>>);
         high_cols_map.insert(h, vec![] as Vec<Option<f64>>);
         close_cols_map.insert(l, vec![] as Vec<Option<f64>>);
         low_cols_map.insert(c, vec![] as Vec<Option<f64>>);
 
         for timestamp in &timestamps {
-            if let Some(tick) = symbol_ts_ticks_map.get(&(symbol, *timestamp)) {
+            if let Some(tick) = symbol_ts_ticks_map.get(&(symbol.name, *timestamp)) {
                 open_cols_map.get_mut(&o).unwrap().push(Some(tick.open));
                 high_cols_map.get_mut(&h).unwrap().push(Some(tick.high));
                 close_cols_map.get_mut(&c).unwrap().push(Some(tick.close));
@@ -275,14 +276,14 @@ pub fn map_and_downsample_ticks_data_to_df(
     schema_to_comply: &Schema,
     kline_duration: Duration,
     ticks_data: &Vec<TickData>,
-    unique_symbols: &Vec<&'static str>,
+    unique_symbols: &Vec<&Symbol>,
     maintain_schema: bool,
 ) -> Result<DataFrame, GlowError> {
     assert!(
         unique_symbols.len() > 0,
         "unique symbols must have length > 0"
     );
-    let symbols_set: HashSet<&str> = unique_symbols.iter().cloned().collect();
+    let symbols_set: HashSet<&Symbol> = unique_symbols.iter().cloned().collect();
     assert!(
         symbols_set.len() == unique_symbols.len(),
         "symbols must be unique"
@@ -320,7 +321,7 @@ pub fn map_and_downsample_ticks_data_to_df(
 // downsample = decrease frequency. i.e. seconds -> minutes. methods: aggregation
 // currently working only for downsampling
 pub fn downsample_tick_lf_to_kline_duration(
-    unique_symbols: &Vec<&'static str>,
+    unique_symbols: &Vec<&Symbol>,
     kline_duration: Duration,
     tick_lf: LazyFrame,
     closed_window: ClosedWindow, // TODO: check why benchmark frame doesn't leave last minute tick -- CHECK if this is still happening
@@ -330,7 +331,7 @@ pub fn downsample_tick_lf_to_kline_duration(
     let mut agg_expressions = vec![];
     let mut tick_data_cols = HashSet::new();
     for symbol in unique_symbols {
-        let (o, h, l, c) = get_symbol_ohlc_cols(symbol);
+        let (o, h, l, c) = symbol.get_ohlc_cols();
         if maintain_schema.is_some() {
             tick_data_cols.insert(o);
             tick_data_cols.insert(h);

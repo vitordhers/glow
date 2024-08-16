@@ -307,7 +307,7 @@ async fn process_last_signal(
 
     let exchange = exchange.value();
     let traded_symbol = exchange.get_traded_symbol();
-    let close_col = get_symbol_close_col(traded_symbol);
+    let close_col = traded_symbol.get_close_col();
     let trading_data_binding = trading_data.value();
     let last_price = trading_data_binding
         .column(&close_col)?
@@ -1027,7 +1027,7 @@ fn update_trading_data(
 
     let exchange_binding = exchange_listener.value();
     let traded_symbol = &exchange_binding.get_traded_contract().symbol;
-    let close_col = get_symbol_close_col(traded_symbol);
+    let close_col = traded_symbol.get_close_col();
 
     match trade {
         Some(current_trade) => {

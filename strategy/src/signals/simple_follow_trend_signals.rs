@@ -1,30 +1,35 @@
-use common::{enums::signal_category::SignalCategory, traits::signal::Signal};
+use common::{
+    enums::signal_category::SignalCategory,
+    structs::{Symbol, SymbolsPair},
+    traits::signal::Signal,
+};
 use glow_error::GlowError;
 use polars::prelude::*;
 
 use super::SignalWrapper;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SimpleFollowTrendShortSignal {
-    pub anchor_symbol: &'static str,
+    pub anchor_symbol: &'static Symbol,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SimpleFollowTrendLongSignal {
-    pub anchor_symbol: &'static str,
+    pub anchor_symbol: &'static Symbol,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SimpleFollowTrendCloseLongSignal {
-    pub anchor_symbol: &'static str,
+    pub anchor_symbol: &'static Symbol,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SimpleFollowTrendCloseShortSignal {
-    pub anchor_symbol: &'static str,
+    pub anchor_symbol: &'static Symbol,
 }
 
 impl Signal for SimpleFollowTrendShortSignal {
+    type Wrapper = SignalWrapper;
     fn signal_category(&self) -> SignalCategory {
         SignalCategory::GoShort
     }
@@ -33,8 +38,8 @@ impl Signal for SimpleFollowTrendShortSignal {
         let signal = self.signal_category();
         let signal_col = signal.get_column();
         let select_columns = vec![col("start_time"), col(signal_col)];
-        let fast_ema_col_title = format!("{}_fast_ema", &self.anchor_symbol);
-        let slow_ema_col_title = format!("{}_slow_ema", &self.anchor_symbol);
+        let fast_ema_col_title = format!("{}_fast_ema", &self.anchor_symbol.name);
+        let slow_ema_col_title = format!("{}_slow_ema", &self.anchor_symbol.name);
         let signal_lf = lf
             .clone()
             .with_column(
@@ -65,9 +70,23 @@ impl Signal for SimpleFollowTrendShortSignal {
 
         Ok(result_df)
     }
+
+    fn patch_symbols_pair(
+        &self,
+        updated_symbols_pair: SymbolsPair,
+    ) -> Result<Self::Wrapper, GlowError> {
+        if self.anchor_symbol == updated_symbols_pair.anchor {
+            return Ok(self.clone().into());
+        }
+        let updated = Self {
+            anchor_symbol: updated_symbols_pair.anchor,
+        };
+        Ok(updated.into())
+    }
 }
 
 impl Signal for SimpleFollowTrendLongSignal {
+    type Wrapper = SignalWrapper;
     fn signal_category(&self) -> SignalCategory {
         SignalCategory::GoLong
     }
@@ -76,8 +95,8 @@ impl Signal for SimpleFollowTrendLongSignal {
         let signal = self.signal_category();
         let signal_col = signal.get_column();
         let select_columns = vec![col("start_time"), col(signal_col)];
-        let fast_ema_col_title = format!("{}_fast_ema", &self.anchor_symbol);
-        let slow_ema_col_title = format!("{}_slow_ema", &self.anchor_symbol);
+        let fast_ema_col_title = format!("{}_fast_ema", &self.anchor_symbol.name);
+        let slow_ema_col_title = format!("{}_slow_ema", &self.anchor_symbol.name);
         let signal_lf = lf
             .clone()
             .with_column(
@@ -108,9 +127,22 @@ impl Signal for SimpleFollowTrendLongSignal {
 
         Ok(result_df)
     }
+    fn patch_symbols_pair(
+        &self,
+        updated_symbols_pair: SymbolsPair,
+    ) -> Result<Self::Wrapper, GlowError> {
+        if self.anchor_symbol == updated_symbols_pair.anchor {
+            return Ok(self.clone().into());
+        }
+        let updated = Self {
+            anchor_symbol: updated_symbols_pair.anchor,
+        };
+        Ok(updated.into())
+    }
 }
 
 impl Signal for SimpleFollowTrendCloseLongSignal {
+    type Wrapper = SignalWrapper;
     fn signal_category(&self) -> SignalCategory {
         SignalCategory::CloseLong
     }
@@ -118,8 +150,8 @@ impl Signal for SimpleFollowTrendCloseLongSignal {
         let signal = self.signal_category();
         let signal_col = signal.get_column();
         let select_columns = vec![col("start_time"), col(signal_col)];
-        let fast_ema_col_title = format!("{}_fast_ema", &self.anchor_symbol);
-        let slow_ema_col_title = format!("{}_slow_ema", &self.anchor_symbol);
+        let fast_ema_col_title = format!("{}_fast_ema", &self.anchor_symbol.name);
+        let slow_ema_col_title = format!("{}_slow_ema", &self.anchor_symbol.name);
         let signal_lf = lf
             .clone()
             .with_column(
@@ -149,9 +181,22 @@ impl Signal for SimpleFollowTrendCloseLongSignal {
 
         Ok(result_df)
     }
+    fn patch_symbols_pair(
+        &self,
+        updated_symbols_pair: SymbolsPair,
+    ) -> Result<Self::Wrapper, GlowError> {
+        if self.anchor_symbol == updated_symbols_pair.anchor {
+            return Ok(self.clone().into());
+        }
+        let updated = Self {
+            anchor_symbol: updated_symbols_pair.anchor,
+        };
+        Ok(updated.into())
+    }
 }
 
 impl Signal for SimpleFollowTrendCloseShortSignal {
+    type Wrapper = SignalWrapper;
     fn signal_category(&self) -> SignalCategory {
         SignalCategory::CloseShort
     }
@@ -160,8 +205,8 @@ impl Signal for SimpleFollowTrendCloseShortSignal {
         let signal = self.signal_category();
         let signal_col = signal.get_column();
         let select_columns = vec![col("start_time"), col(signal_col)];
-        let fast_ema_col_title = format!("{}_fast_ema", &self.anchor_symbol);
-        let slow_ema_col_title = format!("{}_slow_ema", &self.anchor_symbol);
+        let fast_ema_col_title = format!("{}_fast_ema", &self.anchor_symbol.name);
+        let slow_ema_col_title = format!("{}_slow_ema", &self.anchor_symbol.name);
         let signal_lf = lf
             .clone()
             .with_column(
@@ -191,6 +236,18 @@ impl Signal for SimpleFollowTrendCloseShortSignal {
         let _ = result_df.replace(&column, series.to_owned());
 
         Ok(result_df)
+    }
+    fn patch_symbols_pair(
+        &self,
+        updated_symbols_pair: SymbolsPair,
+    ) -> Result<Self::Wrapper, GlowError> {
+        if self.anchor_symbol == updated_symbols_pair.anchor {
+            return Ok(self.clone().into());
+        }
+        let updated = Self {
+            anchor_symbol: updated_symbols_pair.anchor,
+        };
+        Ok(updated.into())
     }
 }
 

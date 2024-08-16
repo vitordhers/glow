@@ -1,9 +1,11 @@
-use common::{enums::signal_category::SignalCategory, traits::signal::Signal};
+use common::{
+    enums::signal_category::SignalCategory, structs::SymbolsPair, traits::signal::Signal,
+};
 use glow_error::GlowError;
 use polars::prelude::*;
 mod simple_follow_trend_signals;
 pub use simple_follow_trend_signals::*;
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum SignalWrapper {
     SimpleFollowTrendShortSignal(SimpleFollowTrendShortSignal),
     SimpleFollowTrendLongSignal(SimpleFollowTrendLongSignal),
@@ -12,6 +14,7 @@ pub enum SignalWrapper {
 }
 
 impl Signal for SignalWrapper {
+    type Wrapper = Self;
     fn signal_category(&self) -> SignalCategory {
         match self {
             Self::SimpleFollowTrendShortSignal(sig) => sig.signal_category(),
@@ -34,6 +37,18 @@ impl Signal for SignalWrapper {
             Self::SimpleFollowTrendLongSignal(sig) => sig.update_signal_column(data),
             Self::SimpleFollowTrendCloseShortSignal(sig) => sig.update_signal_column(data),
             Self::SimpleFollowTrendCloseLongSignal(sig) => sig.update_signal_column(data),
+        }
+    }
+    fn patch_symbols_pair(&self, symbols_pair: SymbolsPair) -> Result<Self::Wrapper, GlowError> {
+        match self {
+            Self::SimpleFollowTrendShortSignal(sig) => Ok(sig.patch_symbols_pair(symbols_pair)?),
+            Self::SimpleFollowTrendLongSignal(sig) => Ok(sig.patch_symbols_pair(symbols_pair)?),
+            Self::SimpleFollowTrendCloseShortSignal(sig) => {
+                Ok(sig.patch_symbols_pair(symbols_pair)?)
+            }
+            Self::SimpleFollowTrendCloseLongSignal(sig) => {
+                Ok(sig.patch_symbols_pair(symbols_pair)?)
+            }
         }
     }
 }

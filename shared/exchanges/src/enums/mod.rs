@@ -1,26 +1,31 @@
-use std::{
-    sync::{Arc, Mutex, RwLock},
-    time::Duration,
-};
-
+use crate::{binance::structs::BinanceDataProvider, bybit::BybitTraderExchange};
 use chrono::NaiveDateTime;
 use common::{
     enums::{
         balance::Balance, modifiers::leverage::Leverage, order_action::OrderAction,
-        order_status::OrderStatus, order_type::OrderType, side::Side, trade_status::TradeStatus,
-        trading_data_update::TradingDataUpdate,
+        order_status::OrderStatus, order_type::OrderType, side::Side, symbol_id::SymbolId,
+        trade_status::TradeStatus, trading_data_update::TradingDataUpdate,
     },
-    structs::{BehaviorSubject, Contract, Execution, Order, Trade, TradingSettings},
+    structs::{BehaviorSubject, Contract, Execution, Order, SymbolsPair, Trade, TradingSettings},
     traits::exchange::{BenchmarkExchange, DataProviderExchange, TraderExchange, TraderHelper},
 };
 use glow_error::GlowError;
 use polars::prelude::Schema;
 use reqwest::Client;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, RwLock},
+    time::Duration,
+};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
-use crate::{binance::structs::BinanceDataProvider, bybit::BybitTraderExchange};
+#[derive(Clone, Copy, Debug, Default)]
+pub enum DataProviderExchangeId {
+    #[default]
+    Binance,
+}
 
 #[derive(Clone)]
 pub enum DataProviderExchangeWrapper {
@@ -28,20 +33,23 @@ pub enum DataProviderExchangeWrapper {
 }
 
 impl DataProviderExchangeWrapper {
-    pub fn new_binance_data_provider(
+    pub fn new(
+        selected_exchange: DataProviderExchangeId,
         kline_duration: Duration,
         last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
         minimum_klines_for_benchmarking: u32,
-        symbols: (&'static str, &'static str),
-        trading_data_update_listener: &'static BehaviorSubject<TradingDataUpdate>,
+        symbols_pair: SymbolsPair,
+        trading_data_update_listener: &BehaviorSubject<TradingDataUpdate>,
     ) -> Self {
-        Self::Binance(BinanceDataProvider::new(
-            kline_duration,
-            last_ws_error_ts,
-            minimum_klines_for_benchmarking,
-            symbols,
-            trading_data_update_listener,
-        ))
+        match selected_exchange {
+            DataProviderExchangeId::Binance => Self::Binance(BinanceDataProvider::new(
+                kline_duration,
+                last_ws_error_ts,
+                minimum_klines_for_benchmarking,
+                symbols_pair,
+                trading_data_update_listener,
+            )),
+        }
     }
 
     pub fn get_selection_list() -> Vec<String> {
@@ -95,13 +103,21 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TraderExchangeId {
+    #[default]
+    Bybit,
+}
+
 #[derive(Clone)]
 pub enum TraderExchangeWrapper {
     Bybit(BybitTraderExchange),
 }
 
 impl TraderExchangeWrapper {
-    pub fn new_bybit_trader(
+    pub fn new(
+        selected_exchange: TraderExchangeId,
         current_trade_listener: &BehaviorSubject<Option<Trade>>,
         last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
         trading_settings: &Arc<RwLock<TradingSettings>>,
@@ -109,14 +125,16 @@ impl TraderExchangeWrapper {
         update_executions_listener: &BehaviorSubject<Vec<Execution>>,
         update_order_listener: &BehaviorSubject<Option<OrderAction>>,
     ) -> Self {
-        Self::Bybit(BybitTraderExchange::new(
-            current_trade_listener,
-            last_ws_error_ts,
-            trading_settings,
-            update_balance_listener,
-            update_executions_listener,
-            update_order_listener,
-        ))
+        match selected_exchange {
+            TraderExchangeId::Bybit => Self::Bybit(BybitTraderExchange::new(
+                current_trade_listener,
+                last_ws_error_ts,
+                trading_settings,
+                update_balance_listener,
+                update_executions_listener,
+                update_order_listener,
+            )),
+        }
     }
 
     pub fn get_selection_list() -> Vec<String> {
@@ -186,7 +204,7 @@ impl TraderHelper for TraderExchangeWrapper {
         }
     }
 
-    fn get_contracts(&self) -> &std::collections::HashMap<&str, Contract> {
+    fn get_contracts(&self) -> &HashMap<SymbolId, Contract> {
         match self {
             Self::Bybit(ex) => ex.get_contracts(),
         }

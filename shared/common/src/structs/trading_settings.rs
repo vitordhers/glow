@@ -1,13 +1,14 @@
-use super::SymbolsPair;
+use super::{Symbol, SymbolsPair};
 use crate::enums::{
     granularity::Granularity,
     modifiers::{leverage::Leverage, position_lock::PositionLock, price_level::PriceLevel},
     order_type::OrderType,
+    symbol_id::SymbolId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{from_reader, to_writer};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     env::var,
     fs::File,
     io::{BufReader, Result as IoResult},
@@ -22,8 +23,8 @@ pub struct TradingSettings {
     pub position_lock_modifier: PositionLock,
     pub price_level_modifier_map: HashMap<String, PriceLevel>,
     pub signals_revert_its_opposite: bool,
-    pub symbols: SymbolsPair,
-    pub bechmark_min_days: u32,
+    pub symbols_pair: SymbolsPair,
+    pub bechmark_minimum_days: u32,
     pub granularity: Granularity,
 }
 
@@ -36,9 +37,9 @@ impl TradingSettings {
         position_lock_modifier: PositionLock,
         price_level_modifier_map: HashMap<String, PriceLevel>,
         signals_revert_its_opposite: bool,
-        anchor_contract_symbol: &'static str,
-        traded_contract_symbol: &'static str,
-        bechmark_min_days: u32,
+        anchor_contract_symbol: &SymbolId,
+        traded_contract_symbol: &SymbolId,
+        bechmark_minimum_days: u32,
         granularity: Granularity,
     ) -> Self {
         TradingSettings {
@@ -48,8 +49,8 @@ impl TradingSettings {
             position_lock_modifier,
             price_level_modifier_map,
             signals_revert_its_opposite,
-            symbols: SymbolsPair::new(&anchor_contract_symbol, &traded_contract_symbol),
-            bechmark_min_days,
+            symbols_pair: SymbolsPair::new(&anchor_contract_symbol, &traded_contract_symbol),
+            bechmark_minimum_days,
             granularity,
         }
     }
@@ -80,20 +81,17 @@ impl TradingSettings {
     }
 
     #[inline]
-    pub fn get_anchor_symbol(&self) -> &'static str {
-        self.symbols.anchor.name
+    pub fn get_anchor_symbol(&self) -> &'static Symbol {
+        self.symbols_pair.anchor
     }
 
     #[inline]
-    pub fn get_traded_symbol(&self) -> &'static str {
-        self.symbols.traded.name
+    pub fn get_traded_symbol(&self) -> &'static Symbol {
+        self.symbols_pair.traded
     }
 
-    pub fn get_unique_symbols(&self) -> Vec<&'static str> {
-        let mut symbols = HashSet::new();
-        symbols.insert(self.get_anchor_symbol());
-        symbols.insert(self.get_traded_symbol());
-        symbols.into_iter().collect()
+    pub fn get_unique_symbols(&self) -> Vec<&'static Symbol> {
+        self.symbols_pair.get_unique_symbols()
     }
 
     pub fn get_open_order_type(&self) -> OrderType {
@@ -102,6 +100,13 @@ impl TradingSettings {
 
     pub fn get_close_order_type(&self) -> OrderType {
         self.order_types.1
+    }
+
+    pub fn patch_symbols_pair(&self, updated_symbols_pair: SymbolsPair) -> Self {
+        let mut result = self.clone();
+        result.symbols_pair = updated_symbols_pair;
+
+        result
     }
 }
 
@@ -114,9 +119,9 @@ impl Default for TradingSettings {
             position_lock_modifier: PositionLock::default(),
             price_level_modifier_map: HashMap::new(),
             signals_revert_its_opposite: false,
-            symbols: SymbolsPair::default(),
+            symbols_pair: SymbolsPair::default(),
             granularity: Granularity::default(),
-            bechmark_min_days: 1,
+            bechmark_minimum_days: 1,
         }
     }
 }

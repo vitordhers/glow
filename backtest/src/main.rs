@@ -8,21 +8,30 @@ use common::{
         order_action::OrderAction,
         order_type::OrderType,
         trading_data_update::TradingDataUpdate,
-    }, functions::current_datetime, structs::{BehaviorSubject, Contract, Execution, Trade, TradingSettings}
+    },
+    functions::current_datetime,
+    structs::{BehaviorSubject, Contract, Execution, SymbolsPair, Trade, TradingSettings},
 };
-use exchanges::enums::DataProviderExchangeWrapper;
+use dotenv::dotenv;
+use exchanges::enums::{
+    DataProviderExchangeId, DataProviderExchangeWrapper, TraderExchangeId, TraderExchangeWrapper,
+};
+use futures_util::StreamExt;
 use modules::data_feed::DataFeed;
 use polars::prelude::DataFrame;
-use strategy::Strategy;
-
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 use std::{env, io::stdin, marker::Send};
+use strategy::{
+    enums::StrategyId, functions::get_strategy, r#static::get_default_strategy, structs::Strategy,
+};
+use tokio::{join, spawn};
 
 #[tokio::main]
 async fn main() {
+    dotenv().ok();
     let is_test_mode = true;
     let max_rows = "40".to_string();
     env::set_var("POLARS_FMT_MAX_ROWS", max_rows);
@@ -34,26 +43,186 @@ async fn main() {
         Amen 🙏"#
     );
 
-    let mut trading_settings = TradingSettings::load_or_default();
-    let mut strategy = Strategy::
+    // inputs:
+    // * symbols *
+    // depends on: []
+    // updates: [trading_settings, strategy]
+    // * trading settings *
+    // depends on: [symbols]
 
+    let selected_symbols_pair = BehaviorSubject::new(SymbolsPair::default());
+    let default_trading_settings = TradingSettings::load_or_default();
+    let current_trading_settings = BehaviorSubject::new(TradingSettings::load_or_default());
+
+    let ctsc = current_trading_settings.clone();
+    let selected_symbols_handle = spawn(async move {
+        let mut selection_subscription = selected_symbols_pair.subscribe();
+        // let current_trading_settings = current_trading_settings.clone();
+
+        while let Some(updated_symbols_pair) = selection_subscription.next().await {
+            let updated_trading_settings = ctsc.value().patch_symbols_pair(updated_symbols_pair);
+            ctsc.next(updated_trading_settings);
+        }
+    });
+
+    selected_symbols_handle.await;
+
+    let trading_settings: Arc<RwLock<TradingSettings>> =
+        Arc::new(RwLock::new(default_trading_settings));
+
+    let current_trade_listener: BehaviorSubject<Option<Trade>> = BehaviorSubject::new(None);
+    let trader_last_ws_error_ts: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
+
+    let update_balance_listener: BehaviorSubject<Option<Balance>> = BehaviorSubject::new(None);
+    let update_executions_listener: BehaviorSubject<Vec<Execution>> = BehaviorSubject::new(vec![]);
+    let update_order_listener: BehaviorSubject<Option<OrderAction>> = BehaviorSubject::new(None);
+
+    let default_trader_exchange_id = TraderExchangeId::default();
+    let selected_trader_exchange_id = BehaviorSubject::new(default_trader_exchange_id);
+    let default_trader_exchange = TraderExchangeWrapper::new(
+        default_trader_exchange_id,
+        &current_trade_listener,
+        &trader_last_ws_error_ts,
+        &trading_settings,
+        &update_balance_listener,
+        &update_executions_listener,
+        &update_order_listener,
+    );
+    let current_trader_exchange = BehaviorSubject::new(default_trader_exchange);
+    let ctsc = current_trading_settings.clone();
+    let cte = current_trader_exchange.clone();
+    let selected_trader_exchange_handle = spawn(async move {
+        let selection_subscription = &mut selected_trader_exchange_id.subscribe();
+        // let mut settings_subscription = ctsc.subscribe();
+
+        while let Some(selected_exchange_id) = selection_subscription.next().await {
+            let updated_trader_exchange = TraderExchangeWrapper::new(
+                selected_exchange_id,
+                &current_trade_listener,
+                &trader_last_ws_error_ts,
+                &trading_settings,
+                &update_balance_listener,
+                &update_executions_listener,
+                &update_order_listener,
+            );
+            &current_trader_exchange.next(updated_trader_exchange);
+        }
+    });
+
+    selected_trader_exchange_handle.await;
+
+    let selected_strategy_id = BehaviorSubject::new(StrategyId::default());
+    let current_strategy = BehaviorSubject::new(get_default_strategy());
+
+    let selected_strategy_handle = spawn(async move {
+        let selection_subscription = &mut selected_strategy_id.subscribe();
+
+        while let Some(selected_strategy_id) = selection_subscription.next().await {
+            
+            let updated_strategy = Strategy::new(name, preindicators, indicators, signals);
+        }
+    });
+
+    selected_strategy_handle.await;
+
+    let data_provider_last_ws_error_ts: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
+    let trading_data_update_listener = BehaviorSubject::new(TradingDataUpdate::default());
+    let selected_data_provider_exchange = BehaviorSubject::new(DataProviderExchangeId::default());
+
+    let current_data_provider_exchange = Arc::new(Mutex::new(None));
+    // TODO: validate this comment below:
+    // note that only who provides subscription must be cloned
+    let ctsc = current_trading_settings.clone();
+    let csc = current_strategy.clone();
+    let tudl = trading_data_update_listener.clone();
+
+    let selected_data_provider_handle = spawn(async move {
+        let mut selection_subscription = selected_data_provider_exchange.subscribe();
+        let mut settings_subscription = ctsc.subscribe();
+        let mut strategy_subscription = csc.subscribe();
+
+        while let (
+            Some(selected_exchange),
+            Some(TradingSettings {
+                granularity,
+                symbols_pair,
+                ..
+            }),
+            Some(strategy),
+        ) = join!(
+            selection_subscription.next(),
+            settings_subscription.next(),
+            strategy_subscription.next()
+        ) {
+            let updated_data_provider_exchange = DataProviderExchangeWrapper::new(
+                selected_exchange,
+                granularity.get_duration(),
+                &data_provider_last_ws_error_ts,
+                strategy.get_minimum_klines_for_benchmarking(),
+                symbols_pair,
+                &tudl,
+            );
+            let mut guard = current_data_provider_exchange.lock().unwrap();
+            *guard = Some(updated_data_provider_exchange);
+        }
+    });
+
+    selected_data_provider_handle.await;
+
+    // let mut current_strategy = get_default_strategy();
     let mut end_datetime = current_datetime();
-    let mut start_datetime;
+    let mut start_datetime: NaiveDateTime;
 
     loop {
         let options = vec![
             "Select Benchmark Datetimes",
+            "Change Trading Coins",
             "Select Data Provider Exchange",
             "Select Trader Exchange",
-            "Change Trading Coins",
             "Change Strategy",
             "Change Trading Settings",
             "Run Benchmark",
         ];
+
         let default_index = options.len() + 1;
         let selection = select_from_list("", &options, Some(default_index));
         match selection {
-            0 => change_benchmark_datetimes(),
+            0 => {
+                let result = change_benchmark_datetimes(
+                    start_datetime,
+                    end_datetime,
+                    &current_trader_exchange.value(),
+                    &current_strategy.value(),
+                );
+                if result.is_some() {
+                    let (updated_start_datetime, updated_end_datetime) = result.unwrap();
+                    start_datetime = updated_start_datetime;
+                    end_datetime = updated_end_datetime;
+                }
+                continue;
+            }
+            1 => {
+                // CHANGE SYMBOLS PAIR
+            }
+            2 => {
+                // CHANGE PROVIDER EXCHANGE
+            }
+            3 => {
+                // CHANGE TRADER EXCHANGE
+            }
+            4 => {
+                // CHANGE STRATEGY
+            }
+            5 => {
+                // CHANGE TRADING SETTINGS
+            }
+            6 => {
+                // RUN BENCHMARK
+            }
+            _ => {
+                println!("Invalid option");
+                continue;
+            }
         }
     }
 
@@ -67,47 +236,6 @@ async fn main() {
     // let trading_initial_datetime = start_datetime + Duration::seconds(seconds_to_next_full_minute);
 
     // let cloud_length = 20;
-
-    let fast_slow_mas_indicator = FastSlowRelativeMovingAverages {
-        name: "FastSlowRelativeMovingAverages".to_string(),
-        contract: traded_contract,
-        fast_period: 20,
-        slow_period: 200,
-        cloud_length,
-        momentum_diff_span: 15,
-    };
-
-    let pre_indicators: Vec<IndicatorWrapper> = vec![];
-
-    let indicators: Vec<IndicatorWrapper> = vec![fast_slow_mas_indicator.into()];
-
-    let multiple_stochastic_with_threshold_short_signal =
-        MultipleStochasticWithThresholdShortSignal {
-            windows: windows.clone(),
-            anchor_symbol: anchor_symbol.clone(),
-            cloud_length,
-        };
-
-    let multiple_stochastic_with_threshold_long_signal =
-        MultipleStochasticWithThresholdLongSignal {
-            windows: windows.clone(),
-            anchor_symbol: anchor_symbol.clone(),
-            cloud_length,
-        };
-
-    let multiple_stochastic_with_threshold_close_short_signal =
-        MultipleStochasticWithThresholdCloseShortSignal {
-            anchor_symbol: anchor_symbol.clone(),
-            windows: windows.clone(),
-            cloud_length,
-        };
-
-    let multiple_stochastic_with_threshold_close_long_signal =
-        MultipleStochasticWithThresholdCloseLongSignal {
-            anchor_symbol: anchor_symbol.clone(),
-            windows: windows.clone(),
-            cloud_length,
-        };
 
     // let signals: Vec<SignalWrapper> = vec![
     //     multiple_stochastic_with_threshold_short_signal.into(),

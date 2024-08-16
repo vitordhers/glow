@@ -1,4 +1,5 @@
 use chrono::{Duration as ChronoDuration, NaiveDateTime};
+use common::structs::Symbol;
 use common::traits::indicator::Indicator;
 use common::traits::signal::Signal;
 use common::{
@@ -6,7 +7,6 @@ use common::{
         balance::Balance, log_level::LogLevel, order_action::OrderAction,
         trading_data_update::TradingDataUpdate,
     },
-    functions::get_symbol_ohlc_cols,
     structs::{BehaviorSubject, Execution, Trade},
     traits::exchange::{DataProviderExchange, TraderExchange, TraderHelper},
 };
@@ -20,7 +20,7 @@ use std::{
 use strategy::indicators::IndicatorWrapper;
 use strategy::preindicators::PreIndicatorWrapper;
 use strategy::signals::SignalWrapper;
-use strategy::Strategy;
+use strategy::structs::Strategy;
 use tokio::spawn;
 
 #[derive(Clone)]
@@ -38,16 +38,19 @@ pub struct DataFeed {
     pub trading_data_update_listener: BehaviorSubject<TradingDataUpdate>,
     pub trading_data_listener: BehaviorSubject<DataFrame>,
     pub trader_exchange_listener: BehaviorSubject<TraderExchangeWrapper>,
-    pub unique_symbols: Vec<&'static str>,
+    // pub unique_symbols: Vec<&'static str>,
     pub update_balance_listener: BehaviorSubject<Option<Balance>>,
     pub update_executions_listener: BehaviorSubject<Vec<Execution>>,
     pub update_order_listener: BehaviorSubject<Option<OrderAction>>,
 }
 
 impl DataFeed {
-    fn insert_kline_fields(schema_fields: &mut Vec<Field>, unique_symbols: &Vec<&str>) -> Schema {
+    fn insert_kline_fields(
+        schema_fields: &mut Vec<Field>,
+        unique_symbols: &Vec<&Symbol>,
+    ) -> Schema {
         for symbol in unique_symbols {
-            let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(&symbol);
+            let (open_col, high_col, low_col, close_col) = symbol.get_ohlc_cols();
             schema_fields.push(Field::new(&open_col, DataType::Float64));
             schema_fields.push(Field::new(&high_col, DataType::Float64));
             schema_fields.push(Field::new(&close_col, DataType::Float64));
@@ -70,7 +73,7 @@ impl DataFeed {
                 .push(preindicator_minimum_klines_for_benchmarking);
             let columns = preindicator.get_indicator_columns();
             for (name, dtype) in columns {
-                let field = Field::new(&name, dtype);
+                let field = Field::new(name.as_str(), dtype.clone());
                 schema_fields.push(field);
             }
         }
@@ -94,7 +97,7 @@ impl DataFeed {
                 .push(indicator_minimum_klines_for_benchmarking);
             let columns = indicator.get_indicator_columns();
             for (name, dtype) in columns {
-                let field = Field::new(&name, dtype);
+                let field = Field::new(name.as_str(), dtype.clone());
                 schema_fields.push(field);
             }
         }
@@ -131,7 +134,7 @@ impl DataFeed {
         is_test_mode: bool,
         kline_duration_in_seconds: u64,
         log_level: LogLevel,
-        strategy: &Strategy,
+        strategy: Strategy,
         trading_data_update_listener: &BehaviorSubject<TradingDataUpdate>,
         trading_data_listener: &BehaviorSubject<DataFrame>,
         trader_exchange_listener: &BehaviorSubject<TraderExchangeWrapper>,
@@ -151,8 +154,10 @@ impl DataFeed {
         let kline_data_schema = Self::insert_kline_fields(&mut schema_fields, &unique_symbols);
         let preindicators_minimum_klines_for_benchmarking =
             Self::insert_preindicators_fields(&mut schema_fields, &strategy.preindicators);
+
         let indicators_minimum_klines_for_benchmarking =
             Self::insert_indicators_fields(&mut schema_fields, &strategy.indicators);
+
         let minimum_klines_for_benchmarking = vec![
             preindicators_minimum_klines_for_benchmarking,
             indicators_minimum_klines_for_benchmarking,
@@ -162,11 +167,10 @@ impl DataFeed {
         .max()
         .unwrap_or_default();
         Self::insert_signals_fields(&mut schema_fields, &strategy.signals);
-        let trading_data_schema = Self::insert_performance_fields(&mut schema_fields);
 
+        let trading_data_schema = Self::insert_performance_fields(&mut schema_fields);
         let kline_duration = Duration::from_secs(kline_duration_in_seconds);
         // let current_datetime = current_datetime();
-
         let minute_lasting_seconds = initial_datetime.timestamp() % 60;
         let seconds_to_next_full_minute = if minute_lasting_seconds == 0 {
             0
@@ -211,7 +215,7 @@ impl DataFeed {
             trading_data_update_listener: trading_data_update_listener.clone(),
             trading_data_listener: trading_data_listener.clone(),
             trader_exchange_listener: trader_exchange_listener.clone(),
-            unique_symbols,
+            // unique_symbols,
             update_balance_listener: update_balance_listener.clone(),
             update_executions_listener: update_executions_listener.clone(),
             update_order_listener: update_order_listener.clone(),

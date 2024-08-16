@@ -1,63 +1,84 @@
-use common::{structs::Symbol, traits::indicator::Indicator};
+use super::{PreIndicatorParamsWrapper, PreIndicatorWrapper};
+use crate::functions::calculate_span_alpha;
+use common::{
+    r#static::get_default_symbol,
+    structs::{Symbol, SymbolsPair},
+    traits::indicator::Indicator,
+};
 use glow_error::{assert_or_error, GlowError};
 use polars::prelude::*;
 
-use crate::functions::calculate_span_alpha;
+const NAME: &'static str = "EMA";
+const TREND_COL: &'static str = "EMA_bullish";
 
-use super::PreIndicatorParamsWrapper;
-
-#[derive(Clone)]
-pub struct EMA {
-    pub name: &'static str,
-    pub anchor_symbol: &'static Symbol,
-    pub trend_col: String,
-    pub params: EMAParams,
-}
-
-// impl EMA {
-//     fn new(anchor_symbol: &str) -> Self {
-//         let anchor_symbol = SYMBOLS_MAP.get(anchor_symbol).unwrap();
-//         Self {
-//             name: "EMA",
-//             anchor_symbol,
-
-//         }
-//     }
-// }
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EMAParams {
     pub long_span: usize,
     pub short_span: usize,
 }
 
+impl Default for EMAParams {
+    fn default() -> Self {
+        Self {
+            long_span: 200,
+            short_span: 20,
+        }
+    }
+}
+
 impl Into<EMAParams> for PreIndicatorParamsWrapper {
     fn into(self) -> EMAParams {
         match self {
-            Self::Ema(params) => params
+            Self::Ema(params) => params,
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EMA {
+    pub name: &'static str,
+    pub anchor_symbol: &'static Symbol,
+    pub params: EMAParams,
+    columns: Vec<(String, DataType)>,
+}
+
+impl EMA {
+    fn new(params: EMAParams, anchor_symbol: &'static Symbol) -> Self {
+        let mut columns = Vec::new();
+        columns.push((
+            format!("{}_fast_ema", anchor_symbol.name),
+            DataType::Float64,
+        ));
+        columns.push((
+            format!("{}_slow_ema", anchor_symbol.name),
+            DataType::Float64,
+        ));
+        columns.push((TREND_COL.to_string(), DataType::Boolean));
+        Self {
+            name: NAME,
+            anchor_symbol,
+            params,
+            columns,
+        }
+    }
+}
+
+impl Default for EMA {
+    fn default() -> Self {
+        Self::new(EMAParams::default(), get_default_symbol())
     }
 }
 
 impl Indicator for EMA {
     type Params = EMAParams;
+    type Wrapper = PreIndicatorWrapper;
 
     fn name(&self) -> &'static str {
-        self.name.clone()
+        self.name
     }
 
-    fn get_indicator_columns(&self) -> Vec<(String, DataType)> {
-        let mut columns_names = Vec::new();
-
-        let fast_ema_col_title = format!("{}_fast_ema", &self.anchor_symbol.name);
-        let fast_ema_col_dtype = DataType::Float64;
-        let slow_ema_col_title = format!("{}_slow_ema", &self.anchor_symbol.name);
-        let slow_ema_col_dtype = DataType::Float64;
-
-        columns_names.push((fast_ema_col_title, fast_ema_col_dtype));
-        columns_names.push((slow_ema_col_title, slow_ema_col_dtype));
-        columns_names.push((self.trend_col.clone(), DataType::Int32));
-        columns_names
+    fn get_indicator_columns(&self) -> &Vec<(String, DataType)> {
+        &self.columns
     }
 
     fn set_indicator_columns(&self, lf: LazyFrame) -> Result<LazyFrame, GlowError> {
@@ -65,11 +86,16 @@ impl Indicator for EMA {
             long_span,
             short_span,
         } = self.params;
-        // let (_, _, _, close_col) = get_symbol_ohlc_cols(&self.anchor_symbol);
+
         let close_col = self.anchor_symbol.get_close_col();
-        let ema_short_col = &format!("{}_ema_s", &self.anchor_symbol.name);
-        let ema_long_col = &format!("{}_ema_l", &self.anchor_symbol.name);
-        let trend_col = &self.trend_col;
+        let cols = self.get_indicator_columns();
+
+        let (ema_short_col, _) = cols
+            .get(0)
+            .expect("EMA indicator to have column at index 0");
+        let (ema_long_col, _) = cols
+            .get(1)
+            .expect("EMA indicator to have column at index 1");
 
         let long_alpha = calculate_span_alpha(long_span as f64)?;
 
@@ -93,23 +119,23 @@ impl Indicator for EMA {
 
         let mut lf = lf
             .with_columns([
-                col(&close_col).ewm_mean(long_opts).alias(ema_long_col),
-                col(&close_col).ewm_mean(short_opts).alias(ema_short_col),
+                col(close_col).ewm_mean(long_opts).alias(ema_long_col),
+                col(close_col).ewm_mean(short_opts).alias(ema_short_col),
             ])
             .with_column(
                 when(col(ema_short_col).is_null().or(col(ema_long_col).is_null()))
                     .then(lit(NULL))
                     .otherwise(
-                        when(col(&ema_short_col).gt(col(ema_long_col)))
-                            .then(1)
-                            .otherwise(0),
+                        when(col(ema_short_col).gt(col(ema_long_col)))
+                            .then(true)
+                            .otherwise(false),
                     )
-                    .alias(trend_col),
+                    .alias(&TREND_COL),
             );
 
         lf = lf.select([
             col("start_time"),
-            col(&self.trend_col),
+            col(&TREND_COL),
             col(ema_long_col),
             col(ema_short_col),
         ]);
@@ -124,7 +150,7 @@ impl Indicator for EMA {
         let mut result_df = df.clone();
 
         for (column, _) in self.get_indicator_columns() {
-            let series = new_df.column(&column)?;
+            let series = new_df.column(column)?;
             let _ = result_df.replace(&column, series.to_owned());
         }
 
@@ -135,9 +161,25 @@ impl Indicator for EMA {
         self.params.long_span as u32
     }
 
-    fn patch_params(&mut self, params: Self::Params) -> Result<(), GlowError> {
+    fn patch_params(&self, params: Self::Params) -> Result<Self::Wrapper, GlowError> {
+        let mut updated = self.clone();
+        if self.params == params {
+            return Ok(updated.into());
+        }
         assert_or_error!(params.long_span > params.short_span);
-        self.params = params;
-        Ok(())
+        updated.params = params;
+        Ok(updated.into())
+    }
+
+    fn patch_symbols_pair(
+        &self,
+        updated_symbols_pair: SymbolsPair,
+    ) -> Result<Self::Wrapper, GlowError> {
+        let mut updated = self.clone();
+        if self.anchor_symbol == updated_symbols_pair.anchor {
+            return Ok(updated.into());
+        }
+        updated.anchor_symbol = updated_symbols_pair.anchor;
+        Ok(updated.into())
     }
 }

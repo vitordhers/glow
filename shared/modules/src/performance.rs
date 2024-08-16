@@ -1,10 +1,10 @@
 // use chrono::{Datelike, Local};
 use chrono::{Duration, NaiveDateTime};
 use common::functions::csv::save_csv;
-use common::structs::TradingSettings;
+use common::structs::{Symbol, TradingSettings};
 use common::{
     constants::DAY_IN_MS,
-    functions::{get_symbol_ohlc_cols, round_down_nth_decimal},
+    functions::round_down_nth_decimal,
     // structs::BehaviorSubject,
 };
 use glow_error::GlowError;
@@ -80,7 +80,7 @@ impl Performance {
 
         let trading_journey_identifier = format!(
             "{}_{}_{}",
-            journey_formmated_datetime_start, anchor_symbol, traded_symbol
+            journey_formmated_datetime_start, anchor_symbol.name, traded_symbol.name
         );
 
         let path = get_current_env_log_path();
@@ -122,7 +122,7 @@ impl Performance {
 
         let trading_journey_identifier = format!(
             "{}_{}_{}",
-            journey_formmated_datetime_start, anchor_symbol, traded_symbol
+            journey_formmated_datetime_start, anchor_symbol.name, traded_symbol.name
         );
 
         let trading_journey_start = self.trading_initial_datetime.timestamp_millis();
@@ -166,7 +166,7 @@ fn get_current_env_log_path() -> String {
 pub fn calculate_benchmark_data(
     benchmark_trading_data: &LazyFrame,
     risk_free_returns: f64,
-    traded_symbol: &'static str,
+    traded_symbol: &Symbol,
 ) -> Result<(DataFrame, Statistics), GlowError> {
     let trades_lf = calculate_trades(benchmark_trading_data)?;
 
@@ -185,7 +185,7 @@ pub fn calculate_benchmark_data(
 pub fn update_trading_data(
     trading_data: &DataFrame,
     risk_free_returns: f64,
-    traded_symbol: &'static str,
+    traded_symbol: &Symbol,
     log_from_timestamp_on: Option<NaiveDateTime>,
 ) -> Result<(DataFrame, Statistics), GlowError> {
     let trading_data_lf = trading_data.clone().lazy();
@@ -218,7 +218,7 @@ pub fn calculate_trades(lf: &LazyFrame) -> Result<LazyFrame, GlowError> {
 
 pub fn calculate_trading_sessions(
     lf: LazyFrame,
-    traded_symbol: &'static str,
+    traded_symbol: &Symbol,
     log_from_timestamp_on: Option<NaiveDateTime>,
 ) -> Result<LazyFrame, GlowError> {
     let mut lf = lf.clone();
@@ -246,7 +246,7 @@ pub fn calculate_trading_sessions(
             .otherwise(col("session"))
             .keep_name(),
         );
-    let (open_col, high_col, low_col, close_col) = get_symbol_ohlc_cols(traded_symbol);
+    let (open_col, high_col, low_col, close_col) = traded_symbol.get_ohlc_cols();
 
     // let file_name = "trades_lf.csv".to_string();
     // let trades_df = lf.clone().collect()?;

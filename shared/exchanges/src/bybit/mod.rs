@@ -7,13 +7,16 @@ use self::structs::{
     FetchHistoryOrderDto, FetchPositionDto, OrderData, OrderResponse, PositionResponseData,
     SetLeverageDto, WsRequest,
 };
+use crate::enums::TraderExchangeId;
+use crate::r#static::TRADER_EXCHANGES_CONTEXT_MAP;
 use crate::{
-    config::{EXCHANGES_CONFIGS, EXCHANGES_CONTEXTS, WS_RECONNECT_INTERVAL_IN_SECS},
+    config::{TRADER_EXCHANGES_CONFIG_MAP, WS_RECONNECT_INTERVAL_IN_SECS},
     structs::{ApiCredentials, ApiEndpoints},
 };
 use common::constants::SECONDS_IN_MIN;
 use common::enums::modifiers::price_level::{PriceLevel, TrailingStopLoss};
 use common::enums::order_action::OrderAction;
+use common::enums::symbol_id::SymbolId;
 use common::functions::{
     closest_multiple_below, current_datetime, current_timestamp, current_timestamp_ms,
     timestamp_minute_end,
@@ -70,7 +73,7 @@ use url::Url;
 
 #[derive(Clone)]
 pub struct BybitTraderExchange {
-    pub contracts: &'static HashMap<&'static str, Contract>,
+    pub contracts: &'static HashMap<SymbolId, Contract>,
     credentials: ApiCredentials,
     current_trade_listener: BehaviorSubject<Option<Trade>>,
     endpoints: ApiEndpoints,
@@ -93,11 +96,11 @@ impl BybitTraderExchange {
         update_executions_listener: &BehaviorSubject<Vec<Execution>>,
         update_order_listener: &BehaviorSubject<Option<OrderAction>>,
     ) -> Self {
-        let config = EXCHANGES_CONFIGS
-            .get("Bybit")
+        let config = TRADER_EXCHANGES_CONFIG_MAP
+            .get(&TraderExchangeId::Bybit)
             .expect("Bybit to has Exchange Config");
-        let context = EXCHANGES_CONTEXTS
-            .get("Bybit")
+        let context = TRADER_EXCHANGES_CONTEXT_MAP
+            .get(&TraderExchangeId::Bybit)
             .expect("Bybit to has Exchange Context");
 
         let mut headers = HeaderMap::new();
@@ -203,7 +206,7 @@ impl BybitTraderExchange {
 
 impl TraderHelper for BybitTraderExchange {
     #[inline]
-    fn get_contracts(&self) -> &HashMap<&str, Contract> {
+    fn get_contracts(&self) -> &HashMap<SymbolId, Contract> {
         self.contracts
     }
     #[inline]
@@ -513,6 +516,7 @@ impl TraderExchange for BybitTraderExchange {
     // TODO: divide this in own methods
     fn process_ws_message(&self, json: &String) -> Result<(), GlowError> {
         let response: BybitWsMessage = from_str::<BybitWsMessage>(&json).unwrap_or_default();
+        let traded_symbol_str = self.get_traded_symbol().name;
 
         match response {
             BybitWsMessage::None => Ok(()),
@@ -557,7 +561,7 @@ impl TraderExchange for BybitTraderExchange {
             }
             BybitWsMessage::Order(message) => {
                 let order_response = message.data.into_iter().find(|order_data| {
-                    order_data.symbol == self.get_traded_symbol() && !order_data.is_trigger_order()
+                    order_data.symbol == traded_symbol_str && !order_data.is_trigger_order()
                 });
 
                 if let None = order_response {
@@ -631,7 +635,7 @@ impl TraderExchange for BybitTraderExchange {
         let payload = FetchExecutionsDto {
             category: "linear".to_string(),
             order_uuid,
-            symbol: traded_symbol.to_string(),
+            symbol: traded_symbol.name.to_string(),
             start_timestamp,
             end_timestamp,
         };
@@ -670,7 +674,7 @@ impl TraderExchange for BybitTraderExchange {
             category: "linear".to_string(),
             id: id.clone(),
             side,
-            symbol: traded_symbol.to_string(),
+            symbol: traded_symbol.name.to_string(),
         };
 
         let request_builder =
@@ -738,7 +742,7 @@ impl TraderExchange for BybitTraderExchange {
         let payload = FetchCurrentOrderDto {
             category: "linear".to_string(),
             id: order_id.clone(),
-            symbol: traded_symbol.to_string(),
+            symbol: traded_symbol.name.to_string(),
             open_only: 2,
         };
 
@@ -815,7 +819,7 @@ impl TraderExchange for BybitTraderExchange {
         let traded_symbol = self.get_traded_symbol();
         let payload = FetchPositionDto {
             category: "linear".to_string(),
-            symbol: traded_symbol.to_string(),
+            symbol: traded_symbol.name.to_string(),
         };
 
         let request_builder =
@@ -878,7 +882,7 @@ impl TraderExchange for BybitTraderExchange {
         let traded_symbol = self.get_traded_symbol();
         let payload = FetchPositionDto {
             category: "linear".to_string(),
-            symbol: traded_symbol.to_string(),
+            symbol: traded_symbol.name.to_string(),
         };
 
         let request_builder =
@@ -896,7 +900,7 @@ impl TraderExchange for BybitTraderExchange {
         if let None = position_response {
             let error = format!(
                 r#"fetch_trade_state -> symbol {} doesn't have any open position"#,
-                traded_symbol
+                traded_symbol.name
             );
             return Err(GlowError::new(
                 String::from("Invalid Position Error"),
@@ -1287,7 +1291,7 @@ impl TraderExchange for BybitTraderExchange {
         let payload = CancelOrderDto::new(
             order_id.clone(),
             "linear".to_string(),
-            traded_symbol.to_string(),
+            traded_symbol.name.to_string(),
         );
         let request_builder =
             self.prepare_request_builder(HttpMethod::Post, "/v5/order/cancel", &payload)?;
@@ -1312,14 +1316,14 @@ impl TraderExchange for BybitTraderExchange {
         assert!(
             leverage_factor > max_leverage_allowed,
             "symbol {} only allows for max {} leverage, {} was sent",
-            traded_symbol,
+            traded_symbol.name,
             max_leverage_allowed,
             leverage_factor
         );
 
         let payload = SetLeverageDto::new(
             "linear".to_string(),
-            traded_symbol.to_string(),
+            traded_symbol.name.to_string(),
             leverage_factor,
         );
 
@@ -1354,7 +1358,7 @@ impl TraderExchange for BybitTraderExchange {
         let timestamp = current_timestamp_ms();
         let id = format!(
             "{}_{}_{}",
-            &contract.symbol,
+            &contract.symbol.name,
             timestamp,
             OrderStage::Open.to_string()
         );
@@ -1376,7 +1380,7 @@ impl TraderExchange for BybitTraderExchange {
         let order = Order::new(
             "".to_string(),
             id,
-            contract.symbol.to_string(),
+            contract.symbol.name.to_string(),
             OrderStatus::StandBy,
             open_order_type.clone(),
             side,
@@ -1633,7 +1637,7 @@ impl BenchmarkExchange for BybitTraderExchange {
 
         let id = format!(
             "{}_{}_{}",
-            &contract.symbol,
+            &contract.symbol.name,
             timestamp,
             OrderStage::Open.to_string()
         );
@@ -1668,7 +1672,7 @@ impl BenchmarkExchange for BybitTraderExchange {
         let order = Order::new(
             order_uuid,
             id,
-            contract.symbol.to_string(),
+            contract.symbol.name.to_string(),
             OrderStatus::Filled,
             open_order_type,
             side,

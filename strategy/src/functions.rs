@@ -1,3 +1,4 @@
+use crate::{enums::StrategyId, r#static::STRATEGIES_MAP, structs::Strategy};
 use glow_error::GlowError;
 
 pub fn calculate_span_alpha(span: f64) -> Result<f64, GlowError> {
@@ -34,4 +35,13 @@ pub fn get_calculation_minutes(initial_minute: u32, window: &u32) -> Vec<u32> {
     minutes.sort();
 
     minutes
+}
+
+pub fn get_strategy(selected_strategy: StrategyId) -> Strategy {
+    let result = STRATEGIES_MAP.get(&selected_strategy).expect(&format!(
+        "Strategy {:?} to exist at STRATEGIES_MAP",
+        selected_strategy
+    ));
+
+    result.clone()
 }

@@ -1,4 +1,4 @@
-use common::traits::indicator::Indicator;
+use common::{structs::SymbolsPair, traits::indicator::Indicator};
 use glow_error::GlowError;
 use polars::prelude::*;
 // pub mod fast_slow_cloud_rmas;
@@ -13,7 +13,7 @@ use polars::prelude::*;
 // use stochastic_threshold::StochasticThresholdIndicator;
 // use tsi::TSIIndicator;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum IndicatorWrapper {
     // Ema(EMA),
     /* StochasticIndicator(StochasticIndicator),
@@ -23,11 +23,16 @@ pub enum IndicatorWrapper {
     // TrueStrengthIndexIndicator(TSIIndicator), */
 }
 
+#[derive(Debug, Clone)]
+pub enum IndicatorParamsWrapper {}
+
 /// Indicators are defined as such:
 /// They provide data in order to signals be set.
 /// They always must be used when calculating signals, while preindicators generated columns may not always
 /// be used in order to calculate signals.
 impl Indicator for IndicatorWrapper {
+    type Params = IndicatorParamsWrapper;
+    type Wrapper = Self;
     fn name(&self) -> &'static str {
         todo!("implement this")
         /*match self {
@@ -41,7 +46,7 @@ impl Indicator for IndicatorWrapper {
             // Self::TrueStrengthIndexIndicator(tsi_indicator) => tsi_indicator.name(),
         }*/
     }
-    fn get_indicator_columns(&self) -> Vec<(String, DataType)> {
+    fn get_indicator_columns(&self) -> &Vec<(String, DataType)> {
         todo!("implement this")
 
         /*match self {
@@ -111,7 +116,17 @@ impl Indicator for IndicatorWrapper {
             Self::TrueStrengthIndexIndicator(tsi_indicator) => tsi_indicator.get_data_offset(),
         }*/
     }
-    
+
+    fn patch_params(&self, params: Self::Params) -> Result<Self::Wrapper, GlowError> {
+        todo!()
+    }
+
+    fn patch_symbols_pair(
+        &self,
+        updated_symbols_pair: SymbolsPair,
+    ) -> Result<Self::Wrapper, GlowError> {
+        todo!()
+    }
 }
 
 // impl From<StochasticIndicator> for IndicatorWrapper {

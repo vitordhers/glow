@@ -1,13 +1,17 @@
-use crate::r#static::{SYMBOLS_LIST, SYMBOLS_MAP};
+use crate::{
+    enums::symbol_id::SymbolId,
+    r#static::{get_default_symbol, SYMBOLS_MAP},
+};
 use serde::{
     de::{Deserializer, Error, IgnoredAny, MapAccess, Visitor},
     ser::{Serialize, SerializeStruct, Serializer},
     {Deserialize, Serialize as DerivedSerialize},
 };
-use std::fmt;
+use std::{collections::HashSet, fmt};
 
-#[derive(DerivedSerialize, Deserialize, Clone, Copy, Debug)]
+#[derive(DerivedSerialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Symbol {
+    pub id: SymbolId,
     pub name: &'static str,
     pub open: &'static str,
     pub high: &'static str,
@@ -16,20 +20,20 @@ pub struct Symbol {
 }
 
 impl Symbol {
-    pub fn new(name: &'static str) -> Self {
-        let open = format!("{}_open", name);
-        let high = format!("{}_high", name);
-        let low = format!("{}_low", name);
-        let close = format!("{}_close", name);
+    // pub fn new(name: &'static str) -> Self {
+    //     let open = format!("{}_open", name);
+    //     let high = format!("{}_high", name);
+    //     let low = format!("{}_low", name);
+    //     let close = format!("{}_close", name);
 
-        Self {
-            name,
-            open: Box::leak(open.into_boxed_str()),
-            high: Box::leak(high.into_boxed_str()),
-            low: Box::leak(low.into_boxed_str()),
-            close: Box::leak(close.into_boxed_str()),
-        }
-    }
+    //     Self {
+    //         name,
+    //         open: Box::leak(open.into_boxed_str()),
+    //         high: Box::leak(high.into_boxed_str()),
+    //         low: Box::leak(low.into_boxed_str()),
+    //         close: Box::leak(close.into_boxed_str()),
+    //     }
+    // }
 
     pub fn get_open_col(&self) -> &'static str {
         self.open
@@ -49,24 +53,6 @@ impl Symbol {
     }
 }
 
-impl Default for Symbol {
-    fn default() -> Self {
-        let name = SYMBOLS_LIST.get(0).unwrap();
-        let open = format!("{}_open", name);
-        let high = format!("{}_high", name);
-        let low = format!("{}_low", name);
-        let close = format!("{}_close", name);
-
-        Self {
-            name,
-            open: Box::leak(open.into_boxed_str()),
-            high: Box::leak(high.into_boxed_str()),
-            low: Box::leak(low.into_boxed_str()),
-            close: Box::leak(close.into_boxed_str()),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct SymbolsPair {
     pub anchor: &'static Symbol,
@@ -74,30 +60,39 @@ pub struct SymbolsPair {
 }
 
 impl SymbolsPair {
-    pub fn new(anchor_symbol: &str, traded_symbol: &str) -> Self {
-        let anchor = SYMBOLS_MAP.get(anchor_symbol).expect(&format!(
+    pub fn new(anchor_symbol_id: &SymbolId, traded_symbol_id: &SymbolId) -> Self {
+        let anchor_symbol_str = anchor_symbol_id.get_symbol_str();
+        let anchor = SYMBOLS_MAP.get(anchor_symbol_str).expect(&format!(
             "Anchor symbol {} to exist at SYMBOLS_MAP",
-            anchor_symbol
+            anchor_symbol_str
         ));
-        let traded = SYMBOLS_MAP.get(traded_symbol).expect(&format!(
+        let traded_symbol_str = traded_symbol_id.get_symbol_str();
+        let traded = SYMBOLS_MAP.get(traded_symbol_str).expect(&format!(
             "Traded symbol {} to exist at SYMBOLS_MAP",
-            traded_symbol
+            traded_symbol_str
         ));
         Self { anchor, traded }
+    }
+
+    pub fn get_tuple(&self) -> (&'static str, &'static str) {
+        (&self.anchor.name, &self.traded.name)
+    }
+
+    pub fn get_unique_symbols(&self) -> Vec<&'static Symbol> {
+        let mut symbols = HashSet::new();
+        symbols.insert(self.anchor);
+        symbols.insert(self.traded);
+        symbols.into_iter().collect()
     }
 }
 
 impl Default for SymbolsPair {
     fn default() -> Self {
-        let default_symbol = Symbol::default();
-        let default_symbol = SYMBOLS_MAP.get(default_symbol.name).expect(&format!(
-            "Default symbol {} to exist at SYMBOLS_MAP",
-            default_symbol.name
-        ));
+        let default_symbol = get_default_symbol();
 
         Self {
-            anchor: &default_symbol,
-            traded: &default_symbol,
+            anchor: default_symbol,
+            traded: default_symbol,
         }
     }
 }
