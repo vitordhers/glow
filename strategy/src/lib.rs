@@ -2,7 +2,7 @@ use common::structs::SymbolsPair;
 use glow_error::GlowError;
 use params::{Param, ParamId};
 use polars::prelude::{DataFrame, DataType, LazyFrame};
-use schemas::Schema;
+use schemas::{Schema, StrategySchema};
 use std::collections::HashMap;
 pub mod functions;
 pub mod params;
@@ -16,20 +16,26 @@ pub enum StrategyId {
 }
 
 #[derive(Clone)]
-pub struct Strategy<S>
-where
-    S: Schema,
-{
+pub struct Strategy {
     pub id: StrategyId,
-    pub schema: S,
+    pub schema: StrategySchema,
     pub symbols_pair: SymbolsPair,
     pub params: HashMap<ParamId, Param>,
 }
 
-impl<S> Strategy<S>
-where
-    S: Schema,
-{
+impl Strategy {
+    pub fn new(id: StrategyId, symbols_pair: SymbolsPair) -> Self {
+        let schema: StrategySchema = id.into();
+        let params = schema.get_params_config();
+
+        Self {
+            id,
+            schema,
+            symbols_pair,
+            params,
+        }
+    }
+
     pub fn patch_symbols_pair(&self, updated_symbols_pair: SymbolsPair) -> Self {
         let mut updated_strategy = self.clone();
         updated_strategy.symbols_pair = updated_symbols_pair;
@@ -84,5 +90,13 @@ where
 
     pub fn get_minimum_klines_for_calculation(&self) -> u32 {
         self.schema.get_minimum_klines_for_calculation(&self.params)
+    }
+}
+
+impl Default for Strategy {
+    fn default() -> Self {
+        let symbols_pair = SymbolsPair::default();
+        let default_schema_id = StrategyId::default();
+        Self::new(default_schema_id, symbols_pair)
     }
 }

@@ -1,15 +1,22 @@
+use enum_dispatch::enum_dispatch;
 use simple_trend::SimpleTrendStrategySchema;
 mod simple_trend;
-use crate::params::{Param, ParamId};
+use crate::{
+    params::{Param, ParamId},
+    StrategyId,
+};
 use common::structs::SymbolsPair;
 use glow_error::GlowError;
 use polars::prelude::{DataFrame, DataType, LazyFrame};
 use std::collections::HashMap;
 
-pub enum StrategiesSchemas {
+#[enum_dispatch(Schema)]
+#[derive(Clone, Copy)]
+pub enum StrategySchema {
     SimpleTrend(SimpleTrendStrategySchema),
 }
 
+#[enum_dispatch]
 pub trait Schema: Clone + Sized {
     fn append_indicators_to_lf(
         &self,
@@ -35,9 +42,7 @@ pub trait Schema: Clone + Sized {
         symbols_pair: SymbolsPair,
         params: &HashMap<ParamId, Param>,
     ) -> Result<DataFrame, GlowError>;
-
     fn get_params_config(&self) -> HashMap<ParamId, Param>;
-
     fn get_indicators_columns(
         &self,
         symbols_pair: SymbolsPair,
@@ -49,4 +54,22 @@ pub trait Schema: Clone + Sized {
         symbols_pair: SymbolsPair,
         params: &HashMap<ParamId, Param>,
     ) -> Vec<(String, DataType)>;
+}
+
+impl Default for StrategySchema {
+    fn default() -> Self {
+        let schema = SimpleTrendStrategySchema::default();
+        Self::SimpleTrend(schema)
+    }
+}
+
+impl From<StrategyId> for StrategySchema {
+    fn from(value: StrategyId) -> Self {
+        match value {
+            StrategyId::SimpleTrend => {
+                let schema = value.into();
+                StrategySchema::SimpleTrend(schema)
+            }
+        }
+    }
 }

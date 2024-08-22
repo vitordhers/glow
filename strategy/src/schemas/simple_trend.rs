@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 const TREND_COL: &'static str = "EMA_bullish";
 
-#[derive(Clone)]
+#[derive(Clone, Copy, Default)]
 pub struct SimpleTrendStrategySchema {}
 
 impl Schema for SimpleTrendStrategySchema {

@@ -15,7 +15,6 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use strategy::schemas::Schema as StrategySchema;
 use strategy::Strategy;
 use tokio::spawn;
 
@@ -79,10 +78,7 @@ impl DataFeed {
     //         .unwrap_or_default()
     // }
 
-    fn insert_indicators_fields<S: StrategySchema>(
-        schema_fields: &mut Vec<Field>,
-        strategy: &Strategy<S>,
-    ) {
+    fn insert_indicators_fields(schema_fields: &mut Vec<Field>, strategy: &Strategy) {
         let columns = strategy.get_indicators_columns();
 
         for (name, dtype) in columns {
@@ -91,10 +87,7 @@ impl DataFeed {
         }
     }
 
-    fn insert_signals_fields<S: StrategySchema>(
-        schema_fields: &mut Vec<Field>,
-        strategy: &Strategy<S>,
-    ) {
+    fn insert_signals_fields(schema_fields: &mut Vec<Field>, strategy: &Strategy) {
         for (name, dtype) in strategy.get_signals_columns() {
             let field = Field::new(name.as_str(), dtype);
             schema_fields.push(field);
@@ -112,7 +105,7 @@ impl DataFeed {
         Schema::from_iter(schema_fields.clone().into_iter())
     }
 
-    pub fn new<S: StrategySchema>(
+    pub fn new(
         current_trade_listener: &BehaviorSubject<Option<Trade>>,
         data_provider_exchange_socket_error_ts: &Arc<Mutex<Option<i64>>>,
         data_provider_exchange: DataProviderExchangeWrapper,
@@ -120,7 +113,7 @@ impl DataFeed {
         is_test_mode: bool,
         kline_duration_in_seconds: u64,
         log_level: LogLevel,
-        strategy: &Strategy<S>,
+        strategy: &Strategy,
         trading_data_update_listener: &BehaviorSubject<TradingDataUpdate>,
         trading_data_listener: &BehaviorSubject<DataFrame>,
         trader_exchange_listener: &BehaviorSubject<TraderExchangeWrapper>,

@@ -2114,6 +2114,7 @@ version = "0.0.2"
 dependencies = [
  "chrono",
  "common",
+ "enum_dispatch",
  "glow_error",
  "polars",
 ]

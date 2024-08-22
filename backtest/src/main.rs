@@ -49,12 +49,14 @@ async fn main() {
     // depends on: [symbols]
 
     let selected_symbols_pair = BehaviorSubject::new(SymbolsPair::default());
+
     let default_trading_settings = TradingSettings::load_or_default();
     let current_trading_settings = BehaviorSubject::new(TradingSettings::load_or_default());
 
     let ctsc = current_trading_settings.clone();
+    let sspc = selected_symbols_pair.clone(); 
     let selected_symbols_handle = spawn(async move {
-        let mut selection_subscription = selected_symbols_pair.subscribe();
+        let mut selection_subscription = sspc.subscribe();
         // let current_trading_settings = current_trading_settings.clone();
 
         while let Some(updated_symbols_pair) = selection_subscription.next().await {
@@ -103,20 +105,24 @@ async fn main() {
                 &update_executions_listener,
                 &update_order_listener,
             );
-            &current_trader_exchange.next(updated_trader_exchange);
+            cte.next(updated_trader_exchange);
         }
     });
 
     selected_trader_exchange_handle.await;
 
     let selected_strategy_id = BehaviorSubject::new(StrategyId::default());
-    let current_strategy = BehaviorSubject::new(get_default_strategy());
+    let current_strategy = BehaviorSubject::new(Strategy::default());
+
     let csc = current_strategy.clone();
+    let ssp = selected_symbols_pair.clone();
     let selected_strategy_handle = spawn(async move {
         let selection_subscription = &mut selected_strategy_id.subscribe();
 
         while let Some(selected_strategy_id) = selection_subscription.next().await {
-            let updated_strategy = Strategy::new(name, preindicators, indicators, signals);
+            let current_symbol_pair = ssp.value();
+            let updated_strategy = Strategy::new(selected_strategy_id, current_symbol_pair);
+            csc.next(updated_strategy);
         }
     });
 
@@ -155,7 +161,7 @@ async fn main() {
                 selected_exchange,
                 granularity.get_duration(),
                 &data_provider_last_ws_error_ts,
-                strategy.get_minimum_klines_for_benchmarking(),
+                strategy.get_minimum_klines_for_calculation(),
                 symbols_pair,
                 &tudl,
             );
@@ -185,11 +191,13 @@ async fn main() {
         let selection = select_from_list("", &options, Some(default_index));
         match selection {
             0 => {
+                let current_strategy = current_strategy.value();
+                let current_trade_exchange = current_trader_exchange.value();
                 let result = change_benchmark_datetimes(
                     start_datetime,
                     end_datetime,
-                    &current_trader_exchange.value(),
-                    &current_strategy.value(),
+                    &current_trade_exchange,
+                    current_strategy.get_minimum_klines_for_calculation(),
                 );
                 if result.is_some() {
                     let (updated_start_datetime, updated_end_datetime) = result.unwrap();
