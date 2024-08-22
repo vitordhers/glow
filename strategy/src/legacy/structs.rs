@@ -1,22 +1,9 @@
-use crate::{
-    indicators::IndicatorWrapper, preindicators::PreIndicatorWrapper, signals::SignalWrapper,
-};
-use common::{
-    structs::SymbolsPair,
-    traits::{indicator::Indicator, signal::Signal},
-};
-use glow_error::GlowError;
-
 #[derive(Clone, Debug)]
 pub struct Strategy {
     pub name: &'static str,
     pub preindicators: Vec<PreIndicatorWrapper>,
     pub indicators: Vec<IndicatorWrapper>,
     pub signals: Vec<SignalWrapper>,
-}
-
-pub struct TestNew<T: Indicator + Clone > {
-    preindicators: Vec<T>,
 }
 
 impl<T: Indicator + Clone> TestNew<T> {

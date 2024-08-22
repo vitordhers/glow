@@ -1,11 +1,8 @@
 // use chrono::Duration;
 // use glow_error::GlowError;
 // use polars::prelude::TimeUnit;
-
 use std::fmt::Display;
-
 use glow_error::GlowError;
-
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ParamId {
     SlowSpan,
@@ -110,19 +107,4 @@ pub struct StringParamConfig {
     pub default: String,
 }
 
-impl StringParamConfig {
-    // pub fn new<T: ToString>(value: T, default: Option<T>) -> Self {
-    //     let mut default_value = None;
-    //     if let Some(default) = default {
-    //         default_value = Some(default.to_string());
-    //     }
-    //     Self {
-    //         value: value.to_string(),
-    //         default: default_value,
-    //     }
-    // }
-
-    // pub fn get_value(&self) -> String {
-    //     self.value.clone()
-    // }
-}
+impl StringParamConfig {}

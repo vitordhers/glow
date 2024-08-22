@@ -1,21 +1,18 @@
+use super::Schema;
 use crate::{
-    enums::StrategyId,
     functions::calculate_span_alpha,
     params::{NumberParamConfig, Param, ParamId},
+    StrategyId,
 };
 use common::{enums::signal_category::SignalCategory, structs::SymbolsPair};
 use glow_error::GlowError;
 use polars::prelude::*;
-use std::{collections::HashMap, sync::LazyLock};
-
-use super::Schema;
+use std::collections::HashMap;
 
 const TREND_COL: &'static str = "EMA_bullish";
 
 #[derive(Clone)]
 pub struct SimpleTrendStrategySchema {}
-pub static DEFAULT_SIMPLE_TREND_STRATEGY_SCHEMA: LazyLock<SimpleTrendStrategySchema> =
-    LazyLock::new(|| SimpleTrendStrategySchema {});
 
 impl Schema for SimpleTrendStrategySchema {
     fn append_indicators_to_lf(

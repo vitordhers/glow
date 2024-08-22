@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use serde_json::to_string;
 
 use crate::{r#static::SYMBOLS_MAP, structs::Symbol};
 
@@ -39,6 +38,7 @@ impl SymbolId {
 }
 
 // #[test]
+// use serde_json::to_string;
 // use glow_error::GlowError;
 // fn test_serialization() -> Result<(), GlowError> {
 //     let result = to_string(&SymbolId::Chainlink)?;
