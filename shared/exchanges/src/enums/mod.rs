@@ -120,7 +120,7 @@ impl TraderExchangeWrapper {
         selected_exchange: TraderExchangeId,
         current_trade_listener: &BehaviorSubject<Option<Trade>>,
         last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
-        trading_settings: &Arc<RwLock<TradingSettings>>,
+        trading_settings: &TradingSettings,
         update_balance_listener: &BehaviorSubject<Option<Balance>>,
         update_executions_listener: &BehaviorSubject<Vec<Execution>>,
         update_order_listener: &BehaviorSubject<Option<OrderAction>>,
@@ -143,7 +143,7 @@ impl TraderExchangeWrapper {
 }
 
 impl TraderHelper for TraderExchangeWrapper {
-    fn get_trading_settings(&self) -> TradingSettings {
+    fn get_trading_settings(&self) -> &TradingSettings {
         match self {
             Self::Bybit(ex) => ex.get_trading_settings(),
         }

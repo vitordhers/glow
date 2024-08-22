@@ -69,7 +69,7 @@ pub trait TraderHelper {
         settings.leverage.get_factor()
     }
 
-    fn get_trading_settings(&self) -> TradingSettings;
+    fn get_trading_settings(&self) -> &TradingSettings;
     fn get_taker_fee(&self) -> f64;
     fn get_maker_fee(&self) -> f64;
 

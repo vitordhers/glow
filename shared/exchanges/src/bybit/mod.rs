@@ -81,7 +81,7 @@ pub struct BybitTraderExchange {
     http: Client,
     last_ws_error_ts: Arc<Mutex<Option<i64>>>,
     pub name: &'static str,
-    pub trading_settings: Arc<RwLock<TradingSettings>>,
+    pub trading_settings: TradingSettings,
     update_balance_listener: BehaviorSubject<Option<Balance>>,
     update_executions_listener: BehaviorSubject<Vec<Execution>>,
     update_order_listener: BehaviorSubject<Option<OrderAction>>,
@@ -91,7 +91,7 @@ impl BybitTraderExchange {
     pub fn new(
         current_trade_listener: &BehaviorSubject<Option<Trade>>,
         last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
-        trading_settings: &Arc<RwLock<TradingSettings>>,
+        trading_settings: &TradingSettings,
         update_balance_listener: &BehaviorSubject<Option<Balance>>,
         update_executions_listener: &BehaviorSubject<Vec<Execution>>,
         update_order_listener: &BehaviorSubject<Option<OrderAction>>,
@@ -218,11 +218,8 @@ impl TraderHelper for BybitTraderExchange {
         self.fee_rates.1
     }
     #[inline]
-    fn get_trading_settings(&self) -> TradingSettings {
-        self.trading_settings
-            .read()
-            .expect("trading settings to be readable")
-            .clone()
+    fn get_trading_settings(&self) -> &TradingSettings {
+        &self.trading_settings
     }
 
     fn calculate_open_order_units_and_balance_remainder(

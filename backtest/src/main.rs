@@ -41,12 +41,7 @@ async fn main() {
         Amen 🙏"#
     );
 
-    // inputs:
-    // * symbols *
-    // depends on: []
-    // updates: [trading_settings, strategy]
-    // * trading settings *
-    // depends on: [symbols]
+    /// piping information: https://app.clickup.com/9013233975/v/wb/8ckp29q-433
 
     let selected_symbols_pair = BehaviorSubject::new(SymbolsPair::default());
 
@@ -54,7 +49,7 @@ async fn main() {
     let current_trading_settings = BehaviorSubject::new(TradingSettings::load_or_default());
 
     let ctsc = current_trading_settings.clone();
-    let sspc = selected_symbols_pair.clone(); 
+    let sspc = selected_symbols_pair.clone();
     let selected_symbols_handle = spawn(async move {
         let mut selection_subscription = sspc.subscribe();
         // let current_trading_settings = current_trading_settings.clone();
@@ -66,9 +61,6 @@ async fn main() {
     });
 
     selected_symbols_handle.await;
-
-    let trading_settings: Arc<RwLock<TradingSettings>> =
-        Arc::new(RwLock::new(default_trading_settings));
 
     let current_trade_listener: BehaviorSubject<Option<Trade>> = BehaviorSubject::new(None);
     let trader_last_ws_error_ts: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
@@ -83,7 +75,7 @@ async fn main() {
         default_trader_exchange_id,
         &current_trade_listener,
         &trader_last_ws_error_ts,
-        &trading_settings,
+        &default_trading_settings,
         &update_balance_listener,
         &update_executions_listener,
         &update_order_listener,
@@ -93,9 +85,11 @@ async fn main() {
     let cte = current_trader_exchange.clone();
     let selected_trader_exchange_handle = spawn(async move {
         let selection_subscription = &mut selected_trader_exchange_id.subscribe();
-        // let mut settings_subscription = ctsc.subscribe();
+        let mut settings_subscription = ctsc.subscribe();
 
-        while let Some(selected_exchange_id) = selection_subscription.next().await {
+        while let (Some(selected_exchange_id), Some(trading_settings)) =
+            join!(selection_subscription.next(), settings_subscription.next())
+        {
             let updated_trader_exchange = TraderExchangeWrapper::new(
                 selected_exchange_id,
                 &current_trade_listener,
@@ -115,12 +109,17 @@ async fn main() {
     let current_strategy = BehaviorSubject::new(Strategy::default());
 
     let csc = current_strategy.clone();
-    let ssp = selected_symbols_pair.clone();
+    let ctsc = current_trading_settings.clone();
+
     let selected_strategy_handle = spawn(async move {
         let selection_subscription = &mut selected_strategy_id.subscribe();
+        let mut trading_settings_subscription = ctsc.subscribe();
 
-        while let Some(selected_strategy_id) = selection_subscription.next().await {
-            let current_symbol_pair = ssp.value();
+        while let (Some(selected_strategy_id), Some(trading_settings)) = join!(
+            selection_subscription.next(),
+            trading_settings_subscription.next()
+        ) {
+            let current_symbol_pair = trading_settings.symbols_pair;
             let updated_strategy = Strategy::new(selected_strategy_id, current_symbol_pair);
             csc.next(updated_strategy);
         }
