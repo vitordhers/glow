@@ -17,7 +17,7 @@ use exchanges::enums::{
     DataProviderExchangeId, DataProviderExchangeWrapper, TraderExchangeId, TraderExchangeWrapper,
 };
 use futures_util::StreamExt;
-use modules::data_feed::DataFeed;
+use core::data_feed::DataFeed;
 use polars::prelude::DataFrame;
 use std::{
     collections::HashMap,

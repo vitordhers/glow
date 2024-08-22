@@ -13,7 +13,7 @@ dialoguer = { workspace = true }
 dotenv = { workspace = true }
 exchanges = { workspace = true }
 futures-util = { workspace = true }
-modules = { workspace = true }
+core = { workspace = true }
 polars = { workspace = true }
 regex = { workspace = true }
 strategy = { workspace = true }

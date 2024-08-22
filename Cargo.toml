@@ -64,8 +64,8 @@ path = "shared/exchanges"
 [workspace.dependencies.glow_error]
 path = "shared/error"
 
-[workspace.dependencies.modules]
-path = "shared/modules"
+[workspace.dependencies.core]
+path = "shared/core"
 
 [workspace.dependencies.strategy]
 path = "strategy"

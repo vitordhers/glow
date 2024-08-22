@@ -160,11 +160,11 @@ dependencies = [
  "chrono",
  "cli",
  "common",
+ "core",
  "dialoguer",
  "dotenv",
  "exchanges",
  "futures-util",
- "modules",
  "polars",
  "regex",
  "strategy",
@@ -342,6 +342,27 @@ dependencies = [
  "libc",
  "unicode-width",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "core"
+version = "0.0.2"
+dependencies = [
+ "chrono",
+ "common",
+ "exchanges",
+ "futures-util",
+ "glow_error",
+ "log",
+ "polars",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "strategy",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "url",
 ]
 
 [[package]]
@@ -1180,27 +1201,6 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "modules"
-version = "0.0.2"
-dependencies = [
- "chrono",
- "common",
- "exchanges",
- "futures-util",
- "glow_error",
- "log",
- "polars",
- "reqwest",
- "serde",
- "serde_json",
- "strategy",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite",
- "url",
 ]
 
 [[package]]
