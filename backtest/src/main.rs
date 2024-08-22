@@ -113,12 +113,11 @@ async fn main() {
 
     let selected_strategy_id = BehaviorSubject::new(StrategyId::default());
     let current_strategy = BehaviorSubject::new(get_default_strategy());
-
+    let csc = current_strategy.clone();
     let selected_strategy_handle = spawn(async move {
         let selection_subscription = &mut selected_strategy_id.subscribe();
 
         while let Some(selected_strategy_id) = selection_subscription.next().await {
-            
             let updated_strategy = Strategy::new(name, preindicators, indicators, signals);
         }
     });

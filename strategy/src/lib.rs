@@ -5,3 +5,5 @@ pub mod preindicators;
 pub mod signals;
 pub mod r#static;
 pub mod structs;
+pub mod strategies;
+pub mod params;

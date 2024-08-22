@@ -36,3 +36,13 @@ pub fn get_default_strategy() -> Strategy {
         ))
         .clone()
 }
+
+pub fn get_strategy(id: StrategyId) -> Strategy {
+    STRATEGIES_MAP
+        .get(&id)
+        .expect(&format!(
+            "Default Strategy Id{:?} to exist at STRATEGIES MAP",
+            id
+        ))
+        .clone()
+}

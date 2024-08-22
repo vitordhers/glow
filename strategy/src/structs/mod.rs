@@ -1,7 +1,10 @@
 use crate::{
     indicators::IndicatorWrapper, preindicators::PreIndicatorWrapper, signals::SignalWrapper,
 };
-use common::{structs::SymbolsPair, traits::indicator::Indicator};
+use common::{
+    structs::SymbolsPair,
+    traits::{indicator::Indicator, signal::Signal},
+};
 use glow_error::GlowError;
 
 #[derive(Clone, Debug)]
@@ -12,6 +15,26 @@ pub struct Strategy {
     pub signals: Vec<SignalWrapper>,
 }
 
+pub struct TestNew<T: Indicator + Clone > {
+    preindicators: Vec<T>,
+}
+
+impl<T: Indicator + Clone> TestNew<T> {
+    pub fn patch_symbols_pair(&self, updated_symbols_pair: SymbolsPair) {
+        let updated_preindicators = self
+            .preindicators
+            .clone()
+            .into_iter()
+            .map(|pi| {
+                pi.patch_symbols_pair(updated_symbols_pair).expect(&format!(
+                    "Preindicator {} patch to be valid for {:?}",
+                    pi.name(),
+                    updated_symbols_pair
+                ))
+            })
+            .collect::<Vec<_>>();
+    }
+}
 impl Strategy {
     pub fn new(
         name: &'static str,
@@ -41,18 +64,16 @@ impl Strategy {
             .unwrap_or(&0)
     }
 
-    pub fn patch_symbols_pair(&self, symbols_pair: SymbolsPair) -> Result<Self, GlowError> {
-        let mut updated_strategy = self.clone();
-
+    pub fn patch_symbols_pair(&self, updated_symbols_pair: SymbolsPair) -> Result<Self, GlowError> {
         let updated_preindicators = self
             .preindicators
             .clone()
             .into_iter()
             .map(|pi| {
-                pi.patch_symbols_pair(symbols_pair).expect(&format!(
+                pi.patch_symbols_pair(updated_symbols_pair).expect(&format!(
                     "Preindicator {} patch to be valid for {:?}",
                     pi.name(),
-                    symbols_pair
+                    updated_symbols_pair
                 ))
             })
             .collect::<Vec<PreIndicatorWrapper>>();
@@ -62,14 +83,33 @@ impl Strategy {
             .clone()
             .into_iter()
             .map(|i| {
-                i.patch_symbols_pair(symbols_pair).expect(&format!(
+                i.patch_symbols_pair(updated_symbols_pair).expect(&format!(
                     "Preindicator {} patch to be valid for {:?}",
                     i.name(),
-                    symbols_pair
+                    updated_symbols_pair
                 ))
             })
             .collect::<Vec<IndicatorWrapper>>();
 
+        let updated_signals = self
+            .signals
+            .clone()
+            .into_iter()
+            .map(|s| {
+                s.patch_symbols_pair(updated_symbols_pair).expect(&format!(
+                    "Signal {:?} patch to be valid for {:?}",
+                    s.signal_category(),
+                    updated_symbols_pair
+                ))
+            })
+            .collect::<Vec<SignalWrapper>>();
+
+        let updated_strategy = Strategy::new(
+            self.name,
+            updated_preindicators,
+            updated_indicators,
+            updated_signals,
+        );
         Ok(updated_strategy)
     }
 }
