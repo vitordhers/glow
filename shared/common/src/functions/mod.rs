@@ -129,6 +129,7 @@ fn current_minute_start() {
 //     return (open, high, low, close);
 // }
 
+// TODO: deprecate this
 pub fn get_symbol_open_col(symbol: &str) -> &'static str {
     let symbol = SYMBOLS_MAP
         .get(symbol)
@@ -136,6 +137,7 @@ pub fn get_symbol_open_col(symbol: &str) -> &'static str {
     symbol.open
 }
 
+// TODO: deprecate this
 pub fn get_symbol_close_col(symbol: &str) -> &'static str {
     let symbol = SYMBOLS_MAP
         .get(symbol)
@@ -498,7 +500,6 @@ pub fn calculate_remainder(dividend: f64, divisor: f64) -> f64 {
 }
 
 pub fn closest_multiple_below(of: f64, to: f64) -> f64 {
-    // println!("@@@@ closest_multiple_below of {}, to {} ", of, to);
     let quotient = to / of;
     let floored = quotient.floor();
     floored * of

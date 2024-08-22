@@ -1,7 +1,5 @@
 use chrono::{Duration as ChronoDuration, NaiveDateTime};
 use common::structs::Symbol;
-use common::traits::indicator::Indicator;
-use common::traits::signal::Signal;
 use common::{
     enums::{
         balance::Balance, log_level::LogLevel, order_action::OrderAction,
@@ -17,10 +15,8 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use strategy::indicators::IndicatorWrapper;
-use strategy::preindicators::PreIndicatorWrapper;
-use strategy::signals::SignalWrapper;
-use strategy::structs::Strategy;
+use strategy::schemas::Schema as StrategySchema;
+use strategy::Strategy;
 use tokio::spawn;
 
 #[derive(Clone)]
@@ -38,7 +34,6 @@ pub struct DataFeed {
     pub trading_data_update_listener: BehaviorSubject<TradingDataUpdate>,
     pub trading_data_listener: BehaviorSubject<DataFrame>,
     pub trader_exchange_listener: BehaviorSubject<TraderExchangeWrapper>,
-    // pub unique_symbols: Vec<&'static str>,
     pub update_balance_listener: BehaviorSubject<Option<Balance>>,
     pub update_executions_listener: BehaviorSubject<Vec<Execution>>,
     pub update_order_listener: BehaviorSubject<Option<OrderAction>>,
@@ -60,57 +55,48 @@ impl DataFeed {
         Schema::from_iter(schema_fields.clone().into_iter())
     }
 
-    fn insert_preindicators_fields(
+    // fn insert_preindicators_fields<S: StrategySchema>(
+    //     schema_fields: &mut Vec<Field>,
+    //     strategy: &Strategy<S>
+    // ) -> u32 {
+    //     let mut preindicators_minimum_klines_for_benchmarking: Vec<u32> = vec![];
+
+    //     for preindicator in preindicators {
+    //         let preindicator_minimum_klines_for_benchmarking =
+    //             preindicator.get_minimum_klines_for_benchmarking();
+    //         preindicators_minimum_klines_for_benchmarking
+    //             .push(preindicator_minimum_klines_for_benchmarking);
+    //         let columns = preindicator.get_indicator_columns();
+    //         for (name, dtype) in columns {
+    //             let field = Field::new(name.as_str(), dtype.clone());
+    //             schema_fields.push(field);
+    //         }
+    //     }
+
+    //     preindicators_minimum_klines_for_benchmarking
+    //         .into_iter()
+    //         .max()
+    //         .unwrap_or_default()
+    // }
+
+    fn insert_indicators_fields<S: StrategySchema>(
         schema_fields: &mut Vec<Field>,
-        preindicators: &Vec<PreIndicatorWrapper>,
-    ) -> u32 {
-        let mut preindicators_minimum_klines_for_benchmarking: Vec<u32> = vec![];
+        strategy: &Strategy<S>,
+    ) {
+        let columns = strategy.get_indicators_columns();
 
-        for preindicator in preindicators {
-            let preindicator_minimum_klines_for_benchmarking =
-                preindicator.get_minimum_klines_for_benchmarking();
-            preindicators_minimum_klines_for_benchmarking
-                .push(preindicator_minimum_klines_for_benchmarking);
-            let columns = preindicator.get_indicator_columns();
-            for (name, dtype) in columns {
-                let field = Field::new(name.as_str(), dtype.clone());
-                schema_fields.push(field);
-            }
+        for (name, dtype) in columns {
+            let field = Field::new(name.as_str(), dtype.clone());
+            schema_fields.push(field);
         }
-
-        preindicators_minimum_klines_for_benchmarking
-            .into_iter()
-            .max()
-            .unwrap_or_default()
     }
 
-    fn insert_indicators_fields(
+    fn insert_signals_fields<S: StrategySchema>(
         schema_fields: &mut Vec<Field>,
-        indicators: &Vec<IndicatorWrapper>,
-    ) -> u32 {
-        let mut indicators_minimum_klines_for_benchmarking: Vec<u32> = vec![];
-
-        for indicator in indicators {
-            let indicator_minimum_klines_for_benchmarking =
-                indicator.get_minimum_klines_for_benchmarking();
-            indicators_minimum_klines_for_benchmarking
-                .push(indicator_minimum_klines_for_benchmarking);
-            let columns = indicator.get_indicator_columns();
-            for (name, dtype) in columns {
-                let field = Field::new(name.as_str(), dtype.clone());
-                schema_fields.push(field);
-            }
-        }
-
-        indicators_minimum_klines_for_benchmarking
-            .into_iter()
-            .max()
-            .unwrap_or_default()
-    }
-
-    fn insert_signals_fields(schema_fields: &mut Vec<Field>, signals: &Vec<SignalWrapper>) {
-        for signal in signals {
-            let field = Field::new(signal.signal_category().get_column(), DataType::Int32);
+        strategy: &Strategy<S>,
+    ) {
+        for (name, dtype) in strategy.get_signals_columns() {
+            let field = Field::new(name.as_str(), dtype);
             schema_fields.push(field);
         }
     }
@@ -126,7 +112,7 @@ impl DataFeed {
         Schema::from_iter(schema_fields.clone().into_iter())
     }
 
-    pub fn new(
+    pub fn new<S: StrategySchema>(
         current_trade_listener: &BehaviorSubject<Option<Trade>>,
         data_provider_exchange_socket_error_ts: &Arc<Mutex<Option<i64>>>,
         data_provider_exchange: DataProviderExchangeWrapper,
@@ -134,7 +120,7 @@ impl DataFeed {
         is_test_mode: bool,
         kline_duration_in_seconds: u64,
         log_level: LogLevel,
-        strategy: Strategy,
+        strategy: &Strategy<S>,
         trading_data_update_listener: &BehaviorSubject<TradingDataUpdate>,
         trading_data_listener: &BehaviorSubject<DataFrame>,
         trader_exchange_listener: &BehaviorSubject<TraderExchangeWrapper>,
@@ -152,25 +138,16 @@ impl DataFeed {
         let unique_symbols = trading_settings.get_unique_symbols();
 
         let kline_data_schema = Self::insert_kline_fields(&mut schema_fields, &unique_symbols);
-        let preindicators_minimum_klines_for_benchmarking =
-            Self::insert_preindicators_fields(&mut schema_fields, &strategy.preindicators);
 
-        let indicators_minimum_klines_for_benchmarking =
-            Self::insert_indicators_fields(&mut schema_fields, &strategy.indicators);
+        Self::insert_indicators_fields(&mut schema_fields, &strategy);
+        Self::insert_signals_fields(&mut schema_fields, &strategy);
 
-        let minimum_klines_for_benchmarking = vec![
-            preindicators_minimum_klines_for_benchmarking,
-            indicators_minimum_klines_for_benchmarking,
-        ]
-        .iter()
-        .cloned()
-        .max()
-        .unwrap_or_default();
-        Self::insert_signals_fields(&mut schema_fields, &strategy.signals);
+        let minimum_klines_for_benchmarking = strategy.get_minimum_klines_for_calculation();
 
         let trading_data_schema = Self::insert_performance_fields(&mut schema_fields);
         let kline_duration = Duration::from_secs(kline_duration_in_seconds);
         // let current_datetime = current_datetime();
+        // TODO: check this, probably should be moved to somewhere else
         let minute_lasting_seconds = initial_datetime.timestamp() % 60;
         let seconds_to_next_full_minute = if minute_lasting_seconds == 0 {
             0

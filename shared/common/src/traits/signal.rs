@@ -2,6 +2,7 @@ use crate::{enums::signal_category::SignalCategory, structs::SymbolsPair};
 use glow_error::GlowError;
 use polars::prelude::*;
 
+// TODO: deprecate this
 pub trait Signal: Sized {
     type Wrapper;
     fn signal_category(&self) -> SignalCategory;

@@ -12,21 +12,19 @@ use common::{
     functions::current_datetime,
     structs::{BehaviorSubject, Contract, Execution, SymbolsPair, Trade, TradingSettings},
 };
+use core::data_feed::DataFeed;
 use dotenv::dotenv;
 use exchanges::enums::{
     DataProviderExchangeId, DataProviderExchangeWrapper, TraderExchangeId, TraderExchangeWrapper,
 };
 use futures_util::StreamExt;
-use core::data_feed::DataFeed;
 use polars::prelude::DataFrame;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, RwLock},
 };
 use std::{env, io::stdin, marker::Send};
-use strategy::{
-    enums::StrategyId, functions::get_strategy, r#static::get_default_strategy, structs::Strategy,
-};
+use strategy::{Strategy, StrategyId};
 use tokio::{join, spawn};
 
 #[tokio::main]

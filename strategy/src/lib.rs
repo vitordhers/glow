@@ -77,12 +77,12 @@ where
         self.schema
             .get_indicators_columns(self.symbols_pair, &self.params)
     }
-
-    pub fn get_minimum_klines_for_calculation(&self) -> u32 {
-        self.schema.get_minimum_klines_for_calculation(&self.params)
-    }
     pub fn get_signals_columns(&self) -> Vec<(String, DataType)> {
         self.schema
             .get_signals_columns(self.symbols_pair, &self.params)
+    }
+
+    pub fn get_minimum_klines_for_calculation(&self) -> u32 {
+        self.schema.get_minimum_klines_for_calculation(&self.params)
     }
 }

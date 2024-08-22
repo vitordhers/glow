@@ -4,14 +4,13 @@ use common::constants::{DATE_INPUT_REGEX, TIME_INPUT_REGEX};
 use common::{functions::current_datetime, traits::exchange::TraderHelper};
 use exchanges::enums::TraderExchangeWrapper;
 use regex::Regex;
-use strategy::structs::Strategy;
 
 /// check for validation schema in order to understand better: https://docs.google.com/spreadsheets/d/1VlRswrunwbYIkmvHdg2MGt7TmkpdkS0fGhGMqRyEgiY/edit?gid=0#gid=0
 pub fn change_benchmark_datetimes(
     benchmark_start: NaiveDateTime,
     benchmark_end: NaiveDateTime,
     current_trader_exchange: &TraderExchangeWrapper,
-    current_strategy: &Strategy,
+    get_minimum_klines_for_benchmarking: u32,
 ) -> Option<(NaiveDateTime, NaiveDateTime)> {
     let result = loop {
         let benchmark_datetimes_options = vec![
@@ -30,8 +29,7 @@ pub fn change_benchmark_datetimes(
         let benchmark_minimum_days_duration = Duration::days(settings.bechmark_minimum_days as i64);
         let kline_duration = settings.granularity.get_chrono_duration();
         let minimum_klines_duration = Duration::minutes(
-            (current_strategy.get_minimum_klines_for_benchmarking() as i64)
-                * kline_duration.num_minutes(),
+            get_minimum_klines_for_benchmarking as i64 * kline_duration.num_minutes(),
         );
         let traded_contract = current_trader_exchange.get_traded_contract();
         let current_datetime = current_datetime();

@@ -2,6 +2,7 @@ use crate::structs::SymbolsPair;
 use glow_error::GlowError;
 use polars::prelude::*;
 
+// TODO: deprecate this
 pub trait Indicator: Sized {
     type Params;
     type Wrapper;
