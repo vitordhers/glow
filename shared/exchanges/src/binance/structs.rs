@@ -212,120 +212,141 @@ impl DataProviderExchange for BinanceDataProvider {
         &mut self,
         mut wss: WebSocketStream<MaybeTlsStream<TcpStream>>,
         benchmark_end: NaiveDateTime,
-        trading_data_schema: &Schema,
     ) -> Result<(), GlowError> {
         self.subscribe_to_tick_stream(&mut wss).await?;
 
-        // let mut current_staged_kline_start = self.benchmark_end;
-        let discard_ticks_before = benchmark_end - Duration::nanoseconds(1);
         let mut current_staged_kline_minute = benchmark_end.time().minute();
 
-        let chrono_kline_duration = self.kline_duration;
-
-        // let mut staging_ticks: HashMap<u32, Vec<TickData>> = HashMap::new();
-        // let ticks_data_to_process: BehaviorSubject<Vec<TickData>> = BehaviorSubject::new(vec![]);
-        let mut ticks_to_commit_subscription = self.ticks_to_commit.subscribe();
-
         let unique_symbols_len = self.unique_symbols.len();
-
         loop {
-            select! {
-                message = wss.try_next() => {
-                    // TODO: clean this code
-                    if let Err(error) = message {
-                        let mut last_error_guard = self.last_ws_error_ts
-                        .lock()
-                        .expect("handle_websocket -> last_error_guard unwrap");
-                        let error_timestamp = current_timestamp();
-                        *last_error_guard = Some(error_timestamp);
-                        eprintln!("WebSocket message error: {:?}", error);
-                        return Err(GlowError::from(error));
-                    }
-                    let message = message?;
-                    if let None = message {
-                        continue;
-                    }
-                    let message = message.unwrap();
-                    match message {
-                        Message::Text(json) => {
-                            let incoming_msg = from_str::<IncomingWsMessage>(&json).unwrap_or_default();
-                            match incoming_msg {
-                                IncomingWsMessage::Tick(tick) => {
-                                    let tick_data = from_tick_to_tick_data(tick, &self.symbols);
+            let message = wss.try_next().await;
+            if let Err(error) = message {
+                let mut last_error_guard = self
+                    .last_ws_error_ts
+                    .lock()
+                    .expect("handle_websocket -> last_error_guard unwrap");
+                let error_timestamp = current_timestamp();
+                *last_error_guard = Some(error_timestamp);
+                eprintln!("WebSocket message error: {:?}", error);
+                return Err(GlowError::from(error));
+            }
 
-                                    let tick_time = tick_data.start_time.time();
-                                    let tick_minute = tick_time.minute();
-                                    let tick_second = tick_time.second();
-                                    // we assume that if the received tick minute is the same as the current staged kline
-                                    // the tick still belongs to the kline
-                                    if tick_minute == current_staged_kline_minute {
-                                        self.staged_ticks.entry(tick_second).or_insert(Vec::new()).push(tick_data.clone());
-                                    } else {
-                                        // otherwise, all ticks regarding the staged kline were already provided
-                                        // and the ticks must be committed as kline data
+            let message = message.unwrap();
+            if message.is_none() {
+                continue;
+            }
+            let message = message.unwrap();
+            match message {
+                Message::Text(json) => {
+                    let incoming_msg = from_str::<IncomingWsMessage>(&json).unwrap_or_default();
+                    match incoming_msg {
+                        IncomingWsMessage::Tick(tick) => {
+                            let tick_data = from_tick_to_tick_data(tick, &self.symbols);
 
-                                        // commit ticks to kline data
-                                        self.ticks_to_commit.next(self.staged_ticks.values().cloned().into_iter().flat_map(|vec| vec.into_iter()).collect());
+                            let tick_time = tick_data.start_time.time();
+                            let tick_minute = tick_time.minute();
+                            let tick_second = tick_time.second();
+                            // we assume that if the received tick minute is the same as the current staged kline
+                            // the tick still belongs to the kline
+                            if tick_minute == current_staged_kline_minute {
+                                self.staged_ticks
+                                    .entry(tick_second)
+                                    .or_insert(Vec::new())
+                                    .push(tick_data.clone());
+                            } else {
+                                // otherwise, all ticks regarding the staged kline were already provided
+                                // and the ticks must be committed as kline data
 
-                                        // clear staged ticks
-                                        self.staged_ticks.clear();
+                                // commit ticks to kline data
+                                self.ticks_to_commit.next(
+                                    self.staged_ticks
+                                        .values()
+                                        .cloned()
+                                        .into_iter()
+                                        .flat_map(|vec| vec.into_iter())
+                                        .collect(),
+                                );
 
-                                        // insert the new tick data at respective map second
-                                        self.staged_ticks.insert(tick_second, vec![tick_data.clone()]);
-                                        // and update current committed kline minute
-                                        current_staged_kline_minute = tick_minute;
-                                    }
+                                // clear staged ticks
+                                self.staged_ticks.clear();
 
-                                    let second_staged_ticks = self.staged_ticks.get(&tick_second).unwrap();
-                                    if second_staged_ticks.len() == unique_symbols_len {
-                                        print!("{}", LogKlines(second_staged_ticks.to_vec()));
-                                    }
-                                },
-                                fallback => {
-                                    println!("fallback incoming msg from binance data provider {:?}", fallback);
-                                }
+                                // insert the new tick data at respective map second
+                                self.staged_ticks
+                                    .insert(tick_second, vec![tick_data.clone()]);
+                                // and update current committed kline minute
+                                current_staged_kline_minute = tick_minute;
                             }
-                        },
-                        Message::Ping(_) => {
-                           wss.send(Message::Pong(vec![])).await?
-                        },
+
+                            let second_staged_ticks = self.staged_ticks.get(&tick_second).unwrap();
+                            if second_staged_ticks.len() == unique_symbols_len {
+                                print!("{}", LogKlines(second_staged_ticks.to_vec()));
+                            }
+                        }
                         fallback => {
-                            println!("fallback msg from binance data provider {:?}", fallback);
+                            println!(
+                                "fallback incoming msg from binance data provider {:?}",
+                                fallback
+                            );
                         }
                     }
-                },
-                // TODO: separate this if convenient
-                committed_ticks = ticks_to_commit_subscription.next() => {
-                    if committed_ticks.is_none() {
-                        continue;
-                    }
-
-                    let mut committed_ticks = committed_ticks.unwrap();
-
-                    if committed_ticks.len() <= 0 || committed_ticks.iter().filter(|tick| tick.start_time > discard_ticks_before).collect::<Vec<_>>().len() <= 0 {
-                        continue;
-                    }
-
-                    committed_ticks.sort_by(|a, b| a.start_time.cmp(&b.start_time));
-
-                    // let kline_start = current_staged_kline_start;
-                    // current_staged_kline_start += chrono_kline_duration;
-
-
-                    let commited_kline_df = map_and_downsample_ticks_data_to_df(
-                        trading_data_schema,
-                        chrono_kline_duration,
-                        &committed_ticks,
-                        &self.unique_symbols,
-                        true
-                    )?;
-
-
-                    let trading_data_update = TradingDataUpdate::MarketData{ last_period_tick_data: commited_kline_df};
-                    self.trading_data_update_listener.next(trading_data_update);
-
-                },
+                }
+                Message::Ping(_) => wss.send(Message::Pong(vec![])).await?,
+                fallback => {
+                    println!("fallback msg from binance data provider {:?}", fallback);
+                }
             }
+        }
+    }
+
+    async fn handle_committed_ticks_data(
+        &self,
+        benchmark_end: NaiveDateTime,
+        trading_data_schema: &Schema,
+    ) -> Result<(), GlowError> {
+        let mut ticks_to_commit_subscription = self.ticks_to_commit.subscribe();
+        let discard_ticks_before = benchmark_end - Duration::nanoseconds(1);
+        let trading_data_schema = trading_data_schema.clone();
+        let kline_duration = self.kline_duration.clone();
+        let unique_symbols = self.unique_symbols.clone();
+        let trading_data_update_listener = self.trading_data_update_listener.clone();
+
+        loop {
+            let committed_ticks = ticks_to_commit_subscription.next().await;
+            if committed_ticks.is_none() {
+                continue;
+            }
+            let mut committed_ticks = committed_ticks.unwrap();
+            if committed_ticks.len() <= 0
+                || committed_ticks
+                    .iter()
+                    .filter(|tick| tick.start_time > discard_ticks_before)
+                    .collect::<Vec<_>>()
+                    .len()
+                    <= 0
+            {
+                continue;
+            }
+
+            committed_ticks.sort_by(|a, b| a.start_time.cmp(&b.start_time));
+
+            let commited_kline_df = map_and_downsample_ticks_data_to_df(
+                &trading_data_schema,
+                kline_duration,
+                &committed_ticks,
+                &unique_symbols,
+                true,
+            );
+
+            if let Err(err) = commited_kline_df {
+                return Err(err);
+            }
+
+            let commited_kline_df = commited_kline_df.unwrap();
+
+            let trading_data_update = TradingDataUpdate::MarketData {
+                last_period_tick_data: commited_kline_df,
+            };
+            trading_data_update_listener.next(trading_data_update);
         }
     }
 
@@ -471,35 +492,22 @@ impl DataProviderExchange for BinanceDataProvider {
                         "Data provider connection stablished. \n Response: {:?}",
                         resp
                     );
-                    if let Err(err) = self
-                        .listen_ticks(wss, benchmark_end, &trading_data_schema)
-                        .await
-                    {
-                        let mut last_error_guard = self
-                            .last_ws_error_ts
-                            .lock()
-                            .expect("init -> last_error_guard unwrap");
-                        let error_timestamp = current_timestamp();
-                        *last_error_guard = Some(error_timestamp);
-                        eprintln!("Market Websocket connection error: {:?}. Retrying...", err);
+                    match (
+                        self.handle_committed_ticks_data(benchmark_end, &trading_data_schema)
+                            .await,
+                        self.listen_ticks(wss, benchmark_end).await,
+                    ) {
+                        (_, Err(error)) => {
+                            set_ws_error_ts(self.last_ws_error_ts.clone(), error);
+                        }
+                        (Err(error), _) => {
+                            set_ws_error_ts(self.last_ws_error_ts.clone(), error);
+                        }
+                        _ => {}
                     }
                 }
                 Err(error) => {
-                    {
-                        let mut last_error_guard = self
-                            .last_ws_error_ts
-                            .lock()
-                            .expect("init -> last_error_guard unwrap");
-                        let error_timestamp = current_timestamp();
-                        *last_error_guard = Some(error_timestamp);
-                    }
-                    eprintln!(
-                        "Market Websocket connection failed. \n
-                        Error: {} \n
-                        Retrying in {} seconds...",
-                        error.to_string(),
-                        WS_RECONNECT_INTERVAL_IN_SECS
-                    );
+                    set_ws_error_ts(self.last_ws_error_ts.clone(), error.into());
                     sleep(StdDuration::from_secs(WS_RECONNECT_INTERVAL_IN_SECS)).await;
                 }
             }
@@ -540,4 +548,16 @@ fn adjust_benchmark_datetimes(
     assert_or_error!(benchmark_end > benchmark_start);
 
     Ok((benchmark_start, benchmark_end))
+}
+
+fn set_ws_error_ts(last_ws_error_ts: Arc<Mutex<Option<i64>>>, error: GlowError) {
+    let mut last_error_guard = last_ws_error_ts
+        .lock()
+        .expect("init -> last_error_guard unwrap");
+    let error_timestamp = current_timestamp();
+    *last_error_guard = Some(error_timestamp);
+    eprintln!(
+        "Market Websocket connection error: {:?}. Retrying...",
+        error
+    );
 }

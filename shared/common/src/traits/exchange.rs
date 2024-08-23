@@ -212,8 +212,7 @@ pub trait DataProviderExchange {
     fn listen_ticks(
         &mut self,
         wss: WebSocketStream<MaybeTlsStream<TcpStream>>,
-        benchmark_end: NaiveDateTime,
-        trading_data_schema: &Schema,
+        benchmark_end: NaiveDateTime
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
 
     fn init(
@@ -223,6 +222,12 @@ pub trait DataProviderExchange {
         kline_data_schema: Schema,
         run_benchmark_only: bool,
         trading_data_schema: Schema,
+    ) -> impl Future<Output = Result<(), GlowError>> + Send;
+
+    fn handle_committed_ticks_data(
+        &self,
+        benchmark_end: NaiveDateTime,
+        trading_data_schema: &Schema,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
 
     fn handle_http_klines_fetch(
