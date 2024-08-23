@@ -218,8 +218,8 @@ pub trait DataProviderExchange {
 
     fn init(
         &mut self,
-        benchmark_end: Option<NaiveDateTime>,
         benchmark_start: Option<NaiveDateTime>,
+        benchmark_end: Option<NaiveDateTime>,
         kline_data_schema: Schema,
         run_benchmark_only: bool,
         trading_data_schema: Schema,

@@ -1,4 +1,4 @@
-use chrono::{Duration as ChronoDuration, NaiveDateTime};
+use chrono::NaiveDateTime;
 use common::structs::Symbol;
 use common::{
     enums::{balance::Balance, order_action::OrderAction, trading_data_update::TradingDataUpdate},
@@ -20,7 +20,6 @@ pub struct DataFeed {
     pub data_provider_exchange_socket_error_ts: Arc<Mutex<Option<i64>>>,
     pub run_benchmark_only: bool,
     pub kline_data_schema: Schema,
-    pub trades_start: NaiveDateTime,
     pub minimum_klines_for_benchmarking: u32,
     pub trading_data_schema: Schema,
     pub trading_data_update_listener: BehaviorSubject<TradingDataUpdate>,
@@ -112,27 +111,6 @@ impl DataFeed {
         let minimum_klines_for_benchmarking = strategy.get_minimum_klines_for_calculation();
 
         let trading_data_schema = Self::insert_performance_fields(&mut schema_fields);
-        // let kline_duration = Duration::from_secs(kline_duration_in_seconds);
-        // let current_datetime = current_datetime();
-        // TODO: check this, probably should be moved to somewhere else
-        let minute_lasting_seconds = initial_datetime.timestamp() % 60;
-        let seconds_to_next_full_minute = if minute_lasting_seconds == 0 {
-            0
-        } else {
-            60 - minute_lasting_seconds
-        };
-
-        let trades_start = initial_datetime + ChronoDuration::seconds(seconds_to_next_full_minute);
-        if !run_benchmark_only {
-            println!(
-                "seconds_to_next_full_minute {:?}",
-                seconds_to_next_full_minute
-            );
-            println!(
-                "{} | 💹 Initializing DataFeed -> trades might be open after {:?}",
-                initial_datetime, trades_start
-            );
-        }
 
         DataFeed {
             benchmark_datetimes,
@@ -141,7 +119,6 @@ impl DataFeed {
             data_provider_exchange_socket_error_ts: data_provider_exchange_socket_error_ts.clone(),
             run_benchmark_only,
             kline_data_schema,
-            trades_start,
             minimum_klines_for_benchmarking,
             trading_data_schema,
             trading_data_update_listener: trading_data_update_listener.clone(),
@@ -158,12 +135,14 @@ impl DataFeed {
         let kline_data_schema = self.kline_data_schema.clone();
         let run_benchmark_only = self.run_benchmark_only;
         let trading_data_schema = self.trading_data_schema.clone();
+        let benchmark_start = self.benchmark_datetimes.0;
+        let benchmark_end = self.benchmark_datetimes.1;
 
         let data_provider_handle = spawn(async move {
             let _ = data_provider_binding
                 .init(
-                    benchmark_end,
                     benchmark_start,
+                    benchmark_end,
                     kline_data_schema,
                     run_benchmark_only,
                     trading_data_schema,

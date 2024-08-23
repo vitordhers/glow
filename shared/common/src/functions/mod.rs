@@ -383,27 +383,18 @@ pub fn downsample_tick_lf_to_kline_duration(
 }
 // former timestamp_end_to_daily_timestamp_sec_intervals
 pub fn get_fetch_timestamps_interval(
-    minimum_klines_for_benchmarking: i64,
-    granularity_in_mins: i64,
-    timestamp_start_ts: i64,
-    timestamp_end_ts: i64,
+    timestamp_start: i64, // seconds
+    timestamp_end: i64, // seconds
+    kline_duration: Duration,
     max_limit: i64,
-    min_days_for_analysis: Option<i64>,
 ) -> Vec<i64> {
-    // discount minimum days for analysis
-    let mut timestamp_start_ts =
-        timestamp_start_ts - (Duration::days(min_days_for_analysis.unwrap_or(1)).num_seconds());
-    // discount minimum klines for benchmarking
-    timestamp_start_ts -= minimum_klines_for_benchmarking * SECONDS_IN_MIN / granularity_in_mins;
-
-    let timestamp_step = max_limit * SECONDS_IN_MIN / granularity_in_mins;
-
-    stepped_range_inclusive(timestamp_start_ts, timestamp_end_ts, timestamp_step)
+    let step_size = max_limit * SECONDS_IN_MIN / kline_duration.num_minutes();
+    stepped_range_inclusive(timestamp_start, timestamp_end, step_size)
 }
 
-fn stepped_range_inclusive(start: i64, end: i64, step: i64) -> Vec<i64> {
+fn stepped_range_inclusive(start: i64, end: i64, step_size: i64) -> Vec<i64> {
     let mut next_val = start;
-    let last_step = end - (end - start) % step; // Finds the starting point of the last step
+    let last_step = end - (end - start) % step_size; // Finds the starting point of the last step
 
     let mut result = Vec::new();
 
@@ -415,7 +406,7 @@ fn stepped_range_inclusive(start: i64, end: i64, step: i64) -> Vec<i64> {
         if next_val == last_step && next_val != end {
             next_val = end;
         } else {
-            next_val += step;
+            next_val += step_size;
         }
     }
 

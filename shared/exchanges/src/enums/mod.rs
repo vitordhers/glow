@@ -1,5 +1,5 @@
 use crate::{binance::structs::BinanceDataProvider, bybit::BybitTraderExchange};
-use chrono::NaiveDateTime;
+use chrono::{Duration, NaiveDateTime};
 use common::{
     enums::{
         balance::Balance, modifiers::leverage::Leverage, order_action::OrderAction,
@@ -14,8 +14,7 @@ use polars::prelude::Schema;
 use reqwest::Client;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, RwLock},
-    time::Duration,
+    sync::{Arc, Mutex},
 };
 use tokio::net::TcpStream;
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
@@ -83,8 +82,8 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
 
     async fn init(
         &mut self,
-        benchmark_end: NaiveDateTime,
         benchmark_start: Option<NaiveDateTime>,
+        benchmark_end: Option<NaiveDateTime>,
         kline_data_schema: Schema,
         run_benchmark_only: bool,
         trading_data_schema: Schema,
@@ -92,10 +91,30 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
         match self {
             Self::Binance(ex) => {
                 ex.init(
-                    benchmark_end,
                     benchmark_start,
+                    benchmark_end,
                     kline_data_schema,
                     run_benchmark_only,
+                    trading_data_schema,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handle_http_klines_fetch(
+        &self,
+        benchmark_start_ts: i64,
+        benchmark_end_ts: i64,
+        kline_data_schema: &Schema,
+        trading_data_schema: &Schema,
+    ) -> Result<(), GlowError> {
+        match self {
+            Self::Binance(ex) => {
+                ex.handle_http_klines_fetch(
+                    benchmark_start_ts,
+                    benchmark_end_ts,
+                    kline_data_schema,
                     trading_data_schema,
                 )
                 .await

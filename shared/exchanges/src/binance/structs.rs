@@ -6,9 +6,9 @@ use crate::{
     binance::{enums::IncomingWsMessage, functions::from_tick_to_tick_data},
     config::WS_RECONNECT_INTERVAL_IN_SECS,
 };
-use chrono::{Datelike, Duration as ChronoDuration, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use common::{
-    constants::{SECONDS_IN_DAY, SECONDS_IN_MIN},
+    constants::SECONDS_IN_MIN,
     enums::trading_data_update::TradingDataUpdate,
     functions::{
         current_datetime, current_timestamp, get_fetch_timestamps_interval,
@@ -23,10 +23,10 @@ use polars::prelude::{IntoLazy, LazyFrame, Schema};
 use reqwest::Client;
 use serde_json::{from_str, to_string};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     env::var as env_var,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::Duration as StdDuration,
 };
 use tokio::{
     net::TcpStream,
@@ -82,25 +82,23 @@ impl BinanceDataProvider {
         http: &Client,
         kline_data_schema: Schema,
         unique_symbols: &Vec<&Symbol>,
-        minimum_klines_for_benchmarking: u32,
-        kline_duration_in_secs: i64,
+        kline_duration: Duration,
         benchmark_end_ts: i64,   // seconds
         benchmark_start_ts: i64, // seconds
     ) -> Result<LazyFrame, GlowError> {
-        let max_limit: i64 = 1000; // TODO: limit hardcoded
-        let granularity_in_mins = 1; // TODO: granularity hardcoded
+        let max_limit: i64 = 1000;
         let timestamp_intervals = get_fetch_timestamps_interval(
-            minimum_klines_for_benchmarking as i64,
-            granularity_in_mins,
             benchmark_start_ts,
             benchmark_end_ts,
+            kline_duration,
             max_limit,
-            Some(1),
         );
 
         println!("timestamp interval {:?}", timestamp_intervals);
 
-        let mut tick_data = vec![];
+        let mut ticks_data = vec![];
+        let kline_duration_in_mins = kline_duration.num_minutes();
+        let kline_duration_in_secs = kline_duration.num_seconds();
 
         for (i, value) in timestamp_intervals.iter().enumerate() {
             let start_ts: i64;
@@ -114,7 +112,7 @@ impl BinanceDataProvider {
             let mut end_ts = &timestamp_intervals[i] * 1000;
 
             let current_limit =
-                granularity_in_mins * (((end_ts - start_ts) / 1000) / SECONDS_IN_MIN);
+                kline_duration_in_mins * (((end_ts - start_ts) / 1000) / SECONDS_IN_MIN);
 
             end_ts -= 1;
 
@@ -125,14 +123,14 @@ impl BinanceDataProvider {
             for symbol in unique_symbols {
                 let fetched_klines =
                     Self::fetch_data(http, symbol.name, start_ts, end_ts, current_limit).await?;
-                tick_data.extend(fetched_klines);
+                ticks_data.extend(fetched_klines);
             }
         }
 
         let tick_data_df = map_and_downsample_ticks_data_to_df(
             &kline_data_schema,
-            ChronoDuration::seconds(kline_duration_in_secs),
-            &tick_data,
+            kline_duration,
+            &ticks_data,
             unique_symbols,
             false,
         )?;
@@ -219,11 +217,10 @@ impl DataProviderExchange for BinanceDataProvider {
         self.subscribe_to_tick_stream(&mut wss).await?;
 
         // let mut current_staged_kline_start = self.benchmark_end;
-        let discard_ticks_before = benchmark_end - ChronoDuration::nanoseconds(1);
+        let discard_ticks_before = benchmark_end - Duration::nanoseconds(1);
         let mut current_staged_kline_minute = benchmark_end.time().minute();
 
-        let chrono_kline_duration = ChronoDuration::from_std(self.kline_duration)
-            .expect("init -> error converting std duration to chrono duration");
+        let chrono_kline_duration = self.kline_duration;
 
         // let mut staging_ticks: HashMap<u32, Vec<TickData>> = HashMap::new();
         // let ticks_data_to_process: BehaviorSubject<Vec<TickData>> = BehaviorSubject::new(vec![]);
@@ -339,20 +336,16 @@ impl DataProviderExchange for BinanceDataProvider {
         kline_data_schema: &Schema,
         trading_data_schema: &Schema,
     ) -> Result<(), GlowError> {
-        let kline_duration_in_secs = self.kline_duration.as_secs() as i64;
-
+        let kline_duration = self.kline_duration;
         let http = self.http.clone();
-        let minimum_klines_for_benchmarking = self.minimum_klines_for_benchmarking;
         let unique_symbols = self.unique_symbols.clone();
         let kline_data_schema = kline_data_schema.clone();
-
         let fetch_data_handle = spawn(async move {
             let _ = Self::fetch_benchmark_available_data(
                 &http,
                 kline_data_schema,
                 &unique_symbols,
-                minimum_klines_for_benchmarking,
-                kline_duration_in_secs,
+                kline_duration,
                 benchmark_end_ts,
                 benchmark_start_ts,
             )
@@ -373,11 +366,12 @@ impl DataProviderExchange for BinanceDataProvider {
         let kline_duration = self.kline_duration.clone();
         let trading_data_update_listener = self.trading_data_update_listener.clone();
         let trading_data_schema = trading_data_schema.clone();
+        let kline_duration_in_secs = self.kline_duration.num_seconds();
 
         let last_kline_available_handle = spawn(async move {
             let seconds_until_benchmark_end = benchmark_end_ts - current_timestamp;
             let duration_until_benchmark_end =
-                Duration::from_secs(seconds_until_benchmark_end as u64);
+                StdDuration::from_secs(seconds_until_benchmark_end as u64);
             let benchmark_end_available_at = Instant::now() + duration_until_benchmark_end;
 
             sleep_until(benchmark_end_available_at).await;
@@ -410,8 +404,7 @@ impl DataProviderExchange for BinanceDataProvider {
 
             let commited_kline_df = map_and_downsample_ticks_data_to_df(
                 &trading_data_schema,
-                ChronoDuration::from_std(kline_duration)
-                    .expect("init -> error converting std duration to chrono duration"),
+                kline_duration,
                 &kline_data,
                 &unique_symbols,
                 true,
@@ -428,21 +421,26 @@ impl DataProviderExchange for BinanceDataProvider {
             // }
         });
 
-        last_kline_available_handle.await;
+        let _ = last_kline_available_handle.await;
 
         Ok(())
     }
 
     async fn init(
         &mut self,
-        benchmark_end: Option<NaiveDateTime>,
         benchmark_start: Option<NaiveDateTime>,
+        benchmark_end: Option<NaiveDateTime>,
         kline_data_schema: Schema,
         run_benchmark_only: bool,
         trading_data_schema: Schema,
     ) -> Result<(), GlowError> {
-        let (benchmark_start, benchmark_end) =
-            fallback_benchmark_datetimes(benchmark_start, benchmark_end)?;
+        let (benchmark_start, benchmark_end) = adjust_benchmark_datetimes(
+            benchmark_start,
+            benchmark_end,
+            self.kline_duration,
+            Some(1),
+            self.minimum_klines_for_benchmarking as i32,
+        )?;
 
         let _ = self
             .handle_http_klines_fetch(
@@ -456,6 +454,12 @@ impl DataProviderExchange for BinanceDataProvider {
         if run_benchmark_only {
             return Ok(());
         }
+
+        println!(
+            "{} | 💹 Initializing DataFeed -> trades might be open after {}",
+            current_datetime(),
+            benchmark_end
+        );
 
         let binance_ws_base_url = env_var("BINANCE_WS_BASE_URL")?;
         let url = Url::parse(&format!("{}/ws/bookTicker", binance_ws_base_url))?; // ws url
@@ -496,17 +500,24 @@ impl DataProviderExchange for BinanceDataProvider {
                         error.to_string(),
                         WS_RECONNECT_INTERVAL_IN_SECS
                     );
-                    sleep(Duration::from_secs(WS_RECONNECT_INTERVAL_IN_SECS)).await;
+                    sleep(StdDuration::from_secs(WS_RECONNECT_INTERVAL_IN_SECS)).await;
                 }
             }
         }
     }
 }
 
-fn fallback_benchmark_datetimes(
-    benchmark_end: Option<NaiveDateTime>,
+fn adjust_benchmark_datetimes(
     benchmark_start: Option<NaiveDateTime>,
+    benchmark_end: Option<NaiveDateTime>,
+    kline_duration: Duration,
+    minimum_days_for_analysis: Option<i64>,
+    minimum_klines_for_benchmarking: i32,
 ) -> Result<(NaiveDateTime, NaiveDateTime), GlowError> {
+    if let (Some(benchmark_start), Some(benchmark_end)) = (benchmark_start, benchmark_end) {
+        assert_or_error!(benchmark_end > benchmark_start);
+    }
+
     let benchmark_end = benchmark_end.unwrap_or_else(|| {
         let current_datetime = current_datetime();
         let date = NaiveDate::from_ymd_opt(
@@ -520,9 +531,13 @@ fn fallback_benchmark_datetimes(
         NaiveDateTime::new(date, time)
     });
 
-    let benchmark_start = benchmark_start.unwrap_or(current_datetime());
+    let benchmark_start = benchmark_start.unwrap_or_else(|| {
+        benchmark_end - (Duration::days(minimum_days_for_analysis.unwrap_or(1)))
+    });
 
-    assert_or_error!(benchmark_end > benchmark_start_ts);
+    let benchmark_start = benchmark_start - (kline_duration * minimum_klines_for_benchmarking);
 
-    Ok((benchmark_start_ts, benchmark_end_ts))
+    assert_or_error!(benchmark_end > benchmark_start);
+
+    Ok((benchmark_start, benchmark_end))
 }
