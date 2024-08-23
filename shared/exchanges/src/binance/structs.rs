@@ -488,6 +488,7 @@ impl DataProviderExchange for BinanceDataProvider {
         loop {
             match connect_async(url.clone()).await {
                 Ok((wss, resp)) => {
+                    
                     eprintln!(
                         "Data provider connection stablished. \n Response: {:?}",
                         resp
@@ -499,9 +500,12 @@ impl DataProviderExchange for BinanceDataProvider {
                     ) {
                         (_, Err(error)) => {
                             set_ws_error_ts(self.last_ws_error_ts.clone(), error);
+                            sleep(StdDuration::from_secs(WS_RECONNECT_INTERVAL_IN_SECS)).await;
+
                         }
                         (Err(error), _) => {
                             set_ws_error_ts(self.last_ws_error_ts.clone(), error);
+                            sleep(StdDuration::from_secs(WS_RECONNECT_INTERVAL_IN_SECS)).await;
                         }
                         _ => {}
                     }

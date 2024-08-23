@@ -66,20 +66,6 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
         }
     }
 
-    async fn listen_ticks(
-        &mut self,
-        wss: WebSocketStream<MaybeTlsStream<TcpStream>>,
-        benchmark_end: NaiveDateTime,
-        trading_data_schema: &Schema,
-    ) -> Result<(), GlowError> {
-        match self {
-            Self::Binance(ex) => {
-                ex.listen_ticks(wss, benchmark_end, trading_data_schema)
-                    .await
-            }
-        }
-    }
-
     async fn init(
         &mut self,
         benchmark_start: Option<NaiveDateTime>,
@@ -118,6 +104,29 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
                     trading_data_schema,
                 )
                 .await
+            }
+        }
+    }
+
+    async fn listen_ticks(
+        &mut self,
+        wss: WebSocketStream<MaybeTlsStream<TcpStream>>,
+        benchmark_end: NaiveDateTime,
+    ) -> Result<(), GlowError> {
+        match self {
+            Self::Binance(ex) => ex.listen_ticks(wss, benchmark_end).await,
+        }
+    }
+
+    async fn handle_committed_ticks_data(
+        &self,
+        benchmark_end: NaiveDateTime,
+        trading_data_schema: &Schema,
+    ) -> Result<(), GlowError> {
+        match self {
+            Self::Binance(ex) => {
+                ex.handle_committed_ticks_data(benchmark_end, trading_data_schema)
+                    .await
             }
         }
     }
