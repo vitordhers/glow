@@ -179,6 +179,7 @@ pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
     Ok(result_lf)
 }
 
+// TODO: DEPRECATE THIS
 fn map_ticks_data_to_df(
     unique_symbols: &Vec<&Symbol>,
     ticks_data: &Vec<TickData>,
@@ -273,7 +274,90 @@ fn map_ticks_data_to_df(
     Ok(DataFrame::new(df_series)?.fill_null(FillNullStrategy::Forward(None))?)
 }
 
-/// Works when all ticks have data the same height
+pub fn map_and_downsample_ticks_data_to_df2(
+    ticks_data: &Vec<TickData>,
+    unique_symbols: &Vec<&Symbol>,
+    kline_duration: Duration,
+    kline_data_schema: &Schema,
+    schema_to_comply: Option<&Schema>,
+) -> Result<DataFrame, GlowError> {
+    assert!(
+        unique_symbols.len() > 0,
+        "unique symbols must have length > 0"
+    );
+    let symbols_set: HashSet<&Symbol> = unique_symbols.iter().cloned().collect();
+    assert!(
+        symbols_set.len() == unique_symbols.len(),
+        "symbols must be unique"
+    );
+    assert!(
+        ticks_data.len() % unique_symbols.len() == 0,
+        "tick data is asymmetric"
+    );
+
+    let non_sampled_ticks_data_df = map_ticks_data_to_kline_df(ticks_data, kline_data_schema)?;
+    let non_sampled_ticks_data_lf = non_sampled_ticks_data_df.lazy();
+
+    let resampled_data = downsample_tick_lf_to_kline_duration(
+        unique_symbols,
+        kline_duration,
+        non_sampled_ticks_data_lf,
+        ClosedWindow::Left,
+        schema_to_comply,
+    )?;
+
+    let resampled_data = resampled_data
+        .collect()?
+        .fill_null(FillNullStrategy::Forward(None))?;
+
+    Ok(resampled_data)
+}
+
+fn map_ticks_data_to_kline_df(
+    ticks_data: &Vec<TickData>,
+    kline_data_schema: &Schema,
+) -> Result<DataFrame, GlowError> {
+    let mut timestamps = HashSet::new();
+    let mut data = HashMap::new();
+
+    for tick in ticks_data {
+        timestamps.insert(tick.start_time);
+
+        data.entry(format!("{}_open", tick.symbol))
+            .or_insert(Vec::new())
+            .push(tick.open);
+        data.entry(format!("{}_high", tick.symbol))
+            .or_insert(Vec::new())
+            .push(tick.high);
+        data.entry(format!("{}_low", tick.symbol))
+            .or_insert(Vec::new())
+            .push(tick.low);
+        data.entry(format!("{}_close", tick.symbol))
+            .or_insert(Vec::new())
+            .push(tick.close);
+    }
+
+    let df_series: Vec<Series> = kline_data_schema
+        .iter()
+        .map(move |(field, _)| {
+            if field == "start_time" {
+                Series::new(
+                    "start_time",
+                    timestamps
+                        .clone()
+                        .into_iter()
+                        .collect::<Vec<NaiveDateTime>>(),
+                )
+            } else {
+                Series::new(field, &data.get(field.as_str()).unwrap())
+            }
+        })
+        .collect::<Vec<Series>>();
+
+    Ok(DataFrame::new(df_series)?.fill_null(FillNullStrategy::Forward(None))?)
+}
+
+// TODO: deprecate this
 pub fn map_and_downsample_ticks_data_to_df(
     schema_to_comply: &Schema,
     kline_duration: Duration,
@@ -327,14 +411,14 @@ pub fn downsample_tick_lf_to_kline_duration(
     kline_duration: Duration,
     tick_lf: LazyFrame,
     closed_window: ClosedWindow, // TODO: check why benchmark frame doesn't leave last minute tick -- CHECK if this is still happening
-    maintain_schema: Option<&Schema>,
+    schema_to_comply: Option<&Schema>,
 ) -> Result<LazyFrame, GlowError> {
     let duration_in_secs = kline_duration.num_seconds();
     let mut agg_expressions = vec![];
     let mut tick_data_cols = HashSet::new();
     for symbol in unique_symbols {
         let (o, h, l, c) = symbol.get_ohlc_cols();
-        if maintain_schema.is_some() {
+        if schema_to_comply.is_some() {
             tick_data_cols.insert(o);
             tick_data_cols.insert(h);
             tick_data_cols.insert(l);
@@ -351,12 +435,13 @@ pub fn downsample_tick_lf_to_kline_duration(
         agg_expressions.push(last_close);
     }
 
-    if let Some(schema) = maintain_schema {
+    if let Some(schema) = schema_to_comply {
         schema.iter().for_each(|(col_name, _)| {
             if col_name == "start_time" || tick_data_cols.contains(col_name.as_str()) {
                 return;
             }
             // TODO: adjust downsample/upsample method
+            // TODO: check if this can be replaced by NULL
             agg_expressions.push(col(&col_name).last().keep_name())
         })
     }
@@ -383,13 +468,13 @@ pub fn downsample_tick_lf_to_kline_duration(
 }
 // former timestamp_end_to_daily_timestamp_sec_intervals
 pub fn get_fetch_timestamps_interval(
-    timestamp_start: i64, // seconds
-    timestamp_end: i64, // seconds
+    start_timestamp: i64, // seconds
+    end_timestamp: i64,   // seconds
     kline_duration: Duration,
     max_limit: i64,
 ) -> Vec<i64> {
     let step_size = max_limit * SECONDS_IN_MIN / kline_duration.num_minutes();
-    stepped_range_inclusive(timestamp_start, timestamp_end, step_size)
+    stepped_range_inclusive(start_timestamp, end_timestamp, step_size)
 }
 
 fn stepped_range_inclusive(start: i64, end: i64, step_size: i64) -> Vec<i64> {
