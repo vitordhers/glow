@@ -218,10 +218,18 @@ pub trait DataProviderExchange {
 
     fn init(
         &mut self,
-        benchmark_end: NaiveDateTime,
-        benchmark_start: Option<NaiveDateTime>, // seconds
+        benchmark_end: Option<NaiveDateTime>,
+        benchmark_start: Option<NaiveDateTime>,
         kline_data_schema: Schema,
         run_benchmark_only: bool,
         trading_data_schema: Schema,
+    ) -> impl Future<Output = Result<(), GlowError>> + Send;
+
+    fn handle_http_klines_fetch(
+        &self,
+        benchmark_start_ts: i64,
+        benchmark_end_ts: i64,
+        kline_data_schema: &Schema,
+        trading_data_schema: &Schema,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
 }

@@ -6,7 +6,7 @@ use crate::{
     binance::{enums::IncomingWsMessage, functions::from_tick_to_tick_data},
     config::WS_RECONNECT_INTERVAL_IN_SECS,
 };
-use chrono::{Duration as ChronoDuration, NaiveDateTime, Timelike};
+use chrono::{Datelike, Duration as ChronoDuration, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use common::{
     constants::{SECONDS_IN_DAY, SECONDS_IN_MIN},
     enums::trading_data_update::TradingDataUpdate,
@@ -18,7 +18,7 @@ use common::{
     traits::exchange::DataProviderExchange,
 };
 use futures_util::SinkExt;
-use glow_error::GlowError;
+use glow_error::{assert_or_error, GlowError};
 use polars::prelude::{IntoLazy, LazyFrame, Schema};
 use reqwest::Client;
 use serde_json::{from_str, to_string};
@@ -84,16 +84,16 @@ impl BinanceDataProvider {
         unique_symbols: &Vec<&Symbol>,
         minimum_klines_for_benchmarking: u32,
         kline_duration_in_secs: i64,
-        benchmark_end_ts: i64,           // seconds
-        benchmark_start_ts: Option<i64>, // seconds
+        benchmark_end_ts: i64,   // seconds
+        benchmark_start_ts: i64, // seconds
     ) -> Result<LazyFrame, GlowError> {
         let max_limit: i64 = 1000; // TODO: limit hardcoded
         let granularity_in_mins = 1; // TODO: granularity hardcoded
         let timestamp_intervals = get_fetch_timestamps_interval(
             minimum_klines_for_benchmarking as i64,
             granularity_in_mins,
-            benchmark_end_ts,
             benchmark_start_ts,
+            benchmark_end_ts,
             max_limit,
             Some(1),
         );
@@ -145,24 +145,25 @@ impl BinanceDataProvider {
     async fn fetch_data(
         http: &Client,
         symbol: &'static str,
-        start_timestamp: i64, // ms
-        end_timestamp: i64,   // ms
-        limit: i64,           //Default 500; max 1000.
+        start_timestamp_ms: i64, // ms
+        end_timestamp_ms: i64,   // ms
+        limit: i64,              //Default 500; max 1000.
     ) -> Result<Vec<TickData>, GlowError> {
         assert!(limit <= 1000, "Limit must be equal or less than 1000");
         assert!(limit > 0, "Limit must be greater than 0");
 
         let url = format!(
             "https://api3.binance.com/api/v3/klines?symbol={}&interval={}&startTime={}&endTime={}&limit={}",
-            symbol, "1m", start_timestamp, end_timestamp, limit
+            symbol, "1m", start_timestamp_ms, end_timestamp_ms, limit
         );
+
         println!(
             "{:?} | 🦴 Fetching {} data ({} records) for interval between {} and {}",
             current_datetime(),
             symbol,
             limit,
-            NaiveDateTime::from_timestamp_millis(start_timestamp).unwrap(),
-            NaiveDateTime::from_timestamp_millis(end_timestamp).unwrap()
+            NaiveDateTime::from_timestamp_millis(start_timestamp_ms).unwrap(),
+            NaiveDateTime::from_timestamp_millis(end_timestamp_ms).unwrap()
         );
 
         let result: Vec<BinanceHttpKlineResponse> = http.get(url).send().await?.json().await?;
@@ -221,7 +222,6 @@ impl DataProviderExchange for BinanceDataProvider {
         let discard_ticks_before = benchmark_end - ChronoDuration::nanoseconds(1);
         let mut current_staged_kline_minute = benchmark_end.time().minute();
 
-        let kline_duration_in_secs = self.kline_duration.as_secs() as i64;
         let chrono_kline_duration = ChronoDuration::from_std(self.kline_duration)
             .expect("init -> error converting std duration to chrono duration");
 
@@ -229,15 +229,6 @@ impl DataProviderExchange for BinanceDataProvider {
         // let ticks_data_to_process: BehaviorSubject<Vec<TickData>> = BehaviorSubject::new(vec![]);
         let mut ticks_to_commit_subscription = self.ticks_to_commit.subscribe();
 
-        // TODO: decouple initial fetch and error handling (if convenient) in separate threads
-        let start_datetime = current_datetime();
-        let start_timestamp = start_datetime.timestamp();
-        let seconds_until_next_minute = 60 - (start_timestamp % 60);
-        let timeout_until_last_benchmark_kline_available =
-            Duration::from_secs(seconds_until_next_minute as u64);
-        let mut last_benchmark_kline_available_at =
-            Instant::now() + timeout_until_last_benchmark_kline_available;
-        let mut timeout_executed = false;
         let unique_symbols_len = self.unique_symbols.len();
 
         loop {
@@ -253,16 +244,11 @@ impl DataProviderExchange for BinanceDataProvider {
                         eprintln!("WebSocket message error: {:?}", error);
                         return Err(GlowError::from(error));
                     }
-
                     let message = message?;
-
                     if let None = message {
-
                         continue;
                     }
-
                     let message = message.unwrap();
-
                     match message {
                         Message::Text(json) => {
                             let incoming_msg = from_str::<IncomingWsMessage>(&json).unwrap_or_default();
@@ -342,98 +328,130 @@ impl DataProviderExchange for BinanceDataProvider {
                     self.trading_data_update_listener.next(trading_data_update);
 
                 },
-                // TODO: separate this if convenient
-                _ = sleep_until(last_benchmark_kline_available_at) => {
-                    last_benchmark_kline_available_at = Instant::now() + Duration::from_secs(SECONDS_IN_DAY as u64);
-                    if timeout_executed {
-                        continue;
-                    }
-
-                    let mut kline_data = Vec::new();
-
-                    let remaining_seconds_from_previous_minute = start_timestamp % 60;
-                    let mut start_ms = (start_timestamp - remaining_seconds_from_previous_minute) * 1000;
-                    let end_ms = start_ms + (kline_duration_in_secs * 1000);
-                    {
-                        let last_error_guard = self.last_ws_error_ts.lock().expect("handle_websocket -> last_error_guard unwrap");
-                        if let Some(last_error_ts) = &*last_error_guard {
-                            let remainder_seconds_to_next_minute = last_error_ts % 60;
-                            start_ms = (last_error_ts - remainder_seconds_to_next_minute) * 1000;
-                        }
-                    }
-
-                    let current_limit = (end_ms - start_ms) / (kline_duration_in_secs * 1000);
-
-
-                    for symbol in &self.unique_symbols {
-                        let symbol_kline_data = Self::fetch_data(&self.http, symbol.name, start_ms, end_ms, current_limit).await?;
-                        kline_data.extend(symbol_kline_data);
-                    }
-
-                    let commited_kline_df = map_and_downsample_ticks_data_to_df(
-                        trading_data_schema,
-                        chrono_kline_duration,
-                        &kline_data,
-                        &self.unique_symbols,
-                        true
-                    )?;
-
-                    let trading_data_update = TradingDataUpdate::MarketData{ last_period_tick_data: commited_kline_df};
-                    self.trading_data_update_listener.next(trading_data_update);
-                    {
-                        let mut last_error_guard = self.last_ws_error_ts.lock().unwrap();
-                        *last_error_guard = None;
-                    }
-
-                    timeout_executed = true
-                },
             }
         }
     }
 
-    async fn init(
-        &mut self,
-        benchmark_end: NaiveDateTime,
-        benchmark_start: Option<NaiveDateTime>, // seconds
-        kline_data_schema: Schema,
-        run_benchmark_only: bool,
-        trading_data_schema: Schema,
+    async fn handle_http_klines_fetch(
+        &self,
+        benchmark_start_ts: i64,
+        benchmark_end_ts: i64,
+        kline_data_schema: &Schema,
+        trading_data_schema: &Schema,
     ) -> Result<(), GlowError> {
-        let benchmark_end_ts = benchmark_end.timestamp();
-        let kline_duration_in_secs = self.kline_duration.as_secs();
-        let mut benchmark_start_ts = None;
+        let kline_duration_in_secs = self.kline_duration.as_secs() as i64;
 
-        if let Some(benchmark_start) = benchmark_start {
-            let start_ts = benchmark_start.timestamp();
-            assert!(
-                benchmark_end_ts > start_ts,
-                "Benchmark end must be after benchmark start"
-            );
-            assert!(
-                benchmark_end_ts > start_ts + kline_duration_in_secs as i64,
-                "Benchmark end must be after benchmark start"
-            );
-            benchmark_start_ts = Some(start_ts);
-        }
         let http = self.http.clone();
         let minimum_klines_for_benchmarking = self.minimum_klines_for_benchmarking;
         let unique_symbols = self.unique_symbols.clone();
         let kline_data_schema = kline_data_schema.clone();
 
-        let handle = spawn(async move {
+        let fetch_data_handle = spawn(async move {
             let _ = Self::fetch_benchmark_available_data(
                 &http,
                 kline_data_schema,
                 &unique_symbols,
                 minimum_klines_for_benchmarking,
-                kline_duration_in_secs as i64,
+                kline_duration_in_secs,
                 benchmark_end_ts,
                 benchmark_start_ts,
             )
             .await;
         });
 
-        let _ = handle.await;
+        let _ = fetch_data_handle.await;
+
+        let current_timestamp = current_timestamp();
+        let is_last_kline_available = current_timestamp > benchmark_end_ts;
+
+        if is_last_kline_available {
+            return Ok(());
+        }
+
+        let http = self.http.clone();
+        let unique_symbols = self.unique_symbols.clone();
+        let kline_duration = self.kline_duration.clone();
+        let trading_data_update_listener = self.trading_data_update_listener.clone();
+        let trading_data_schema = trading_data_schema.clone();
+
+        let last_kline_available_handle = spawn(async move {
+            let seconds_until_benchmark_end = benchmark_end_ts - current_timestamp;
+            let duration_until_benchmark_end =
+                Duration::from_secs(seconds_until_benchmark_end as u64);
+            let benchmark_end_available_at = Instant::now() + duration_until_benchmark_end;
+
+            sleep_until(benchmark_end_available_at).await;
+
+            let mut kline_data = Vec::new();
+
+            // {
+            //     let last_error_guard = self
+            //         .last_ws_error_ts
+            //         .lock()
+            //         .expect("handle_websocket -> last_error_guard unwrap");
+            //     if let Some(last_error_ts) = &*last_error_guard {
+            //         let remainder_seconds_to_next_minute = last_error_ts % 60;
+            //         start_ms = (last_error_ts - remainder_seconds_to_next_minute) * 1000;
+            //     }
+            // }
+            let remaining_seconds_from_current_ts = current_timestamp % 60;
+            let start_ms = (current_timestamp - remaining_seconds_from_current_ts) * 1000;
+            let end_ms = start_ms + (kline_duration_in_secs * 1000);
+
+            let current_limit = (end_ms - start_ms) / (kline_duration_in_secs * 1000);
+
+            for symbol in unique_symbols.clone() {
+                let symbol_kline_data =
+                    Self::fetch_data(&http, symbol.name, start_ms, end_ms, current_limit)
+                        .await
+                        .expect("fetch data to work");
+                kline_data.extend(symbol_kline_data);
+            }
+
+            let commited_kline_df = map_and_downsample_ticks_data_to_df(
+                &trading_data_schema,
+                ChronoDuration::from_std(kline_duration)
+                    .expect("init -> error converting std duration to chrono duration"),
+                &kline_data,
+                &unique_symbols,
+                true,
+            )
+            .expect("map_and_downsample_ticks_data_to_df data to work");
+
+            let trading_data_update = TradingDataUpdate::MarketData {
+                last_period_tick_data: commited_kline_df,
+            };
+            trading_data_update_listener.next(trading_data_update);
+            // {
+            //     let mut last_error_guard = self.last_ws_error_ts.lock().unwrap();
+            //     *last_error_guard = None;
+            // }
+        });
+
+        last_kline_available_handle.await;
+
+        Ok(())
+    }
+
+    async fn init(
+        &mut self,
+        benchmark_end: Option<NaiveDateTime>,
+        benchmark_start: Option<NaiveDateTime>,
+        kline_data_schema: Schema,
+        run_benchmark_only: bool,
+        trading_data_schema: Schema,
+    ) -> Result<(), GlowError> {
+        let (benchmark_start, benchmark_end) =
+            fallback_benchmark_datetimes(benchmark_start, benchmark_end)?;
+
+        let _ = self
+            .handle_http_klines_fetch(
+                benchmark_start.timestamp(),
+                benchmark_end.timestamp(),
+                &kline_data_schema,
+                &trading_data_schema,
+            )
+            .await?;
 
         if run_benchmark_only {
             return Ok(());
@@ -483,4 +501,28 @@ impl DataProviderExchange for BinanceDataProvider {
             }
         }
     }
+}
+
+fn fallback_benchmark_datetimes(
+    benchmark_end: Option<NaiveDateTime>,
+    benchmark_start: Option<NaiveDateTime>,
+) -> Result<(NaiveDateTime, NaiveDateTime), GlowError> {
+    let benchmark_end = benchmark_end.unwrap_or_else(|| {
+        let current_datetime = current_datetime();
+        let date = NaiveDate::from_ymd_opt(
+            current_datetime.year(),
+            current_datetime.month(),
+            current_datetime.day(),
+        )
+        .unwrap();
+        let time =
+            NaiveTime::from_hms_opt(current_datetime.hour(), current_datetime.minute(), 0).unwrap();
+        NaiveDateTime::new(date, time)
+    });
+
+    let benchmark_start = benchmark_start.unwrap_or(current_datetime());
+
+    assert_or_error!(benchmark_end > benchmark_start_ts);
+
+    Ok((benchmark_start_ts, benchmark_end_ts))
 }

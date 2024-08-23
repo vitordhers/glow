@@ -1,32 +1,25 @@
 use chrono::{Duration as ChronoDuration, NaiveDateTime};
 use common::structs::Symbol;
 use common::{
-    enums::{
-        balance::Balance, log_level::LogLevel, order_action::OrderAction,
-        trading_data_update::TradingDataUpdate,
-    },
+    enums::{balance::Balance, order_action::OrderAction, trading_data_update::TradingDataUpdate},
     structs::{BehaviorSubject, Execution, Trade},
     traits::exchange::{DataProviderExchange, TraderExchange, TraderHelper},
 };
 use exchanges::enums::{DataProviderExchangeWrapper, TraderExchangeWrapper};
 use glow_error::GlowError;
 use polars::prelude::*;
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::sync::{Arc, Mutex};
 use strategy::Strategy;
 use tokio::spawn;
 
 #[derive(Clone)]
 pub struct DataFeed {
+    benchmark_datetimes: (Option<NaiveDateTime>, Option<NaiveDateTime>), // (start, end)
     pub current_trade_listener: BehaviorSubject<Option<Trade>>,
     pub data_provider_exchange: DataProviderExchangeWrapper,
     pub data_provider_exchange_socket_error_ts: Arc<Mutex<Option<i64>>>,
-    pub is_test_mode: bool,
-    pub kline_duration: Duration,
+    pub run_benchmark_only: bool,
     pub kline_data_schema: Schema,
-    pub log_level: LogLevel,
     pub trades_start: NaiveDateTime,
     pub minimum_klines_for_benchmarking: u32,
     pub trading_data_schema: Schema,
@@ -53,30 +46,6 @@ impl DataFeed {
 
         Schema::from_iter(schema_fields.clone().into_iter())
     }
-
-    // fn insert_preindicators_fields<S: StrategySchema>(
-    //     schema_fields: &mut Vec<Field>,
-    //     strategy: &Strategy<S>
-    // ) -> u32 {
-    //     let mut preindicators_minimum_klines_for_benchmarking: Vec<u32> = vec![];
-
-    //     for preindicator in preindicators {
-    //         let preindicator_minimum_klines_for_benchmarking =
-    //             preindicator.get_minimum_klines_for_benchmarking();
-    //         preindicators_minimum_klines_for_benchmarking
-    //             .push(preindicator_minimum_klines_for_benchmarking);
-    //         let columns = preindicator.get_indicator_columns();
-    //         for (name, dtype) in columns {
-    //             let field = Field::new(name.as_str(), dtype.clone());
-    //             schema_fields.push(field);
-    //         }
-    //     }
-
-    //     preindicators_minimum_klines_for_benchmarking
-    //         .into_iter()
-    //         .max()
-    //         .unwrap_or_default()
-    // }
 
     fn insert_indicators_fields(schema_fields: &mut Vec<Field>, strategy: &Strategy) {
         let columns = strategy.get_indicators_columns();
@@ -106,13 +75,11 @@ impl DataFeed {
     }
 
     pub fn new(
+        benchmark_datetimes: (Option<NaiveDateTime>, Option<NaiveDateTime>),
         current_trade_listener: &BehaviorSubject<Option<Trade>>,
         data_provider_exchange_socket_error_ts: &Arc<Mutex<Option<i64>>>,
         data_provider_exchange: DataProviderExchangeWrapper,
-        initial_datetime: NaiveDateTime,
-        is_test_mode: bool,
-        kline_duration_in_seconds: u64,
-        log_level: LogLevel,
+        run_benchmark_only: bool,
         strategy: &Strategy,
         trading_data_update_listener: &BehaviorSubject<TradingDataUpdate>,
         trading_data_listener: &BehaviorSubject<DataFrame>,
@@ -121,6 +88,13 @@ impl DataFeed {
         update_executions_listener: &BehaviorSubject<Vec<Execution>>,
         update_order_listener: &BehaviorSubject<Option<OrderAction>>,
     ) -> DataFeed {
+        if let (Some(benchmark_start), Some(benchmark_end)) = benchmark_datetimes {
+            assert!(
+                benchmark_start < benchmark_end,
+                "Benchmark start must be before benchmark end"
+            );
+        }
+
         let mut schema_fields = vec![Field::new(
             "start_time",
             DataType::Datetime(TimeUnit::Milliseconds, None),
@@ -138,7 +112,7 @@ impl DataFeed {
         let minimum_klines_for_benchmarking = strategy.get_minimum_klines_for_calculation();
 
         let trading_data_schema = Self::insert_performance_fields(&mut schema_fields);
-        let kline_duration = Duration::from_secs(kline_duration_in_seconds);
+        // let kline_duration = Duration::from_secs(kline_duration_in_seconds);
         // let current_datetime = current_datetime();
         // TODO: check this, probably should be moved to somewhere else
         let minute_lasting_seconds = initial_datetime.timestamp() % 60;
@@ -149,7 +123,7 @@ impl DataFeed {
         };
 
         let trades_start = initial_datetime + ChronoDuration::seconds(seconds_to_next_full_minute);
-        if !is_test_mode {
+        if !run_benchmark_only {
             println!(
                 "seconds_to_next_full_minute {:?}",
                 seconds_to_next_full_minute
@@ -160,46 +134,29 @@ impl DataFeed {
             );
         }
 
-        // let data_provider_exchange = DataProviderExchangeWrapper::new_binance_data_provider(
-        //     trades_start,
-        //     &kline_data_schema,
-        //     kline_duration,
-        //     data_provider_exchange_socket_error_ts,
-        //     minimum_klines_for_benchmarking,
-        //     trading_settings.symbols,
-        //     &trading_data_schema,
-        //     &trading_data_update_listener,
-        // );
-
         DataFeed {
+            benchmark_datetimes,
             current_trade_listener: current_trade_listener.clone(),
             data_provider_exchange,
             data_provider_exchange_socket_error_ts: data_provider_exchange_socket_error_ts.clone(),
-            is_test_mode,
+            run_benchmark_only,
             kline_data_schema,
-            kline_duration,
-            log_level,
             trades_start,
             minimum_klines_for_benchmarking,
             trading_data_schema,
             trading_data_update_listener: trading_data_update_listener.clone(),
             trading_data_listener: trading_data_listener.clone(),
             trader_exchange_listener: trader_exchange_listener.clone(),
-            // unique_symbols,
             update_balance_listener: update_balance_listener.clone(),
             update_executions_listener: update_executions_listener.clone(),
             update_order_listener: update_order_listener.clone(),
         }
     }
 
-    pub async fn init(
-        &'static mut self,
-        benchmark_end: NaiveDateTime,
-        benchmark_start: Option<NaiveDateTime>,
-    ) -> Result<(), GlowError> {
+    pub async fn init(&'static mut self) -> Result<(), GlowError> {
         let mut data_provider_binding = self.data_provider_exchange.clone();
         let kline_data_schema = self.kline_data_schema.clone();
-        let run_benchmark_only = self.is_test_mode;
+        let run_benchmark_only = self.run_benchmark_only;
         let trading_data_schema = self.trading_data_schema.clone();
 
         let data_provider_handle = spawn(async move {
