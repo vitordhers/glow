@@ -182,9 +182,7 @@ impl BinanceDataProvider {
         Ok(result)
     }
 
-    async fn handle_fetch_pending_kline() {
-        
-    }
+    async fn handle_fetch_pending_kline() {}
 
     async fn handle_initial_klines_fetch(
         &self,
@@ -197,6 +195,8 @@ impl BinanceDataProvider {
         let http = self.http.clone();
         let unique_symbols = self.unique_symbols.clone();
         let kline_data_schema_clone = kline_data_schema.clone();
+        let trading_data_update_listener = self.trading_data_update_listener.clone();
+
         let fetch_data_handle = spawn(async move {
             let initial_kline_data_lf = Self::fetch_kline_data(
                 &http,
@@ -207,7 +207,14 @@ impl BinanceDataProvider {
                 benchmark_end_ts,
             )
             .await
-            .expect("fetch_kline_data to success");
+            .expect("fn to return lf");
+
+            let trading_data = TradingDataUpdate::BenchmarkData {
+                initial_tick_data_lf: initial_kline_data_lf,
+                initial_last_bar: NaiveDateTime::from_timestamp_opt(benchmark_end_ts, 0)
+                    .expect("timestamp yo yield valid datetime"),
+            };
+            trading_data_update_listener.next(trading_data);
         });
 
         let _ = fetch_data_handle.await;
@@ -249,7 +256,7 @@ impl BinanceDataProvider {
                 ticks_data.extend(symbol_kline_data);
             }
 
-            let commited_kline_df = map_and_downsample_ticks_data_to_df2(
+            let committed_kline_df = map_and_downsample_ticks_data_to_df2(
                 &ticks_data,
                 &unique_symbols,
                 kline_duration,
@@ -259,7 +266,7 @@ impl BinanceDataProvider {
             .unwrap();
 
             let trading_data_update = TradingDataUpdate::MarketData {
-                last_period_tick_data: commited_kline_df,
+                last_period_tick_data: committed_kline_df,
             };
             trading_data_update_listener.next(trading_data_update);
         });
