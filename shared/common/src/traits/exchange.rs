@@ -224,7 +224,7 @@ pub trait DataProviderExchange {
         trading_data_schema: Schema,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
 
-    fn handle_ws_error(&self) -> impl Future<Output = Result<(), GlowError>> + Send;
+    // fn handle_ws_error(&self) -> impl Future<Output = Result<(), GlowError>> + Send;
 
     fn handle_committed_ticks_data(
         &self,

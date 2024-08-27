@@ -88,26 +88,6 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
         }
     }
 
-    async fn handle_http_klines_fetch(
-        &self,
-        benchmark_start_ts: i64,
-        benchmark_end_ts: i64,
-        kline_data_schema: &Schema,
-        trading_data_schema: &Schema,
-    ) -> Result<(), GlowError> {
-        match self {
-            Self::Binance(ex) => {
-                ex.handle_http_klines_fetch(
-                    benchmark_start_ts,
-                    benchmark_end_ts,
-                    kline_data_schema,
-                    trading_data_schema,
-                )
-                .await
-            }
-        }
-    }
-
     async fn listen_ticks(
         &mut self,
         wss: WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -121,12 +101,17 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
     async fn handle_committed_ticks_data(
         &self,
         benchmark_end: NaiveDateTime,
+        kline_data_schema: &Schema,
         trading_data_schema: &Schema,
     ) -> Result<(), GlowError> {
         match self {
             Self::Binance(ex) => {
-                ex.handle_committed_ticks_data(benchmark_end, trading_data_schema)
-                    .await
+                ex.handle_committed_ticks_data(
+                    benchmark_end,
+                    kline_data_schema,
+                    trading_data_schema,
+                )
+                .await
             }
         }
     }

@@ -83,19 +83,19 @@ impl BinanceDataProvider {
         kline_data_schema: Schema,
         unique_symbols: &Vec<&Symbol>,
         kline_duration: Duration,
-        start_timestamp: i64, // seconds
-        end_timestamp: i64,   // seconds
+        start_timestamp_in_secs: i64,
+        end_timestamp_in_secs: i64,
     ) -> Result<LazyFrame, GlowError> {
         let max_limit: i64 = 1000;
 
         let timestamp_intervals = get_fetch_timestamps_interval(
-            start_timestamp,
-            end_timestamp,
+            start_timestamp_in_secs,
+            end_timestamp_in_secs,
             kline_duration,
             max_limit,
         );
 
-        println!("timestamp interval {:?}", timestamp_intervals);
+        println!("timestamps vec {:?}", timestamp_intervals);
 
         let mut ticks_data = vec![];
         let kline_duration_in_mins = kline_duration.num_minutes();
@@ -104,7 +104,7 @@ impl BinanceDataProvider {
         for (i, value) in timestamp_intervals.iter().enumerate() {
             let start_ts: i64;
             if i == 0 {
-                // skip i == 0, as &timestamp_intervals[i - 1] doesn't exist
+                // skip i == 0, as &timestamp_intervals[- 1] doesn't exist
                 continue;
             }
 
@@ -184,10 +184,29 @@ impl BinanceDataProvider {
 
     async fn handle_fetch_pending_kline() {}
 
+    async fn handle_ws_error(&self) -> Result<(), GlowError> {
+        todo!()
+        // {
+        //     let last_error_guard = self
+        //         .last_ws_error_ts
+        //         .lock()
+        //         .expect("handle_ws_error -> last_error_guard unwrap");
+        //     if let Some(last_error_ts) = &*last_error_guard {
+        //         let remainder_seconds_to_next_minute = last_error_ts % 60;
+        //         start_ms = (last_error_ts - remainder_seconds_to_next_minute) * 1000;
+        //     }
+        // }
+
+        // {
+        //     let mut last_error_guard = self.last_ws_error_ts.lock().unwrap();
+        //     *last_error_guard = None;
+        // }
+    }
+
     async fn handle_initial_klines_fetch(
         &self,
-        benchmark_start_ts: i64,
-        benchmark_end_ts: i64,
+        benchmark_start: NaiveDateTime,
+        benchmark_end: NaiveDateTime,
         kline_data_schema: &Schema,
         trading_data_schema: &Schema,
     ) -> Result<(), GlowError> {
@@ -203,24 +222,23 @@ impl BinanceDataProvider {
                 kline_data_schema_clone,
                 &unique_symbols,
                 kline_duration,
-                benchmark_start_ts,
-                benchmark_end_ts,
+                benchmark_start.timestamp(),
+                benchmark_end.timestamp(),
             )
             .await
             .expect("fn to return lf");
 
             let trading_data = TradingDataUpdate::BenchmarkData {
                 initial_tick_data_lf: initial_kline_data_lf,
-                initial_last_bar: NaiveDateTime::from_timestamp_opt(benchmark_end_ts, 0)
-                    .expect("timestamp yo yield valid datetime"),
+                initial_last_bar: benchmark_end,
             };
             trading_data_update_listener.next(trading_data);
         });
 
         let _ = fetch_data_handle.await;
 
-        let current_timestamp = current_timestamp();
-        let is_last_kline_available = current_timestamp > benchmark_end_ts;
+        let current_datetime = current_datetime();
+        let is_last_kline_available = current_datetime > benchmark_end;
 
         if is_last_kline_available {
             return Ok(());
@@ -235,7 +253,8 @@ impl BinanceDataProvider {
         let kline_duration_in_secs = self.kline_duration.num_seconds();
 
         let last_kline_available_handle = spawn(async move {
-            let seconds_until_benchmark_end = benchmark_end_ts - current_timestamp;
+            let current_timestamp = current_timestamp();
+            let seconds_until_benchmark_end = benchmark_end.timestamp() - current_timestamp;
             let duration_until_benchmark_end =
                 StdDuration::from_secs(seconds_until_benchmark_end as u64);
             let benchmark_end_available_at = Instant::now() + duration_until_benchmark_end;
@@ -447,24 +466,6 @@ impl DataProviderExchange for BinanceDataProvider {
         }
     }
 
-    async fn handle_ws_error(&self) -> Result<(), GlowError> {
-        {
-            let last_error_guard = self
-                .last_ws_error_ts
-                .lock()
-                .expect("handle_ws_error -> last_error_guard unwrap");
-            if let Some(last_error_ts) = &*last_error_guard {
-                let remainder_seconds_to_next_minute = last_error_ts % 60;
-                start_ms = (last_error_ts - remainder_seconds_to_next_minute) * 1000;
-            }
-        }
-
-        {
-            let mut last_error_guard = self.last_ws_error_ts.lock().unwrap();
-            *last_error_guard = None;
-        }
-    }
-
     async fn init(
         &mut self,
         benchmark_start: Option<NaiveDateTime>,
@@ -483,8 +484,8 @@ impl DataProviderExchange for BinanceDataProvider {
 
         let _ = self
             .handle_initial_klines_fetch(
-                benchmark_start.timestamp(),
-                benchmark_end.timestamp(),
+                benchmark_start,
+                benchmark_end,
                 &kline_data_schema,
                 &trading_data_schema,
             )

@@ -4,6 +4,8 @@ mod datetime;
 pub use datetime::*;
 mod functions;
 pub use functions::select_from_list;
+mod symbols;
+pub use symbols::*;
 
 fn select_data_provider_exchange() -> Option<String> {
     let mut data_provider_options = DataProviderExchangeWrapper::get_selection_list();

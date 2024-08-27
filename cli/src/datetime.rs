@@ -14,9 +14,9 @@ pub fn change_benchmark_datetimes(
 ) -> Option<(NaiveDateTime, NaiveDateTime)> {
     let result = loop {
         let benchmark_datetimes_options = vec![
-            String::from("⏳ Change Benchmark start datetime"),
-            String::from("⌛ Change Benchmark end datetime"),
-            String::from("🔙 Go back"),
+            "⏳ Change Benchmark start datetime".to_owned(),
+            "⌛ Change Benchmark end datetime".to_owned(),
+            "🔙 Go back".to_owned(),
         ];
         let back_index = benchmark_datetimes_options.len() - 1;
         let selection = select_from_list(

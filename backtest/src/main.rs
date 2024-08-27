@@ -1,5 +1,5 @@
 use chrono::{Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use cli::{change_benchmark_datetimes, select_from_list};
+use cli::{change_benchmark_datetimes, change_symbols_pair, select_from_list};
 use common::{
     enums::{
         balance::Balance,
@@ -25,7 +25,7 @@ use std::{
 };
 use std::{env, io::stdin, marker::Send};
 use strategy::{Strategy, StrategyId};
-use tokio::{join, spawn};
+use tokio::{join, spawn, task::JoinError};
 
 #[tokio::main]
 async fn main() {
@@ -41,26 +41,14 @@ async fn main() {
         Amen 🙏"#
     );
 
-    /// piping information: https://app.clickup.com/9013233975/v/wb/8ckp29q-433
-
-    let selected_symbols_pair = BehaviorSubject::new(SymbolsPair::default());
+    // piping schema: https://app.clickup.com/9013233975/v/wb/8ckp29q-433
+    let default_symbols_pair = SymbolsPair::default();
+    let selected_symbols_pair = BehaviorSubject::new(default_symbols_pair);
 
     let default_trading_settings = TradingSettings::load_or_default();
-    let current_trading_settings = BehaviorSubject::new(TradingSettings::load_or_default());
+    let current_trading_settings = BehaviorSubject::new(default_trading_settings.clone());
 
-    let ctsc = current_trading_settings.clone();
-    let sspc = selected_symbols_pair.clone();
-    let selected_symbols_handle = spawn(async move {
-        let mut selection_subscription = sspc.subscribe();
-        // let current_trading_settings = current_trading_settings.clone();
-
-        while let Some(updated_symbols_pair) = selection_subscription.next().await {
-            let updated_trading_settings = ctsc.value().patch_symbols_pair(updated_symbols_pair);
-            ctsc.next(updated_trading_settings);
-        }
-    });
-
-    selected_symbols_handle.await;
+    let _ = handle_symbols_pair_selection(&selected_symbols_pair, &current_trading_settings).await;
 
     let current_trade_listener: BehaviorSubject<Option<Trade>> = BehaviorSubject::new(None);
     let trader_last_ws_error_ts: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
@@ -80,12 +68,182 @@ async fn main() {
         &update_executions_listener,
         &update_order_listener,
     );
+
     let current_trader_exchange = BehaviorSubject::new(default_trader_exchange);
+
+    let _ = handle_trader_exchange_selection(
+        &current_trading_settings,
+        &current_trader_exchange,
+        &selected_trader_exchange_id,
+        &current_trade_listener,
+        &trader_last_ws_error_ts,
+        &update_balance_listener,
+        &update_executions_listener,
+        &update_order_listener,
+    )
+    .await;
+    let default_strategy_id = StrategyId::default();
+    let selected_strategy_id = BehaviorSubject::new(default_strategy_id);
+    let default_strategy = Strategy::default();
+    let current_strategy = BehaviorSubject::new(default_strategy.clone());
+
+    let _ = handle_strategy_selection(
+        &current_strategy,
+        &current_trading_settings,
+        &selected_strategy_id,
+    )
+    .await;
+
+    let data_provider_last_ws_error_ts: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
+    let trading_data_update_listener = BehaviorSubject::new(TradingDataUpdate::default());
+    let default_data_provider_exchange_id = DataProviderExchangeId::default();
+    let selected_data_provider_exchange_id =
+        BehaviorSubject::new(default_data_provider_exchange_id);
+    let default_data_provider_exchange = DataProviderExchangeWrapper::new(
+        default_data_provider_exchange_id,
+        default_trading_settings.granularity.get_chrono_duration(),
+        &data_provider_last_ws_error_ts,
+        default_strategy.get_minimum_klines_for_calculation(),
+        default_symbols_pair,
+        &trading_data_update_listener,
+    );
+
+    let current_data_provider_exchange = BehaviorSubject::new(default_data_provider_exchange);
+
+    let _ = handle_data_provider_selection(
+        &current_trading_settings,
+        &current_strategy,
+        &trading_data_update_listener,
+        &selected_data_provider_exchange_id,
+        &data_provider_last_ws_error_ts,
+        &current_data_provider_exchange,
+    )
+    .await;
+
+    // let mut current_strategy = get_default_strategy();
+    let mut end_datetime = current_datetime();
+    let mut start_datetime = end_datetime - Duration::days(1);
+
+    loop {
+        let options = vec![
+            "Select Benchmark Datetimes",
+            "Change Trading Coins",
+            "Select Data Provider Exchange",
+            "Select Trader Exchange",
+            "Change Strategy",
+            "Change Trading Settings",
+            "Run Benchmark",
+        ];
+
+        let default_index = options.len() + 1;
+        let selection = select_from_list("Select an option", &options, Some(default_index));
+        match selection {
+            0 => {
+                let current_strategy = current_strategy.value();
+                let current_trade_exchange = current_trader_exchange.value();
+                let result = change_benchmark_datetimes(
+                    start_datetime,
+                    end_datetime,
+                    &current_trade_exchange,
+                    current_strategy.get_minimum_klines_for_calculation(),
+                );
+                if result.is_none() {
+                    continue;
+                }
+                let (updated_start_datetime, updated_end_datetime) = result.unwrap();
+                start_datetime = updated_start_datetime;
+                end_datetime = updated_end_datetime;
+            }
+            1 => {
+                let current_symbols_pair = selected_symbols_pair.value();
+                let updated_symbols_pair = change_symbols_pair(current_symbols_pair);
+                if updated_symbols_pair.is_none() {
+                    continue;
+                }
+                let updated_symbols_pair = updated_symbols_pair.unwrap();
+                selected_symbols_pair.next(updated_symbols_pair);
+            }
+            2 => {
+                // CHANGE PROVIDER EXCHANGE
+            }
+            3 => {
+                // CHANGE TRADER EXCHANGE
+            }
+            4 => {
+                // CHANGE STRATEGY
+            }
+            5 => {
+                // CHANGE TRADING SETTINGS
+            }
+            6 => {
+                // RUN BENCHMARK
+                let benchmark_datetimes = (Some(start_datetime), Some(end_datetime));
+                let data_provider_exchange = current_data_provider_exchange.value();
+                let strategy = current_strategy.value();
+
+                let data_feed = DataFeed::new(
+                    benchmark_datetimes,
+                    &current_trade_listener,
+                    &data_provider_last_ws_error_ts,
+                    data_provider_exchange,
+                    true,
+                    &strategy,
+                    &trading_data_update_listener,
+                    &current_trader_exchange,
+                    &update_balance_listener,
+                    &update_executions_listener,
+                    &update_order_listener,
+                );
+            }
+            _ => {
+                println!("Invalid option");
+                continue;
+            }
+        }
+    }
+}
+
+async fn handle_symbols_pair_selection(
+    selected_symbols_pair: &BehaviorSubject<SymbolsPair>,
+    current_trading_settings: &BehaviorSubject<TradingSettings>,
+) -> Result<(), JoinError> {
     let ctsc = current_trading_settings.clone();
-    let cte = current_trader_exchange.clone();
+    let sspc = selected_symbols_pair.clone();
+    let selected_symbols_handle = spawn(async move {
+        let mut selection_subscription = sspc.subscribe();
+        // let current_trading_settings = current_trading_settings.clone();
+
+        while let Some(updated_symbols_pair) = selection_subscription.next().await {
+            let updated_trading_settings = ctsc.value().patch_symbols_pair(updated_symbols_pair);
+            ctsc.next(updated_trading_settings);
+        }
+    });
+
+    selected_symbols_handle.await
+}
+
+async fn handle_trader_exchange_selection(
+    current_trading_settings: &BehaviorSubject<TradingSettings>,
+    current_trader_exchange: &BehaviorSubject<TraderExchangeWrapper>,
+    selected_trader_exchange_id: &BehaviorSubject<TraderExchangeId>,
+    current_trade_listener: &BehaviorSubject<Option<Trade>>,
+    trader_last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
+    update_balance_listener: &BehaviorSubject<Option<Balance>>,
+    update_executions_listener: &BehaviorSubject<Vec<Execution>>,
+    update_order_listener: &BehaviorSubject<Option<OrderAction>>,
+) -> Result<(), JoinError> {
+    let current_trading_settings = current_trading_settings.clone();
+    let current_trader_exchange = current_trader_exchange.clone();
+    let selected_trader_exchange_id = selected_trader_exchange_id.clone();
+    let current_trade_listener = current_trade_listener.clone();
+    let trader_last_ws_error_ts = trader_last_ws_error_ts.clone();
+    let update_balance_listener = update_balance_listener.clone();
+    let update_executions_listener = update_executions_listener.clone();
+    let update_order_listener = update_order_listener.clone();
+
     let selected_trader_exchange_handle = spawn(async move {
         let selection_subscription = &mut selected_trader_exchange_id.subscribe();
-        let mut settings_subscription = ctsc.subscribe();
+        let mut settings_subscription = current_trading_settings.subscribe();
 
         while let (Some(selected_exchange_id), Some(trading_settings)) =
             join!(selection_subscription.next(), settings_subscription.next())
@@ -99,21 +257,25 @@ async fn main() {
                 &update_executions_listener,
                 &update_order_listener,
             );
-            cte.next(updated_trader_exchange);
+            current_trader_exchange.next(updated_trader_exchange);
         }
     });
 
-    selected_trader_exchange_handle.await;
+    selected_trader_exchange_handle.await
+}
 
-    let selected_strategy_id = BehaviorSubject::new(StrategyId::default());
-    let current_strategy = BehaviorSubject::new(Strategy::default());
-
-    let csc = current_strategy.clone();
-    let ctsc = current_trading_settings.clone();
+async fn handle_strategy_selection(
+    current_strategy: &BehaviorSubject<Strategy>,
+    current_trading_settings: &BehaviorSubject<TradingSettings>,
+    selected_strategy_id: &BehaviorSubject<StrategyId>,
+) -> Result<(), JoinError> {
+    let current_strategy = current_strategy.clone();
+    let current_trading_settings = current_trading_settings.clone();
+    let selected_strategy_id = selected_strategy_id.clone();
 
     let selected_strategy_handle = spawn(async move {
         let selection_subscription = &mut selected_strategy_id.subscribe();
-        let mut trading_settings_subscription = ctsc.subscribe();
+        let mut trading_settings_subscription = current_trading_settings.subscribe();
 
         while let (Some(selected_strategy_id), Some(trading_settings)) = join!(
             selection_subscription.next(),
@@ -121,27 +283,32 @@ async fn main() {
         ) {
             let current_symbol_pair = trading_settings.symbols_pair;
             let updated_strategy = Strategy::new(selected_strategy_id, current_symbol_pair);
-            csc.next(updated_strategy);
+            current_strategy.next(updated_strategy);
         }
     });
 
-    selected_strategy_handle.await;
+    selected_strategy_handle.await
+}
 
-    let data_provider_last_ws_error_ts: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
-    let trading_data_update_listener = BehaviorSubject::new(TradingDataUpdate::default());
-    let selected_data_provider_exchange = BehaviorSubject::new(DataProviderExchangeId::default());
-
-    let current_data_provider_exchange = Arc::new(Mutex::new(None));
-    // TODO: validate this comment below:
-    // note that only who provides subscription must be cloned
-    let ctsc = current_trading_settings.clone();
-    let csc = current_strategy.clone();
-    let tudl = trading_data_update_listener.clone();
+async fn handle_data_provider_selection(
+    current_trading_settings: &BehaviorSubject<TradingSettings>,
+    current_strategy: &BehaviorSubject<Strategy>,
+    trading_data_update_listener: &BehaviorSubject<TradingDataUpdate>,
+    selected_data_provider_exchange_id: &BehaviorSubject<DataProviderExchangeId>,
+    data_provider_last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
+    current_data_provider_exchange: &BehaviorSubject<DataProviderExchangeWrapper>,
+) -> Result<(), JoinError> {
+    let current_trading_settings = current_trading_settings.clone();
+    let current_strategy = current_strategy.clone();
+    let trading_data_update_listener = trading_data_update_listener.clone();
+    let selected_data_provider_exchange_id = selected_data_provider_exchange_id.clone();
+    let data_provider_last_ws_error_ts = data_provider_last_ws_error_ts.clone();
+    let current_data_provider_exchange = current_data_provider_exchange.clone();
 
     let selected_data_provider_handle = spawn(async move {
-        let mut selection_subscription = selected_data_provider_exchange.subscribe();
-        let mut settings_subscription = ctsc.subscribe();
-        let mut strategy_subscription = csc.subscribe();
+        let mut selection_subscription = selected_data_provider_exchange_id.subscribe();
+        let mut settings_subscription = current_trading_settings.subscribe();
+        let mut strategy_subscription = current_strategy.subscribe();
 
         while let (
             Some(selected_exchange),
@@ -158,207 +325,15 @@ async fn main() {
         ) {
             let updated_data_provider_exchange = DataProviderExchangeWrapper::new(
                 selected_exchange,
-                granularity.get_duration(),
+                granularity.get_chrono_duration(),
                 &data_provider_last_ws_error_ts,
                 strategy.get_minimum_klines_for_calculation(),
                 symbols_pair,
-                &tudl,
+                &trading_data_update_listener,
             );
-            let mut guard = current_data_provider_exchange.lock().unwrap();
-            *guard = Some(updated_data_provider_exchange);
+            current_data_provider_exchange.next(updated_data_provider_exchange);
         }
     });
 
-    selected_data_provider_handle.await;
-
-    // let mut current_strategy = get_default_strategy();
-    let mut end_datetime = current_datetime();
-    let mut start_datetime: NaiveDateTime;
-
-    loop {
-        let options = vec![
-            "Select Benchmark Datetimes",
-            "Change Trading Coins",
-            "Select Data Provider Exchange",
-            "Select Trader Exchange",
-            "Change Strategy",
-            "Change Trading Settings",
-            "Run Benchmark",
-        ];
-
-        let default_index = options.len() + 1;
-        let selection = select_from_list("", &options, Some(default_index));
-        match selection {
-            0 => {
-                let current_strategy = current_strategy.value();
-                let current_trade_exchange = current_trader_exchange.value();
-                let result = change_benchmark_datetimes(
-                    start_datetime,
-                    end_datetime,
-                    &current_trade_exchange,
-                    current_strategy.get_minimum_klines_for_calculation(),
-                );
-                if result.is_some() {
-                    let (updated_start_datetime, updated_end_datetime) = result.unwrap();
-                    start_datetime = updated_start_datetime;
-                    end_datetime = updated_end_datetime;
-                }
-                continue;
-            }
-            1 => {
-                // CHANGE SYMBOLS PAIR
-            }
-            2 => {
-                // CHANGE PROVIDER EXCHANGE
-            }
-            3 => {
-                // CHANGE TRADER EXCHANGE
-            }
-            4 => {
-                // CHANGE STRATEGY
-            }
-            5 => {
-                // CHANGE TRADING SETTINGS
-            }
-            6 => {
-                // RUN BENCHMARK
-            }
-            _ => {
-                println!("Invalid option");
-                continue;
-            }
-        }
-    }
-
-    // ARGS
-    // let windows = vec![1]; // 5, 15, 30 // 5, 9, 12
-
-    // let start_time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-    // start_datetime = NaiveDateTime::new(start_date, start_time);
-
-    // let seconds_to_next_full_minute = 60 - start_datetime.timestamp() % 60;
-    // let trading_initial_datetime = start_datetime + Duration::seconds(seconds_to_next_full_minute);
-
-    // let cloud_length = 20;
-
-    // let signals: Vec<SignalWrapper> = vec![
-    //     multiple_stochastic_with_threshold_short_signal.into(),
-    //     multiple_stochastic_with_threshold_long_signal.into(),
-    //     multiple_stochastic_with_threshold_close_short_signal.into(),
-    //     multiple_stochastic_with_threshold_close_long_signal.into(),
-    // ];
-
-    // let initial_leverage = Leverage::Isolated(5);
-    // let position_lock_modifier = PositionLock::None;
-    // let mut price_level_modifiers = HashMap::new();
-    // let stop_loss = PriceLevel::StopLoss(0.25);
-    // let take_profit = PriceLevel::TakeProfit(0.5);
-    // // let trailing_stop_loss = TrailingStopLoss::Percent(0.5, 0.05);
-    // // let trailing_modifier = PriceLevel::TrailingStopLoss(trailing_stop_loss);
-    // price_level_modifiers.insert(stop_loss.get_hash_key(), stop_loss);
-    // price_level_modifiers.insert(take_profit.get_hash_key(), take_profit);
-    // // price_level_modifiers.insert("tsl".to_string(), trailing_modifier);
-
-    // let trading_settings_arc = Arc::new(Mutex::new(TradingSettings::new(
-    //     OrderType::Market,
-    //     OrderType::Market,
-    //     initial_leverage.clone(),
-    //     position_lock_modifier,
-    //     price_level_modifiers,
-    //     0.95, // CHANGE ALLOCATION,
-    //     false,
-    // )));
-
-    // let current_trade_listener: BehaviorSubject<Option<Trade>> = BehaviorSubject::new(None);
-    // let data_provider_exchange_socket_error_ts = Arc::new(Mutex::new(None));
-    // let data_provider_exchange_wrapper = DataProviderExchangeWrapper::new_binance_data_provider(
-    //     benchmark_end,
-    //     kline_data_schema,
-    //     kline_duration,
-    //     last_ws_error_ts,
-    //     minimum_klines_for_benchmarking,
-    //     symbols,
-    //     trading_data_schema,
-    //     trading_data_update_listener,
-    // );
-
-    // let data_feed = DataFeed::new(
-    //     &current_trade_listener,
-    //     data_provider_exchange_socket_error_ts,
-    //     log_level,
-    //     &exchange_socket_error_arc,
-    //     &trading_data_update_listener,
-    //     &exchange_listener,
-    //     &trading_data_listener,
-    //     &update_balance_listener,
-    //     &update_order_listener,
-    //     &update_executions_listener,
-    //     &current_trade_listener,
-    //     start_datetime,
-    //     indicators,
-    //     signals,
-    //     is_test_mode,
-    // );
-
-    // let exchange = Box::new(bybit_exchange);
-
-    // let exchange_listener: BehaviorSubject<Box<dyn Exchange + Send + Sync>> =
-    //     BehaviorSubject::new(exchange);
-
-    // let timestamp = Utc::now().timestamp() * 1000;
-    // let current_balance_listener = BehaviorSubject::new(Balance::new(timestamp, 0.0, 0.0));
-
-    // let bar_length = 60;
-    // let log_level = LogLevel::All;
-    // let benchmark_balance = 100.00;
-
-    // let performance = Performance::new(exchange_listener.clone(), trading_initial_datetime);
-    // let performance_arc = Arc::new(Mutex::new(performance));
-
-    // let signal_listener = BehaviorSubject::new(None);
-    // let trading_data_listener = BehaviorSubject::new(DataFrame::default());
-
-    // let strategy = Strategy::new(
-    //     "Stepped Stochastic Strategy".to_string(),
-    //     pre_indicators,
-    //     indicators.clone(),
-    //     signals.clone(),
-    //     benchmark_balance,
-    //     performance_arc.clone(),
-    //     trading_settings_arc.clone(),
-    //     exchange_listener.clone(),
-    //     current_trade_listener.clone(),
-    //     signal_listener.clone(),
-    //     current_balance_listener.clone(),
-    // );
-
-    // let strategy_arc = Arc::new(Mutex::new(strategy));
-
-    // let trading_data_update_listener = BehaviorSubject::new(TradingDataUpdate::None);
-    // let update_balance_listener: BehaviorSubject<Option<Balance>> = BehaviorSubject::new(None);
-    // let update_order_listener: BehaviorSubject<Option<OrderAction>> = BehaviorSubject::new(None);
-    // let update_executions_listener: BehaviorSubject<Vec<Execution>> = BehaviorSubject::new(vec![]);
-
-    // let leverage_listener = BehaviorSubject::new(initial_leverage);
-    // let trader = Trader::new(
-    //     data_feed,
-    //     &strategy_arc,
-    //     &performance_arc,
-    //     &trading_settings_arc,
-    //     &exchange_socket_error_arc,
-    //     &exchange_listener,
-    //     &current_balance_listener,
-    //     &update_balance_listener,
-    //     &update_order_listener,
-    //     &update_executions_listener,
-    //     &signal_listener,
-    //     &trading_data_listener,
-    //     &trading_data_update_listener,
-    //     &current_trade_listener,
-    //     &leverage_listener,
-    //     &log_level,
-    //     is_test_mode,
-    // );
-
-    // let _ = trader.init().await;
+    selected_data_provider_handle.await
 }
