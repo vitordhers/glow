@@ -1,5 +1,4 @@
 use common::{
-    enums::symbol_id::SymbolId,
     r#static::SYMBOLS_MAP,
     structs::{Symbol, SymbolsPair},
 };
@@ -16,14 +15,15 @@ pub fn change_symbols_pair(current_symbols_pair: SymbolsPair) -> Option<SymbolsP
 
         let back_index = benchmark_symbols_pair_options.len() - 1;
         let selection = select_from_list(
-            "Select a Symbol to change",
+            &format!("Select a Symbol to change. \n Current anchor symbol: {} \n Current traded symbol {}", current_symbols_pair.anchor.name, current_symbols_pair.traded.name),
             &benchmark_symbols_pair_options,
             Some(back_index),
         );
 
         break match selection {
             0 => {
-                let selection = get_different_than_symbol(current_symbols_pair.anchor.id, "Anchor");
+                let selection =
+                    get_different_than_symbol(current_symbols_pair.anchor.name, "Anchor");
                 if selection.is_none() {
                     continue;
                 }
@@ -33,7 +33,8 @@ pub fn change_symbols_pair(current_symbols_pair: SymbolsPair) -> Option<SymbolsP
                 Some(updated_symbols_pair)
             }
             1 => {
-                let selection = get_different_than_symbol(current_symbols_pair.traded.id, "Traded");
+                let selection =
+                    get_different_than_symbol(current_symbols_pair.traded.name, "Traded");
                 if selection.is_none() {
                     continue;
                 }
@@ -48,11 +49,11 @@ pub fn change_symbols_pair(current_symbols_pair: SymbolsPair) -> Option<SymbolsP
     result
 }
 
-fn get_different_than_symbol(symbol_id: SymbolId, symbol_type: &str) -> Option<&'static Symbol> {
+fn get_different_than_symbol(symbol_name: &str, symbol_type: &str) -> Option<&'static Symbol> {
     let mut filtered_symbols = SYMBOLS_MAP
         .into_iter()
         .filter_map(|(_, symbol)| {
-            if symbol.id != symbol_id {
+            if symbol.name != symbol_name {
                 Some(symbol.name)
             } else {
                 None
@@ -64,7 +65,10 @@ fn get_different_than_symbol(symbol_id: SymbolId, symbol_type: &str) -> Option<&
 
     let back_index = filtered_symbols.len() - 1;
     let selection = select_from_list(
-        &format!("Select new {} symbol", symbol_type),
+        &format!(
+            "Select new {} symbol. Currently: {}",
+            symbol_type, symbol_name
+        ),
         &filtered_symbols,
         Some(back_index),
     );

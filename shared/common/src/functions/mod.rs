@@ -468,13 +468,13 @@ pub fn downsample_tick_lf_to_kline_duration(
 }
 // former timestamp_end_to_daily_timestamp_sec_intervals
 pub fn get_fetch_timestamps_interval(
-    start_timestamp: i64, // seconds
-    end_timestamp: i64,   // seconds
+    start_timestamp_in_secs: i64,
+    end_timestamp_in_secs: i64,
     kline_duration: Duration,
     max_limit: i64,
 ) -> Vec<i64> {
     let step_size = max_limit * SECONDS_IN_MIN / kline_duration.num_minutes();
-    stepped_range_inclusive(start_timestamp, end_timestamp, step_size)
+    stepped_range_inclusive(start_timestamp_in_secs, end_timestamp_in_secs, step_size)
 }
 
 fn stepped_range_inclusive(start: i64, end: i64, step_size: i64) -> Vec<i64> {

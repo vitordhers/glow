@@ -1,9 +1,12 @@
 use chrono::Duration as ChronoDuration;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{
+    fmt::{Debug, Formatter, Result as DebugResult},
+    time::Duration,
+};
 
 #[allow(non_camel_case_types)]
-#[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
+#[derive(Serialize, Deserialize, Default, Clone, Copy)]
 pub enum Granularity {
     #[default]
     m1,
@@ -55,5 +58,27 @@ impl Granularity {
     pub fn get_chrono_duration(&self) -> ChronoDuration {
         let seconds = self.get_granularity_in_secs();
         ChronoDuration::seconds(seconds.into())
+    }
+}
+
+impl Debug for Granularity {
+    fn fmt(&self, f: &mut Formatter<'_>) -> DebugResult {
+        let str = match self {
+            Self::m1 => "1 minute",
+            Self::m3 => "3 minutes",
+            Self::m5 => "5 minutes",
+            Self::m10 => "10 minutes",
+            Self::m15 => "15 minutes",
+            Self::m30 => "30 minutes",
+            Self::h1 => "1 hour",
+            Self::h2 => "2 hours",
+            Self::h4 => "4 hours",
+            Self::h6 => "6 hours",
+            Self::h12 => "12 hours",
+            Self::d1 => "1 day",
+            Self::w1 => "1 week",
+            Self::M1 => "1 month",
+        };
+        write!(f, "{}", str)
     }
 }

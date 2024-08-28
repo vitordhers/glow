@@ -7,7 +7,10 @@ use serde::{
     ser::{Serialize, SerializeStruct, Serializer},
     {Deserialize, Serialize as DerivedSerialize},
 };
-use std::{collections::HashSet, fmt};
+use std::{
+    collections::HashSet,
+    fmt::{self, Debug},
+};
 
 #[derive(DerivedSerialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Symbol {
@@ -53,7 +56,7 @@ impl Symbol {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct SymbolsPair {
     pub anchor: &'static Symbol,
     pub traded: &'static Symbol,
@@ -162,5 +165,15 @@ impl<'de> Deserialize<'de> for SymbolsPair {
         }
 
         deserializer.deserialize_struct("SymbolsPair", &["anchor", "traded"], SymbolsPairVisitor)
+    }
+}
+
+impl Debug for SymbolsPair {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "⚓ Anchor Symbol {}, 📈 Traded Symbol {}",
+            self.anchor.name, self.traded.name
+        )
     }
 }

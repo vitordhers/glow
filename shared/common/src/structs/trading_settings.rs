@@ -5,16 +5,18 @@ use crate::enums::{
     order_type::OrderType,
     symbol_id::SymbolId,
 };
+use glow_error::GlowError;
 use serde::{Deserialize, Serialize};
 use serde_json::{from_reader, to_writer};
 use std::{
     collections::HashMap,
-    env::var,
+    env::{self},
+    fmt::{Debug, Formatter, Result as DebugResult},
     fs::File,
     io::{BufReader, Result as IoResult},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 // #[serde(bound(deserialize = "'de: 'static"))]
 pub struct TradingSettings {
     pub allocation_percentage: f64,
@@ -55,15 +57,23 @@ impl TradingSettings {
         }
     }
 
-    fn get_config_file_path() -> String {
-        match var("CARGO_BIN_NAME").as_deref() {
-            Ok(member) => format!("config/{}/trading_settings.json", member),
-            _ => unreachable!(),
+    fn get_config_file_path() -> Result<String, GlowError> {
+        let args: Vec<String> = env::args().collect();
+
+        match args.get(0) {
+            Some(member) => {
+                let member = member.split("/").last().unwrap();
+                Ok(format!("config/{}/trading_settings.json", member))
+            }
+            _ => Err(GlowError::new(
+                "Invalid -p flag".to_owned(),
+                "Invalid -p flag".to_owned(),
+            )),
         }
     }
 
     pub fn load_or_default() -> Self {
-        let file_result = File::open(Self::get_config_file_path());
+        let file_result = File::open(Self::get_config_file_path().unwrap_or_default());
         if let Err(_) = file_result {
             return Self::default();
         }
@@ -75,7 +85,7 @@ impl TradingSettings {
     }
 
     pub fn save_config(&self) -> IoResult<()> {
-        let file = File::create(Self::get_config_file_path())?;
+        let file = File::create(Self::get_config_file_path().unwrap_or_default())?;
         to_writer(file, self)?;
         Ok(())
     }
@@ -108,6 +118,24 @@ impl TradingSettings {
 
         result
     }
+
+    pub fn fmt_price_level_modifiers(&self) -> String {
+        let str = if self.price_level_modifier_map.len() == 0 {
+            "No price modifiers".to_owned()
+        } else {
+            self.price_level_modifier_map.clone().into_iter().fold(
+                "".to_owned(),
+                |s, (_, price_level)| {
+                    if s == "" {
+                        format!("{:?}", price_level)
+                    } else {
+                        format!("{}, {:?}", s, price_level)
+                    }
+                },
+            )
+        };
+        format!("{}", str)
+    }
 }
 
 impl Default for TradingSettings {
@@ -123,5 +151,33 @@ impl Default for TradingSettings {
             granularity: Granularity::default(),
             bechmark_minimum_days: 1,
         }
+    }
+}
+
+impl Debug for TradingSettings {
+    fn fmt(&self, f: &mut Formatter<'_>) -> DebugResult {
+        write!(
+            f,
+            r#"
+            🪙  Symbol pair: {:?}
+            🕒 Granularity: {:?}
+            💰 Allocation Percentage (%): {:?}
+            🎰 Leverage: {:?}
+            📒 Order types: Buy {:?}, Sell {:?}
+            🎭 Price Modifiers: {:?}
+            🔒 Position Lock: {:?}
+            🔁 Revert Opposite Signals {}
+            📅 Minimum days for benchmarking {}"#,
+            self.symbols_pair,
+            self.granularity,
+            self.allocation_percentage,
+            self.leverage,
+            self.order_types.0,
+            self.order_types.1,
+            self.fmt_price_level_modifiers(),
+            self.position_lock_modifier,
+            self.signals_revert_its_opposite,
+            self.bechmark_minimum_days
+        )
     }
 }
