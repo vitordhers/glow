@@ -1,5 +1,5 @@
-use chrono::{Duration, NaiveDateTime, Timelike, Utc};
-use glow_error::GlowError;
+use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use glow_error::{assert_or_error, GlowError};
 use hmac::{Hmac, Mac};
 use polars::{
     prelude::{Duration as PolarsDuration, *},
@@ -180,99 +180,99 @@ pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
 }
 
 // TODO: DEPRECATE THIS
-fn map_ticks_data_to_df(
-    unique_symbols: &Vec<&Symbol>,
-    ticks_data: &Vec<TickData>,
-    schema_to_comply: &Schema,
-) -> Result<DataFrame, GlowError> {
-    let mut unique_timestamps = HashSet::new();
-    let mut symbol_ts_ticks_map = HashMap::new();
-    for tick in ticks_data {
-        let ts = tick.start_time.timestamp_millis();
-        symbol_ts_ticks_map.insert((tick.symbol, ts), tick);
-        unique_timestamps.insert(ts);
-    }
+// fn map_ticks_data_to_df(
+//     unique_symbols: &Vec<&Symbol>,
+//     ticks_data: &Vec<TickData>,
+//     schema_to_comply: &Schema,
+// ) -> Result<DataFrame, GlowError> {
+//     let mut unique_timestamps = HashSet::new();
+//     let mut symbol_ts_ticks_map = HashMap::new();
+//     for tick in ticks_data {
+//         let ts = tick.start_time.timestamp_millis();
+//         symbol_ts_ticks_map.insert((tick.symbol, ts), tick);
+//         unique_timestamps.insert(ts);
+//     }
 
-    let records_no = unique_timestamps.len();
-    let timestamps_col = "start_time";
-    let timestamps = unique_timestamps.into_iter().collect::<Vec<i64>>();
-    let timestamps_series = Series::new(timestamps_col, &timestamps);
-    let mut timestamps_series = timestamps_series.sort(false);
-    timestamps_series.set_sorted_flag(IsSorted::Ascending);
+//     let records_no = unique_timestamps.len();
+//     let timestamps_col = "start_time";
+//     let timestamps = unique_timestamps.into_iter().collect::<Vec<i64>>();
+//     let timestamps_series = Series::new(timestamps_col, &timestamps);
+//     let mut timestamps_series = timestamps_series.sort(false);
+//     timestamps_series.set_sorted_flag(IsSorted::Ascending);
 
-    let mut open_cols_map = HashMap::new();
-    let mut high_cols_map = HashMap::new();
-    let mut close_cols_map = HashMap::new();
-    let mut low_cols_map = HashMap::new();
+//     let mut open_cols_map = HashMap::new();
+//     let mut high_cols_map = HashMap::new();
+//     let mut close_cols_map = HashMap::new();
+//     let mut low_cols_map = HashMap::new();
 
-    for symbol in unique_symbols {
-        let (o, h, l, c) = symbol.get_ohlc_cols();
-        open_cols_map.insert(o, vec![] as Vec<Option<f64>>);
-        high_cols_map.insert(h, vec![] as Vec<Option<f64>>);
-        close_cols_map.insert(l, vec![] as Vec<Option<f64>>);
-        low_cols_map.insert(c, vec![] as Vec<Option<f64>>);
+//     for symbol in unique_symbols {
+//         let (o, h, l, c) = symbol.get_ohlc_cols();
+//         open_cols_map.insert(o, vec![] as Vec<Option<f64>>);
+//         high_cols_map.insert(h, vec![] as Vec<Option<f64>>);
+//         close_cols_map.insert(l, vec![] as Vec<Option<f64>>);
+//         low_cols_map.insert(c, vec![] as Vec<Option<f64>>);
 
-        for timestamp in &timestamps {
-            if let Some(tick) = symbol_ts_ticks_map.get(&(symbol.name, *timestamp)) {
-                open_cols_map.get_mut(&o).unwrap().push(Some(tick.open));
-                high_cols_map.get_mut(&h).unwrap().push(Some(tick.high));
-                close_cols_map.get_mut(&c).unwrap().push(Some(tick.close));
-                low_cols_map.get_mut(&l).unwrap().push(Some(tick.low));
-                continue;
-            }
-            open_cols_map.get_mut(&o).unwrap().push(None::<f64>);
-            high_cols_map.get_mut(&h).unwrap().push(None::<f64>);
-            close_cols_map.get_mut(&c).unwrap().push(None::<f64>);
-            low_cols_map.get_mut(&l).unwrap().push(None::<f64>);
-        }
-    }
+//         for timestamp in &timestamps {
+//             if let Some(tick) = symbol_ts_ticks_map.get(&(symbol.name, *timestamp)) {
+//                 open_cols_map.get_mut(&o).unwrap().push(Some(tick.open));
+//                 high_cols_map.get_mut(&h).unwrap().push(Some(tick.high));
+//                 close_cols_map.get_mut(&c).unwrap().push(Some(tick.close));
+//                 low_cols_map.get_mut(&l).unwrap().push(Some(tick.low));
+//                 continue;
+//             }
+//             open_cols_map.get_mut(&o).unwrap().push(None::<f64>);
+//             high_cols_map.get_mut(&h).unwrap().push(None::<f64>);
+//             close_cols_map.get_mut(&c).unwrap().push(None::<f64>);
+//             low_cols_map.get_mut(&l).unwrap().push(None::<f64>);
+//         }
+//     }
 
-    let opens_cols: HashSet<&str> = open_cols_map.keys().cloned().collect();
-    let highs_cols: HashSet<&str> = high_cols_map.keys().cloned().collect();
-    let closes_cols: HashSet<&str> = close_cols_map.keys().cloned().collect();
-    let lows_cols: HashSet<&str> = low_cols_map.keys().cloned().collect();
-    let mut ticks_data_cols = HashSet::new();
+//     let opens_cols: HashSet<&str> = open_cols_map.keys().cloned().collect();
+//     let highs_cols: HashSet<&str> = high_cols_map.keys().cloned().collect();
+//     let closes_cols: HashSet<&str> = close_cols_map.keys().cloned().collect();
+//     let lows_cols: HashSet<&str> = low_cols_map.keys().cloned().collect();
+//     let mut ticks_data_cols = HashSet::new();
 
-    ticks_data_cols.extend(&opens_cols);
-    ticks_data_cols.extend(&highs_cols);
-    ticks_data_cols.extend(&closes_cols);
-    ticks_data_cols.extend(&lows_cols);
+//     ticks_data_cols.extend(&opens_cols);
+//     ticks_data_cols.extend(&highs_cols);
+//     ticks_data_cols.extend(&closes_cols);
+//     ticks_data_cols.extend(&lows_cols);
 
-    let schema_cols: HashSet<&str> = schema_to_comply.iter().map(|(x, _)| x.as_str()).collect();
-    let mut non_ticks_data_cols: HashSet<&str> =
-        schema_cols.difference(&ticks_data_cols).cloned().collect();
-    // removes start_time to avoid condition collision
-    non_ticks_data_cols.remove(&"start_time");
+//     let schema_cols: HashSet<&str> = schema_to_comply.iter().map(|(x, _)| x.as_str()).collect();
+//     let mut non_ticks_data_cols: HashSet<&str> =
+//         schema_cols.difference(&ticks_data_cols).cloned().collect();
+//     // removes start_time to avoid condition collision
+//     non_ticks_data_cols.remove(&"start_time");
 
-    let mut df_series: Vec<Series> = vec![];
+//     let mut df_series: Vec<Series> = vec![];
 
-    for (field, data_type) in schema_to_comply.iter() {
-        let result = match field {
-            start_time_col if start_time_col == "start_time" => {
-                timestamps_series.cast(&DataType::Datetime(TimeUnit::Milliseconds, None))?
-            }
-            open_col if opens_cols.contains(open_col.as_str()) => {
-                Series::new(field, &open_cols_map.get(field.as_str()).unwrap())
-            }
-            high_col if highs_cols.contains(high_col.as_str()) => {
-                Series::new(field, &high_cols_map.get(field.as_str()).unwrap())
-            }
-            close_col if closes_cols.contains(close_col.as_str()) => {
-                Series::new(field, &close_cols_map.get(field.as_str()).unwrap())
-            }
-            low_col if lows_cols.contains(low_col.as_str()) => {
-                Series::new(field, &low_cols_map.get(field.as_str()).unwrap())
-            }
-            non_ticks_data_col if non_ticks_data_cols.contains(non_ticks_data_col.as_str()) => {
-                Series::full_null(field, records_no, data_type)
-            }
-            _ => unreachable!("Unexpected value"),
-        };
-        df_series.push(result);
-    }
+//     for (field, data_type) in schema_to_comply.iter() {
+//         let result = match field {
+//             start_time_col if start_time_col == "start_time" => {
+//                 timestamps_series.cast(&DataType::Datetime(TimeUnit::Milliseconds, None))?
+//             }
+//             open_col if opens_cols.contains(open_col.as_str()) => {
+//                 Series::new(field, &open_cols_map.get(field.as_str()).unwrap())
+//             }
+//             high_col if highs_cols.contains(high_col.as_str()) => {
+//                 Series::new(field, &high_cols_map.get(field.as_str()).unwrap())
+//             }
+//             close_col if closes_cols.contains(close_col.as_str()) => {
+//                 Series::new(field, &close_cols_map.get(field.as_str()).unwrap())
+//             }
+//             low_col if lows_cols.contains(low_col.as_str()) => {
+//                 Series::new(field, &low_cols_map.get(field.as_str()).unwrap())
+//             }
+//             non_ticks_data_col if non_ticks_data_cols.contains(non_ticks_data_col.as_str()) => {
+//                 Series::full_null(field, records_no, data_type)
+//             }
+//             _ => unreachable!("Unexpected value"),
+//         };
+//         df_series.push(result);
+//     }
 
-    Ok(DataFrame::new(df_series)?.fill_null(FillNullStrategy::Forward(None))?)
-}
+//     Ok(DataFrame::new(df_series)?.fill_null(FillNullStrategy::Forward(None))?)
+// }
 
 pub fn map_and_downsample_ticks_data_to_df2(
     ticks_data: &Vec<TickData>,
@@ -311,6 +311,66 @@ pub fn map_and_downsample_ticks_data_to_df2(
         .fill_null(FillNullStrategy::Forward(None))?;
 
     Ok(resampled_data)
+}
+
+pub fn map_df_to_kline_data(df: &DataFrame, symbol: &Symbol) -> Result<Vec<TickData>, GlowError> {
+    let timestamps = &df.column("start_time")?.timestamp(TimeUnit::Milliseconds)?;
+    let opens = &df.column(&symbol.open)?.f64()?;
+    let highs = &df.column(&symbol.high)?.f64()?;
+    let lows = &df.column(&symbol.low)?.f64()?;
+    let closes = &df.column(&symbol.close)?.f64()?;
+
+    let mut ticks_data = vec![];
+
+    for (i, ts) in timestamps.into_iter().enumerate() {
+        let tick_data = TickData::new_from_string(
+            &symbol.name,
+            NaiveDateTime::from_timestamp_millis(ts.unwrap()).unwrap(),
+            opens.get(i).unwrap(),
+            highs.get(i).unwrap(),
+            closes.get(i).unwrap(),
+            lows.get(i).unwrap(),
+        );
+        ticks_data.push(tick_data);
+    }
+
+    Ok(ticks_data)
+}
+
+pub fn map_ticks_data_to_df(ticks_data: &Vec<TickData>) -> Result<DataFrame, GlowError> {
+    let mut timestamps = HashSet::new();
+    let mut data = HashMap::new();
+
+    for tick in ticks_data {
+        timestamps.insert(tick.start_time);
+
+        data.entry(format!("{}_open", tick.symbol))
+            .or_insert(Vec::new())
+            .push(tick.open);
+        data.entry(format!("{}_high", tick.symbol))
+            .or_insert(Vec::new())
+            .push(tick.high);
+        data.entry(format!("{}_low", tick.symbol))
+            .or_insert(Vec::new())
+            .push(tick.low);
+        data.entry(format!("{}_close", tick.symbol))
+            .or_insert(Vec::new())
+            .push(tick.close);
+    }
+
+    let series_init = vec![Series::new(
+        "start_time",
+        timestamps.into_iter().collect::<Vec<NaiveDateTime>>(),
+    )];
+
+    let df = DataFrame::new(data.into_iter().fold(
+        series_init,
+        |mut series, (col_name, col_data)| {
+            series.push(Series::new(&col_name, col_data));
+            series
+        },
+    ))?;
+    Ok(df)
 }
 
 fn map_ticks_data_to_kline_df(
@@ -357,50 +417,65 @@ fn map_ticks_data_to_kline_df(
     Ok(DataFrame::new(df_series)?.fill_null(FillNullStrategy::Forward(None))?)
 }
 
-// TODO: deprecate this
-pub fn map_and_downsample_ticks_data_to_df(
-    schema_to_comply: &Schema,
-    kline_duration: Duration,
-    ticks_data: &Vec<TickData>,
-    unique_symbols: &Vec<&Symbol>,
-    maintain_schema: bool,
-) -> Result<DataFrame, GlowError> {
-    assert!(
-        unique_symbols.len() > 0,
-        "unique symbols must have length > 0"
-    );
-    let symbols_set: HashSet<&Symbol> = unique_symbols.iter().cloned().collect();
-    assert!(
-        symbols_set.len() == unique_symbols.len(),
-        "symbols must be unique"
-    );
-    assert!(
-        ticks_data.len() % unique_symbols.len() == 0,
-        "tick data is asymmetric"
+pub fn filter_df_timestamps_to_lf(
+    df: DataFrame,
+    start_datetime: NaiveDateTime,
+    end_datetime: NaiveDateTime,
+) -> Result<LazyFrame, GlowError> {
+    let lf = df.lazy();
+    let lf = lf.filter(
+        col("start_time")
+            .gt_eq(lit(start_datetime.timestamp_millis()))
+            .and(col("start_time").lt_eq(lit(end_datetime.timestamp_millis()))),
     );
 
-    let non_sampled_ticks_data_df =
-        map_ticks_data_to_df(unique_symbols, ticks_data, schema_to_comply)?;
-    let non_sampled_ticks_data_lf = non_sampled_ticks_data_df.lazy();
-
-    let resampled_data = downsample_tick_lf_to_kline_duration(
-        unique_symbols,
-        kline_duration,
-        non_sampled_ticks_data_lf,
-        ClosedWindow::Left,
-        if maintain_schema {
-            Some(schema_to_comply)
-        } else {
-            None
-        },
-    )?;
-
-    let resampled_data = resampled_data
-        .collect()?
-        .fill_null(FillNullStrategy::Forward(None))?;
-
-    Ok(resampled_data)
+    Ok(lf)
 }
+
+// TODO: deprecate this
+// pub fn map_and_downsample_ticks_data_to_df(
+//     schema_to_comply: &Schema,
+//     kline_duration: Duration,
+//     ticks_data: &Vec<TickData>,
+//     unique_symbols: &Vec<&Symbol>,
+//     maintain_schema: bool,
+// ) -> Result<DataFrame, GlowError> {
+//     assert!(
+//         unique_symbols.len() > 0,
+//         "unique symbols must have length > 0"
+//     );
+//     let symbols_set: HashSet<&Symbol> = unique_symbols.iter().cloned().collect();
+//     assert!(
+//         symbols_set.len() == unique_symbols.len(),
+//         "symbols must be unique"
+//     );
+//     assert!(
+//         ticks_data.len() % unique_symbols.len() == 0,
+//         "tick data is asymmetric"
+//     );
+
+//     let non_sampled_ticks_data_df =
+//         map_ticks_data_to_df(unique_symbols, ticks_data, schema_to_comply)?;
+//     let non_sampled_ticks_data_lf = non_sampled_ticks_data_df.lazy();
+
+//     let resampled_data = downsample_tick_lf_to_kline_duration(
+//         unique_symbols,
+//         kline_duration,
+//         non_sampled_ticks_data_lf,
+//         ClosedWindow::Left,
+//         if maintain_schema {
+//             Some(schema_to_comply)
+//         } else {
+//             None
+//         },
+//     )?;
+
+//     let resampled_data = resampled_data
+//         .collect()?
+//         .fill_null(FillNullStrategy::Forward(None))?;
+
+//     Ok(resampled_data)
+// }
 
 // TODO: write code for diferentiating upsample / downsample
 // upsample = increase frequency. i.e. minutes -> seconds. methods: ffill/ interpolation
@@ -466,6 +541,75 @@ pub fn downsample_tick_lf_to_kline_duration(
 
     Ok(resampled_data)
 }
+
+pub fn get_days_between(
+    start_datetime: NaiveDateTime,
+    end_datetime: NaiveDateTime,
+) -> Result<Vec<NaiveDate>, GlowError> {
+    assert_or_error!(start_datetime <= end_datetime);
+
+    let num_days = (end_datetime - start_datetime).num_days();
+    let days = (0..=num_days)
+        .map(|i| start_datetime.date() + Duration::days(i))
+        .collect::<Vec<NaiveDate>>();
+    Ok(days)
+}
+
+pub fn get_date_start_and_end_timestamps(date: NaiveDate) -> [(i64, i64); 2] {
+    let first_start_time = NaiveTime::from_hms_milli_opt(0, 0, 0, 0).unwrap();
+    let first_start_datetime = NaiveDateTime::new(date, first_start_time);
+
+    let first_end_time = NaiveTime::from_hms_milli_opt(11, 59, 0, 0).unwrap();
+    let first_end_datetime = NaiveDateTime::new(date, first_end_time);
+
+    let second_start_time = NaiveTime::from_hms_milli_opt(12, 0, 0, 0).unwrap();
+    let second_start_datetime = NaiveDateTime::new(date, second_start_time);
+
+    let second_end_time = NaiveTime::from_hms_milli_opt(24, 59, 0, 0).unwrap();
+    let second_end_datetime = NaiveDateTime::new(date, second_end_time);
+
+    [
+        (
+            first_start_datetime.timestamp_millis(),
+            first_end_datetime.timestamp_millis(),
+        ),
+        (
+            second_start_datetime.timestamp_millis(),
+            second_end_datetime.timestamp_millis(),
+        ),
+    ]
+}
+
+fn legacy() {
+    // for (i, value) in timestamp_intervals.iter().enumerate() {
+    //     let start_ts: i64;
+    //     if i == 0 {
+    //         // skip i == 0, as &timestamp_intervals[- 1] doesn't exist
+    //         continue;
+    //     }
+
+    //     start_ts = &timestamp_intervals[i - 1] * 1000;
+
+    //     let mut end_ts = &timestamp_intervals[i] * 1000;
+
+    //     let current_limit =
+    //         kline_duration_in_mins * (((end_ts - start_ts) / 1000) / SECONDS_IN_MIN);
+
+    //     end_ts -= 1;
+
+    //     if value == timestamp_intervals.last().unwrap() {
+    //         end_ts -= kline_duration_in_secs * 1000;
+    //     }
+
+    //     for symbol in unique_symbols {
+    //         let fetched_ticks =
+    //             Self::fetch_tick_data(http, symbol.name, start_ts, end_ts, current_limit)
+    //                 .await?;
+    //         ticks_data.extend(fetched_ticks);
+    //     }
+    // }
+}
+
 // former timestamp_end_to_daily_timestamp_sec_intervals
 pub fn get_fetch_timestamps_interval(
     start_timestamp_in_secs: i64,

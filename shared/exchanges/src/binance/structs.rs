@@ -8,18 +8,23 @@ use crate::{
 };
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use common::{
-    constants::SECONDS_IN_MIN,
     enums::trading_data_update::TradingDataUpdate,
     functions::{
-        current_datetime, current_timestamp, get_fetch_timestamps_interval,
-        map_and_downsample_ticks_data_to_df2,
+        csv::{load_interval_tick_dataframe, save_kline_df_to_csv},
+        current_datetime, current_timestamp, downsample_tick_lf_to_kline_duration,
+        filter_df_timestamps_to_lf, get_date_start_and_end_timestamps,
+        map_and_downsample_ticks_data_to_df2, map_ticks_data_to_df,
     },
     structs::{BehaviorSubject, LogKlines, Symbol, SymbolsPair, TickData},
     traits::exchange::DataProviderExchange,
 };
 use futures_util::SinkExt;
 use glow_error::{assert_or_error, GlowError};
-use polars::prelude::{IntoLazy, LazyFrame, Schema};
+use polars::{
+    frame::DataFrame,
+    prelude::{LazyFrame, Schema},
+    time::ClosedWindow,
+};
 use reqwest::Client;
 use serde_json::{from_str, to_string};
 use std::{
@@ -30,7 +35,7 @@ use std::{
 };
 use tokio::{
     net::TcpStream,
-    select, spawn,
+    spawn,
     time::{sleep, sleep_until, Instant},
 };
 use tokio_stream::StreamExt;
@@ -78,68 +83,59 @@ impl BinanceDataProvider {
         }
     }
 
-    async fn fetch_kline_data(
+    async fn load_or_fetch_kline_data(
         http: &Client,
         kline_data_schema: Schema,
         unique_symbols: &Vec<&Symbol>,
         kline_duration: Duration,
-        start_timestamp_in_secs: i64,
-        end_timestamp_in_secs: i64,
+        start_datetime: NaiveDateTime,
+        end_datetime: NaiveDateTime,
     ) -> Result<LazyFrame, GlowError> {
-        let max_limit: i64 = 1000;
+        let mut kline_df = DataFrame::from(&kline_data_schema);
+        for symbol in unique_symbols {
+            let (loaded_data_df, not_loaded_dates) =
+                load_interval_tick_dataframe(start_datetime, end_datetime, &symbol, "binance")?;
 
-        let timestamp_intervals = get_fetch_timestamps_interval(
-            start_timestamp_in_secs,
-            end_timestamp_in_secs,
-            kline_duration,
-            max_limit,
-        );
+            let mut result_df = loaded_data_df;
 
-        println!("timestamps vec {:?}", timestamp_intervals);
-
-        let mut ticks_data = vec![];
-        let kline_duration_in_mins = kline_duration.num_minutes();
-        let kline_duration_in_secs = kline_duration.num_seconds();
-
-        for (i, value) in timestamp_intervals.iter().enumerate() {
-            let start_ts: i64;
-            if i == 0 {
-                // skip i == 0, as &timestamp_intervals[- 1] doesn't exist
-                continue;
+            for (i, date) in not_loaded_dates.into_iter().enumerate() {
+                let datetimes = get_date_start_and_end_timestamps(date);
+                let mut day_ticks_data = vec![];
+                if i > 0 {
+                    // avoid spamming API
+                    sleep(StdDuration::from_secs(1)).await;
+                }
+                for (start_timestamp_ms, end_timestamp_ms) in datetimes {
+                    let fetched_ticks = Self::fetch_tick_data(
+                        http,
+                        symbol.name,
+                        start_timestamp_ms,
+                        end_timestamp_ms,
+                        720,
+                    )
+                    .await?;
+                    day_ticks_data.extend(fetched_ticks);
+                }
+                let fetched_data_df = map_ticks_data_to_df(&day_ticks_data)?;
+                let _ = save_kline_df_to_csv(&fetched_data_df, date, "binance", &symbol.name)?;
+                result_df = result_df.vstack(&fetched_data_df)?;
+                result_df = result_df.sort(["start_time"], false, false)?;
             }
-
-            start_ts = &timestamp_intervals[i - 1] * 1000;
-
-            let mut end_ts = &timestamp_intervals[i] * 1000;
-
-            let current_limit =
-                kline_duration_in_mins * (((end_ts - start_ts) / 1000) / SECONDS_IN_MIN);
-
-            end_ts -= 1;
-
-            if value == timestamp_intervals.last().unwrap() {
-                end_ts -= kline_duration_in_secs * 1000;
-            }
-
-            for symbol in unique_symbols {
-                let fetched_ticks =
-                    Self::fetch_tick_data(http, symbol.name, start_ts, end_ts, current_limit)
-                        .await?;
-                ticks_data.extend(fetched_ticks);
-            }
+            kline_df = kline_df.vstack(&result_df)?;
         }
 
-        let kline_data_df = map_and_downsample_ticks_data_to_df2(
-            &ticks_data,
+        kline_df.align_chunks();
+
+        let kline_lf = filter_df_timestamps_to_lf(kline_df, start_datetime, end_datetime)?;
+        let kline_lf = downsample_tick_lf_to_kline_duration(
             unique_symbols,
             kline_duration,
-            &kline_data_schema,
+            kline_lf,
+            ClosedWindow::Left,
             None,
         )?;
-        // println!("{:?}", tick_data_df);
-        let tick_data_lf = kline_data_df.lazy();
 
-        Ok(tick_data_lf)
+        Ok(kline_lf)
     }
 
     async fn fetch_tick_data(
@@ -217,13 +213,13 @@ impl BinanceDataProvider {
         let trading_data_update_listener = self.trading_data_update_listener.clone();
 
         let fetch_data_handle = spawn(async move {
-            let initial_kline_data_lf = Self::fetch_kline_data(
+            let initial_kline_data_lf = Self::load_or_fetch_kline_data(
                 &http,
                 kline_data_schema_clone,
                 &unique_symbols,
                 kline_duration,
-                benchmark_start.timestamp(),
-                benchmark_end.timestamp(),
+                benchmark_start,
+                benchmark_end,
             )
             .await
             .expect("fn to return lf");
