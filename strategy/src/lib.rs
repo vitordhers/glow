@@ -60,9 +60,9 @@ impl Strategy {
             .append_indicators_to_lf(lf, self.symbols_pair, &self.params)
     }
 
-    pub fn append_indicators_to_df(&self, lf: DataFrame) -> Result<DataFrame, GlowError> {
+    pub fn append_indicators_to_df(&self, df: DataFrame) -> Result<DataFrame, GlowError> {
         self.schema
-            .append_indicators_to_df(lf, self.symbols_pair, &self.params)
+            .append_indicators_to_df(df, self.symbols_pair, &self.params)
     }
 
     pub fn append_signals_to_lf(&self, lf: LazyFrame) -> Result<LazyFrame, GlowError> {
@@ -70,9 +70,9 @@ impl Strategy {
             .append_signals_to_lf(lf, self.symbols_pair, &self.params)
     }
 
-    pub fn append_signals_to_df(&self, lf: DataFrame) -> Result<DataFrame, GlowError> {
+    pub fn append_signals_to_df(&self, df: DataFrame) -> Result<DataFrame, GlowError> {
         self.schema
-            .append_signals_to_df(lf, self.symbols_pair, &self.params)
+            .append_signals_to_df(df, self.symbols_pair, &self.params)
     }
 
     pub fn get_params_config(&self) -> HashMap<ParamId, Param> {

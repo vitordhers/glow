@@ -21,6 +21,7 @@ pub struct DataFeed {
     pub run_benchmark_only: bool,
     pub kline_data_schema: Schema,
     pub minimum_klines_for_benchmarking: u32,
+    pub strategy: Strategy,
     pub trading_data_schema: Schema,
     pub trading_data_update_listener: BehaviorSubject<TradingDataUpdate>,
     pub trader_exchange_listener: BehaviorSubject<TraderExchangeWrapper>,
@@ -118,6 +119,7 @@ impl DataFeed {
             run_benchmark_only,
             kline_data_schema,
             minimum_klines_for_benchmarking,
+            strategy: strategy.clone(),
             trading_data_schema,
             trading_data_update_listener: trading_data_update_listener.clone(),
             trader_exchange_listener: trader_exchange_listener.clone(),
@@ -146,16 +148,38 @@ impl DataFeed {
                 )
                 .await;
         });
+
         let _ = data_provider_handle.await;
 
         if run_benchmark_only {
             return Ok(());
         }
-
+        // TODO: move to trader?
         let mut trader_binding = self.trader_exchange_listener.value();
         let trader_handle = spawn(async move { trader_binding.init().await });
         let _ = trader_handle.await;
 
         Ok(())
+    }
+
+    pub fn set_strategy_data(&self, initial_klines_lf: LazyFrame) -> Result<LazyFrame, GlowError> {
+        let initial_strategy_lf = self.strategy.append_indicators_to_lf(initial_klines_lf)?;
+        let initial_strategy_lf = self.strategy.append_signals_to_lf(initial_strategy_lf)?;
+        let initial_strategy_lf = initial_strategy_lf.cache();
+        Ok(initial_strategy_lf)
+    }
+
+    pub fn update_strategy_data(
+        &self,
+        current_trading_data: DataFrame,
+        last_kline_data: DataFrame,
+    ) -> Result<DataFrame, GlowError> {
+        let updated_strategy_data = current_trading_data.vstack(&last_kline_data)?;
+
+        let updated_strategy_data = self
+            .strategy
+            .append_indicators_to_df(updated_strategy_data)?;
+        let updated_strategy_data = self.strategy.append_signals_to_df(updated_strategy_data)?;
+        Ok(updated_strategy_data)
     }
 }
