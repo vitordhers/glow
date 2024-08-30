@@ -1,24 +1,16 @@
-use chrono::NaiveDateTime;
 use polars::prelude::{DataFrame, LazyFrame};
 
+
+/// piping schema: https://app.clickup.com/9013233975/v/wb/8ckp29q-533
 #[derive(Clone, Default)]
 pub enum TradingDataUpdate {
     #[default]
     None,
-    BenchmarkData {
-        initial_tick_data_lf: LazyFrame,
-        initial_last_bar: NaiveDateTime,
-    },
-    MarketData {
-        last_period_tick_data: DataFrame,
-    },
-    StrategyData {
-        strategy_data: DataFrame,
-    },
-    EmitSignal {
-        trading_data: DataFrame,
-    },
-    CleanUp {
-        trading_data: DataFrame,
-    },
+    InitialKlinesData(LazyFrame),
+    InitialStrategyData(LazyFrame),
+    BenchmarkData(LazyFrame), // listens at performance
+    KlinesData(DataFrame),
+    StrategyData(DataFrame),
+    EmitSignal (DataFrame),
+    CleanUp(DataFrame),
 }

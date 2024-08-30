@@ -224,10 +224,7 @@ impl BinanceDataProvider {
             .await
             .expect("fn to return lf");
 
-            let trading_data = TradingDataUpdate::BenchmarkData {
-                initial_tick_data_lf: initial_kline_data_lf,
-                initial_last_bar: benchmark_end,
-            };
+            let trading_data = TradingDataUpdate::InitialKlinesData(initial_kline_data_lf);
             trading_data_update_listener.next(trading_data);
         });
 
@@ -280,9 +277,7 @@ impl BinanceDataProvider {
             )
             .unwrap();
 
-            let trading_data_update = TradingDataUpdate::MarketData {
-                last_period_tick_data: committed_kline_df,
-            };
+            let trading_data_update = TradingDataUpdate::KlinesData(committed_kline_df);
             trading_data_update_listener.next(trading_data_update);
         });
 
@@ -441,7 +436,7 @@ impl DataProviderExchange for BinanceDataProvider {
 
             committed_ticks.sort_by(|a, b| a.start_time.cmp(&b.start_time));
 
-            let commited_kline_df = map_and_downsample_ticks_data_to_df2(
+            let committed_kline_df = map_and_downsample_ticks_data_to_df2(
                 &committed_ticks,
                 &unique_symbols,
                 kline_duration,
@@ -449,15 +444,13 @@ impl DataProviderExchange for BinanceDataProvider {
                 Some(&trading_data_schema),
             );
 
-            if let Err(err) = commited_kline_df {
+            if let Err(err) = committed_kline_df {
                 return Err(err);
             }
 
-            let commited_kline_df = commited_kline_df.unwrap();
+            let committed_kline_df = committed_kline_df.unwrap();
 
-            let trading_data_update = TradingDataUpdate::MarketData {
-                last_period_tick_data: commited_kline_df,
-            };
+            let trading_data_update = TradingDataUpdate::KlinesData(committed_kline_df);
             trading_data_update_listener.next(trading_data_update);
         }
     }

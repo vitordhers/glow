@@ -1111,7 +1111,7 @@ impl TraderExchange for BybitTraderExchange {
     async fn open_order(
         &self,
         side: Side,
-        amount: f64,
+        total_balance: f64,
         expected_price: f64,
     ) -> Result<Order, GlowError> {
         assert_ne!(side, Side::None, "Invalid Open Order Side!");
@@ -1141,7 +1141,9 @@ impl TraderExchange for BybitTraderExchange {
                 );
             }
         }
-        let mut order = self.new_open_order(side, amount, expected_price)?;
+        let order_cost = total_balance * trading_settings.allocation_percentage;
+        
+        let mut order = self.new_open_order(side, order_cost, expected_price)?;
         let order_id = order.id.clone();
         let payload: CreateOrderDto = order.clone().into();
         let request_builder =
