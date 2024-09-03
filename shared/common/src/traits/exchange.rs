@@ -219,7 +219,6 @@ pub trait DataProviderExchange {
         &mut self,
         benchmark_start: Option<NaiveDateTime>,
         benchmark_end: Option<NaiveDateTime>,
-        kline_data_schema: Schema,
         run_benchmark_only: bool,
         trading_data_schema: Schema,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
@@ -229,8 +228,6 @@ pub trait DataProviderExchange {
     fn handle_committed_ticks_data(
         &self,
         benchmark_end: NaiveDateTime,
-        kline_data_schema: &Schema,
         trading_data_schema: &Schema,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
-
 }

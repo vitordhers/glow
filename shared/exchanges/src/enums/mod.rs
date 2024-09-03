@@ -4,7 +4,7 @@ use common::{
     enums::{
         balance::Balance, modifiers::leverage::Leverage, order_action::OrderAction,
         order_status::OrderStatus, order_type::OrderType, side::Side, symbol_id::SymbolId,
-        trade_status::TradeStatus, trading_data_update::TradingDataUpdate,
+        trade_status::TradeStatus, trading_data_update::KlinesDataUpdate,
     },
     structs::{BehaviorSubject, Contract, Execution, Order, SymbolsPair, Trade, TradingSettings},
     traits::exchange::{BenchmarkExchange, DataProviderExchange, TraderExchange, TraderHelper},
@@ -38,7 +38,7 @@ impl DataProviderExchangeWrapper {
         last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
         minimum_klines_for_benchmarking: u32,
         symbols_pair: SymbolsPair,
-        trading_data_update_listener: &BehaviorSubject<TradingDataUpdate>,
+        klines_data_update_emitter: &BehaviorSubject<KlinesDataUpdate>,
     ) -> Self {
         match selected_exchange {
             DataProviderExchangeId::Binance => Self::Binance(BinanceDataProvider::new(
@@ -46,7 +46,7 @@ impl DataProviderExchangeWrapper {
                 last_ws_error_ts,
                 minimum_klines_for_benchmarking,
                 symbols_pair,
-                trading_data_update_listener,
+                klines_data_update_emitter,
             )),
         }
     }
@@ -70,7 +70,6 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
         &mut self,
         benchmark_start: Option<NaiveDateTime>,
         benchmark_end: Option<NaiveDateTime>,
-        kline_data_schema: Schema,
         run_benchmark_only: bool,
         trading_data_schema: Schema,
     ) -> Result<(), GlowError> {
@@ -79,7 +78,6 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
                 ex.init(
                     benchmark_start,
                     benchmark_end,
-                    kline_data_schema,
                     run_benchmark_only,
                     trading_data_schema,
                 )
@@ -101,17 +99,12 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
     async fn handle_committed_ticks_data(
         &self,
         benchmark_end: NaiveDateTime,
-        kline_data_schema: &Schema,
         trading_data_schema: &Schema,
     ) -> Result<(), GlowError> {
         match self {
             Self::Binance(ex) => {
-                ex.handle_committed_ticks_data(
-                    benchmark_end,
-                    kline_data_schema,
-                    trading_data_schema,
-                )
-                .await
+                ex.handle_committed_ticks_data(benchmark_end, trading_data_schema)
+                    .await
             }
         }
     }

@@ -373,6 +373,24 @@ pub fn map_ticks_data_to_df(ticks_data: &Vec<TickData>) -> Result<DataFrame, Glo
     Ok(df)
 }
 
+pub fn coerce_df_to_schema(df: DataFrame, schema: &Schema) -> Result<DataFrame, GlowError> {
+    let current_schema = df.schema();
+    let data_size = df.height();
+    let mut result_df = df.clone();
+    for (col, dtype) in schema.clone().into_iter() {
+        let is_already_in_df = current_schema.contains(&col);
+        if is_already_in_df {
+            continue;
+        }
+
+        let null_series = Series::full_null(&col, data_size, &dtype);
+        let _ = result_df.with_column(null_series);
+    }
+
+    Ok(result_df)
+
+}
+
 fn map_ticks_data_to_kline_df(
     ticks_data: &Vec<TickData>,
     kline_data_schema: &Schema,

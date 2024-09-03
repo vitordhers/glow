@@ -99,7 +99,7 @@ impl Schema for SimpleTrendStrategySchema {
         symbols_pair: SymbolsPair,
         params: &HashMap<ParamId, Param>,
     ) -> Result<DataFrame, GlowError> {
-        // TODO: rewrite this
+        // TODO: add filter by last minimum klines for calculation and make this the default impl for this fn
         let mut new_lf = df.clone().lazy();
         new_lf = self.append_indicators_to_lf(new_lf, symbols_pair, params)?;
         let new_df = new_lf.collect()?;
