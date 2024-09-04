@@ -408,20 +408,32 @@ impl DataFeed {
 
 // #[test]
 // fn test_vstack() {
+//     use common::functions::coerce_df_to_schema;
+
 //     let df1 = df![
 //         "start_time" => &[1, 2, 3],
 //         "col2" => &["1", "2", "3"],
 //         "col3" => &["1", "2", "3"],
-//     ].unwrap();
+//     ]
+//     .unwrap();
 
 //     let df2 = df![
 //         "start_time" => &[4],
 //         "col2" => &["4"],
-//     ].unwrap();
+//     ]
+//     .unwrap();
 
 //     let df2 = coerce_df_to_schema(df2, &df1.schema()).unwrap();
 
-//     let result_df = df1.vstack(&df2).unwrap();
+//     let mut result_df = df1.vstack(&df2).unwrap();
+
+//     let update_last_col =  |series: &Series| -> Series {
+//         let test = series.utf8().unwrap().app
+
+//         series2
+//     };
+
+//     result_df.apply("col3", update_last_col).unwrap();
 
 //     println!("{:?}", result_df);
 // }
