@@ -43,6 +43,24 @@ impl Trade {
         self.open_order.leverage_factor
     }
 
+    pub fn get_threshold_prices(&self) -> (Option<f64>, Option<f64>) {
+        match self.open_order.side {
+            Side::Sell => (
+                self.open_order.take_profit_price,
+                self.open_order
+                    .stop_loss_price
+                    .or_else(|| self.open_order.get_bankruptcy_price()),
+            ),
+            Side::Buy => (
+                self.open_order
+                    .stop_loss_price
+                    .or_else(|| self.open_order.get_bankruptcy_price()),
+                self.open_order.take_profit_price,
+            ),
+            Side::None => unreachable!(),
+        }
+    }
+
     pub fn get_current_order(&self) -> Order {
         if self.close_order.is_some() {
             self.close_order.clone().unwrap()
@@ -61,8 +79,8 @@ impl Trade {
                 OrderStatus::Closed
                 | OrderStatus::StoppedBR
                 | OrderStatus::StoppedSL
-                | OrderStatus::StoppedTP
-                | OrderStatus::StoppedTSL => TradeStatus::Closed,
+                // | OrderStatus::StoppedTSL
+                | OrderStatus::StoppedTP => TradeStatus::Closed,
                 OrderStatus::PartiallyClosed => TradeStatus::PartiallyClosed,
                 OrderStatus::StandBy => TradeStatus::CloseOrderStandBy,
                 _ => {

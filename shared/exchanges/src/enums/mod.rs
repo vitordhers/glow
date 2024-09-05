@@ -2,9 +2,15 @@ use crate::{binance::structs::BinanceDataProvider, bybit::BybitTraderExchange};
 use chrono::{Duration, NaiveDateTime};
 use common::{
     enums::{
-        balance::Balance, modifiers::leverage::Leverage, order_action::OrderAction,
-        order_status::OrderStatus, order_type::OrderType, side::Side, symbol_id::SymbolId,
-        trade_status::TradeStatus, trading_data_update::KlinesDataUpdate,
+        balance::Balance,
+        modifiers::{leverage::Leverage, price_level::PriceLevel},
+        order_action::OrderAction,
+        order_status::OrderStatus,
+        order_type::OrderType,
+        side::Side,
+        symbol_id::SymbolId,
+        trade_status::TradeStatus,
+        trading_data_update::KlinesDataUpdate,
     },
     structs::{BehaviorSubject, Contract, Execution, Order, SymbolsPair, Trade, TradingSettings},
     traits::exchange::{BenchmarkExchange, DataProviderExchange, TraderExchange, TraderHelper},
@@ -434,26 +440,35 @@ impl BenchmarkExchange for TraderExchangeWrapper {
         }
     }
 
-    fn check_price_level_modifiers(
+    fn close_benchmark_trade_on_binding_price(
         &self,
         trade: &Trade,
         current_timestamp: i64,
-        close_price: f64,
-        stop_loss: Option<&common::enums::modifiers::price_level::PriceLevel>,
-        take_profit: Option<&common::enums::modifiers::price_level::PriceLevel>,
-        trailing_stop_loss: Option<&common::enums::modifiers::price_level::PriceLevel>,
-        current_peak_returns: f64,
-    ) -> Result<Option<Trade>, GlowError> {
+        binding_price: f64,
+    ) -> Result<Trade, GlowError> {
         match self {
-            Self::Bybit(ex) => ex.check_price_level_modifiers(
-                trade,
-                current_timestamp,
-                close_price,
-                stop_loss,
-                take_profit,
-                trailing_stop_loss,
-                current_peak_returns,
-            ),
+            Self::Bybit(ex) => {
+                ex.close_benchmark_trade_on_binding_price(trade, current_timestamp, binding_price)
+            }
         }
     }
+
+    // fn check_price_level_modifiers(
+    //     &self,
+    //     trade: &Trade,
+    //     current_timestamp: i64,
+
+    // ) -> Result<Option<Trade>, GlowError> {
+    //     match self {
+    //         Self::Bybit(ex) => ex.check_price_level_modifiers(
+    //             trade,
+    //             current_timestamp,
+    //             close_price,
+    //             stop_loss,
+    //             take_profit,
+    //             trailing_stop_loss,
+    //             current_peak_returns,
+    //         ),
+    //     }
+    // }
 }

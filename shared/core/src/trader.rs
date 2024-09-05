@@ -28,8 +28,8 @@ pub struct Trader {
     current_trade_listener: BehaviorSubject<Option<Trade>>,
     exchange_listener: BehaviorSubject<TraderExchangeWrapper>,
     signal_listener: BehaviorSubject<SignalCategory>,
-    temp_executions_arc: Arc<Mutex<Vec<Execution>>>,
     strategy_data_listener: BehaviorSubject<StrategyDataUpdate>,
+    temp_executions: Arc<Mutex<Vec<Execution>>>,
     trading_data: Arc<Mutex<DataFrame>>,
     update_balance_listener: BehaviorSubject<Option<Balance>>,
     update_order_listener: BehaviorSubject<Option<OrderAction>>,
@@ -53,12 +53,9 @@ impl Trader {
             benchmark_data_emitter: benchmark_data_emitter.clone(),
             current_balance_listener: current_balance_listener.clone(),
             current_trade_listener: current_trade_listener.clone(),
-
             exchange_listener: exchange_listener.clone(),
-
             signal_listener: signal_listener.clone(),
-            temp_executions_arc: Arc::new(Mutex::new(Vec::new())),
-
+            temp_executions: Arc::new(Mutex::new(Vec::new())),
             strategy_data_listener: strategy_data_listener.clone(),
             trading_data: trading_data.clone(),
             update_balance_listener: update_balance_listener.clone(),
@@ -78,10 +75,37 @@ impl Trader {
 
     fn update_trading_data(&self, payload: DataFrame) -> Result<(), GlowError> {
         {
-            let mut lock = self.trading_data.lock().expect("trading data deadlock");
+            let mut lock = self
+                .trading_data
+                .lock()
+                .expect("update trading data deadlock");
             *lock = payload;
         }
+        Ok(())
+    }
 
+    fn get_temp_executions(&self) -> Result<Vec<Execution>, GlowError> {
+        let temp_executions: Vec<Execution>;
+        {
+            let lock = self
+                .temp_executions
+                .lock()
+                .expect("temp_executions deadlock");
+            temp_executions = lock.clone();
+        }
+        Ok(temp_executions)
+    }
+
+    fn push_to_temp_executions(&self, payload: Vec<Execution>) -> Result<(), GlowError> {
+        {
+            let mut lock = self
+                .temp_executions
+                .lock()
+                .expect("update temp_executions deadlock");
+            let mut updated_value = lock.clone();
+            updated_value.extend(payload);
+            *lock = updated_value;
+        }
         Ok(())
     }
 
@@ -174,7 +198,10 @@ impl Trader {
                         }
                     }
             }
-            (TradeStatus::PartiallyOpen | TradeStatus::PendingCloseOrder, signal, open_order_side) => {
+            (TradeStatus::PartiallyOpen | TradeStatus::PendingCloseOrder, SignalCategory::CloseLong, Side::Buy) |
+            (TradeStatus::PartiallyOpen | TradeStatus::PendingCloseOrder, SignalCategory::CloseShort, Side::Sell) |
+            (TradeStatus::PartiallyOpen | TradeStatus::PendingCloseOrder, SignalCategory::ClosePosition, _)
+             => {
                 if current_trade_status == &TradeStatus::PartiallyOpen {
                     let mut open_order = current_trade.open_order.clone();
                     let left_units = open_order.get_executed_quantity() - open_order.units;
@@ -214,6 +241,7 @@ impl Trader {
                         }
                     }
                 }
+
                 match exchange
                     .try_close_position(
                         &current_trade,
@@ -272,6 +300,43 @@ impl Trader {
         })
     }
 
+    fn add_executions_to_order_and_remove_from_temp(&self, order: Order) -> Order {
+        // let mut updated_order = order.clone();
+        let mut temp_executions_guard = self
+            .temp_executions
+            .lock()
+            .expect("process_last_signal -> temp_executions locked!");
+
+        if temp_executions_guard.len() <= 0 {
+            return order;
+        }
+
+        let order_uuid = &order.uuid;
+        let mut pending_executions = vec![];
+        let mut removed_executions_ids = vec![];
+
+        temp_executions_guard.iter().for_each(|execution| {
+            if &execution.order_uuid != "" && &execution.order_uuid == order_uuid {
+                pending_executions.push(execution.clone());
+                removed_executions_ids.push(execution.id.clone());
+            }
+        });
+
+        if pending_executions.len() <= 0 {
+            return order;
+        }
+
+        let updated_order = order.push_executions_if_new(pending_executions);
+        let filtered_temp_executions = temp_executions_guard
+            .clone()
+            .into_iter()
+            .filter(|execution| !removed_executions_ids.contains(&execution.id))
+            .collect::<Vec<Execution>>();
+
+        *temp_executions_guard = filtered_temp_executions;
+        updated_order
+    }
+
     fn init_order_update_handler(&self) -> JoinHandle<()> {
         let trader = self.clone();
         spawn(async move {
@@ -285,10 +350,8 @@ impl Trader {
                 match order_action.clone() {
                     OrderAction::Update(mut updated_order)
                     | OrderAction::Stop(mut updated_order) => {
-                        updated_order = add_executions_to_order_and_remove_from_temp(
-                            &trader.temp_executions_arc,
-                            updated_order,
-                        );
+                        updated_order =
+                            trader.add_executions_to_order_and_remove_from_temp(updated_order);
 
                         if current_trade.is_none() {
                             if updated_order.is_stop {
@@ -367,19 +430,16 @@ impl Trader {
         spawn(async move {
             let mut subscription = trader.update_executions_listener.subscribe();
             while let Some(latest_executions) = subscription.next().await {
-                if latest_executions.len() == 0 {
+                if latest_executions.len() <= 0 {
                     continue;
                 }
 
-                let mut temp_executions_guard = trader
-                    .temp_executions_arc
-                    .lock()
-                    .expect("get_actions_handle -> temp_executions_guard deadlock");
-                temp_executions_guard.extend(latest_executions);
-                println!(
-                    "temp_executions_guard lenght {}",
-                    temp_executions_guard.len()
-                );
+                match trader.push_to_temp_executions(latest_executions) {
+                    Ok(_) => {}
+                    Err(error) => {
+                        println!("push_to_temp_executions error {:?}", error);
+                    }
+                }
             }
         })
     }
@@ -720,7 +780,8 @@ impl Trader {
                     stopped_result
                 } else {
                     // position wasn't stopped
-                    let was_short_closed = close_shorts[index - 1] == 1 && current_side == Side::Sell;
+                    let was_short_closed =
+                        close_shorts[index - 1] == 1 && current_side == Side::Sell;
                     let was_long_closed = close_longs[index - 1] == 1 && current_side == Side::Buy;
 
                     if was_short_closed || was_long_closed {
@@ -968,17 +1029,66 @@ impl Trader {
         Ok(emitted_signal)
     }
 
+    // fn clean_data(&self, trading_data: DataFrame) -> Result<(), GlowError> {
+    //     // let mut performance_guard = performance_arc
+    //     //     .lock()
+    //     //     .expect("TradingDataUpdate::CleanUp -> performance_arc.unwrap");
+    //     // let _ = performance_guard.update_trading_stats(&trading_data);
+
+    //     let current_trade = self.current_trade_listener.value();
+
+    //     if current_trade.is_none() {
+    //         return Ok(());
+    //     }
+    //     let current_trade = current_trade.unwrap();
+    //     let mut temp_executions_guard = temp_executions_arc
+    //         .lock()
+    //         .expect("TradingDataUpdate::CleanUp -> temp_executions deadlock");
+
+    //     let open_order_uuid = &current_trade.open_order.uuid;
+
+    //     let close_order_uuid = &current_trade.close_order.clone().unwrap_or_default().uuid;
+
+    //     let mut pending_executions = vec![];
+    //     let mut removed_executions_ids = vec![];
+
+    //     while let Some(execution) = temp_executions_guard.iter().next() {
+    //         if &execution.order_uuid == open_order_uuid
+    //             || close_order_uuid != "" && &execution.order_uuid == close_order_uuid
+    //         {
+    //             pending_executions.push(execution.clone());
+    //             removed_executions_ids.push(execution.id.clone());
+    //         }
+    //     }
+
+    //     if pending_executions.len() > 0 {
+    //         let updated_trade = current_trade
+    //             .update_executions(pending_executions)
+    //             .expect("TradingDataUpdate::CleanUp update_executions unwrap");
+
+    //         if updated_trade.is_some() {
+    //             let updated_trade = updated_trade.unwrap();
+    //             current_trade_listener.next(Some(updated_trade));
+
+    //             let filtered_temp_executions = temp_executions_guard
+    //                 .clone()
+    //                 .into_iter()
+    //                 .filter(|execution| !removed_executions_ids.contains(&execution.id))
+    //                 .collect::<Vec<Execution>>();
+
+    //             *temp_executions_guard = filtered_temp_executions;
+    //         }
+    //     }
+    // }
+
     fn handle_updated_strategy_data(
         &self,
         updated_strategy_df: DataFrame,
     ) -> Result<(), GlowError> {
         let updated_strategy_df = self.update_trading_columns(updated_strategy_df)?;
-
         let signal = self.generate_last_position_signal(&updated_strategy_df)?;
         self.signal_listener.next(signal);
-
         self.update_trading_data(updated_strategy_df)?;
-
         Ok(())
     }
 
@@ -1058,39 +1168,4 @@ async fn open_order(
             Err(error)
         }
     }
-}
-
-fn add_executions_to_order_and_remove_from_temp(
-    temp_executions_arc: &Arc<Mutex<Vec<Execution>>>,
-    order: Order,
-) -> Order {
-    let mut updated_order = order.clone();
-    let mut temp_executions_guard = temp_executions_arc
-        .lock()
-        .expect("process_last_signal -> temp_executions locked!");
-
-    let order_uuid = &order.uuid;
-
-    let mut pending_executions = vec![];
-    let mut removed_executions_ids = vec![];
-
-    let mut iterator = temp_executions_guard.iter();
-    while let Some(execution) = iterator.next() {
-        if &execution.order_uuid != "" && &execution.order_uuid == order_uuid {
-            pending_executions.push(execution.clone());
-            removed_executions_ids.push(execution.id.clone());
-        }
-    }
-
-    if pending_executions.len() > 0 {
-        updated_order = updated_order.push_executions_if_new(pending_executions);
-        let filtered_temp_executions = temp_executions_guard
-            .clone()
-            .into_iter()
-            .filter(|execution| !removed_executions_ids.contains(&execution.id))
-            .collect::<Vec<Execution>>();
-
-        *temp_executions_guard = filtered_temp_executions;
-    }
-    updated_order
 }

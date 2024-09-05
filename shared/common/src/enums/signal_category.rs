@@ -13,7 +13,7 @@ pub enum SignalCategory {
     ClosePosition,
     // RevertPosition,
     StopLoss,
-    TrailingStopLoss,
+    // TrailingStopLoss,
     TakeProfit,
     LeverageBankrupcty,
 }
@@ -37,7 +37,7 @@ impl SignalCategory {
             Self::ClosePosition => "position_close",
             // Self::RevertPosition => "position_revert",
             Self::StopLoss => "stop_loss",
-            Self::TrailingStopLoss => "trailing_stop_loss",
+            // Self::TrailingStopLoss => "trailing_stop_loss",
             Self::TakeProfit => "take_profit",
             Self::LeverageBankrupcty => "leverage_bankruptcy",
         }
@@ -54,7 +54,7 @@ impl From<SignalCategory> for Side {
             SignalCategory::KeepPosition => Side::None,
             SignalCategory::ClosePosition => unreachable!(),
             SignalCategory::StopLoss => unreachable!(),
-            SignalCategory::TrailingStopLoss => unreachable!(),
+            // SignalCategory::TrailingStopLoss => unreachable!(),
             SignalCategory::TakeProfit => unreachable!(),
             SignalCategory::LeverageBankrupcty => unreachable!(),
         }

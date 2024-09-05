@@ -796,7 +796,64 @@ pub fn check_last_index_for_signal(
         .into_no_null_iter()
         .collect::<Vec<i32>>();
     let value = column.get(last_index).unwrap();
-    return Ok(value == &1)
+    return Ok(value == &1);
+}
+
+pub fn get_signal_col_values(
+    df: &DataFrame,
+    signal_category: SignalCategory,
+) -> Result<Vec<i32>, GlowError> {
+    let schema = df.schema();
+    let signal_column = signal_category.get_column();
+    let df_height = df.height();
+    if !schema.contains(signal_column) {
+        return Ok(vec![0; df_height]);
+    }
+
+    let result = df
+        .column(signal_column)?
+        .i32()
+        .unwrap()
+        .into_no_null_iter()
+        .collect::<Vec<i32>>();
+    Ok(result)
+}
+
+pub fn get_price_columns(
+    df: &DataFrame,
+    symbol: &Symbol,
+) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>), GlowError> {
+    let (open_col, high_col, low_col, close_col) = symbol.get_ohlc_cols();
+    let opens = df
+        .column(&open_col)
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect::<Vec<f64>>();
+    let highs = df
+        .column(&high_col)
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect::<Vec<f64>>();
+    let lows = df
+        .column(&low_col)
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect::<Vec<f64>>();
+    let closes = df
+        .column(&close_col)
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect::<Vec<f64>>();
+
+    Ok((opens, highs, lows, closes))
 }
 
 pub fn calculate_remainder(dividend: f64, divisor: f64) -> f64 {

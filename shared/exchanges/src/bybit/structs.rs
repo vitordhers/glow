@@ -254,7 +254,7 @@ impl OrderData {
                     match self.stop_order_type {
                         StopOrderType::StopLoss => OrderStatus::StoppedSL,
                         StopOrderType::TakeProfit => OrderStatus::StoppedTP,
-                        StopOrderType::TrailingStop => OrderStatus::StoppedTSL,
+                        // StopOrderType::TrailingStop => OrderStatus::StoppedTSL,
                         StopOrderType::Stop => OrderStatus::StoppedBR,
                         _ => unreachable!(),
                     }

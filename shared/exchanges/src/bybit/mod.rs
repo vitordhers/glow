@@ -14,12 +14,10 @@ use crate::{
     structs::{ApiCredentials, ApiEndpoints},
 };
 use common::constants::SECONDS_IN_MIN;
-use common::enums::modifiers::price_level::{PriceLevel, TrailingStopLoss};
 use common::enums::order_action::OrderAction;
 use common::enums::symbol_id::SymbolId;
 use common::functions::{
-    closest_multiple_below, current_datetime, current_timestamp, current_timestamp_ms,
-    timestamp_minute_end,
+    current_datetime, current_timestamp, current_timestamp_ms, timestamp_minute_end,
 };
 use common::traits::exchange::{BenchmarkExchange, TraderHelper};
 use common::{
@@ -934,8 +932,7 @@ impl TraderExchange for BybitTraderExchange {
                 | OrderStatus::Closed
                 | OrderStatus::StoppedBR
                 | OrderStatus::StoppedSL
-                | OrderStatus::StoppedTP
-                | OrderStatus::StoppedTSL => {
+                | OrderStatus::StoppedTP => {
                     let error = format!(
                         r#"fetch_trade_state -> TradeStatus::New -> open order has {:?} status"#,
                         last_status
@@ -966,8 +963,8 @@ impl TraderExchange for BybitTraderExchange {
                 | OrderStatus::Closed
                 | OrderStatus::StoppedBR
                 | OrderStatus::StoppedSL
-                | OrderStatus::StoppedTP
-                | OrderStatus::StoppedTSL => {
+                // | OrderStatus::StoppedTSL
+                | OrderStatus::StoppedTP => {
                     let error = format!(
                         r#"fetch_trade_state -> TradeStatus::PartiallyOpen -> open order has {:?} status"#,
                         last_status
@@ -1142,7 +1139,7 @@ impl TraderExchange for BybitTraderExchange {
             }
         }
         let order_cost = total_balance * trading_settings.allocation_percentage;
-        
+
         let mut order = self.new_open_order(side, order_cost, expected_price)?;
         let order_id = order.id.clone();
         let payload: CreateOrderDto = order.clone().into();
@@ -1626,27 +1623,21 @@ impl BenchmarkExchange for BybitTraderExchange {
         let trading_settings = self.get_trading_settings();
         let leverage_factor = trading_settings.leverage.get_factor();
         let open_order_type = trading_settings.get_open_order_type();
+        // TODO: allocation comes from trading settings, consider that here
         let (units, balance_remainder) =
             self.calculate_open_order_units_and_balance_remainder(side, order_cost, price)?;
-
         let ((open_fee, _), fee_rate, is_maker) =
             self.calculate_order_fees(open_order_type, side, units, price);
-
         let contract = self.get_traded_contract();
-
         let id = format!(
             "{}_{}_{}",
             &contract.symbol.name,
             timestamp,
             OrderStage::Open.to_string()
         );
-
         let avg_price = Some(price);
-
         let stop_loss_price = self.calculate_order_stop_loss_price(side, price);
-
         let take_profit_price = self.calculate_order_take_profit_price(side, price);
-
         let time_in_force = if open_order_type == OrderType::Limit {
             TimeInForce::GTC
         } else {
@@ -1702,10 +1693,9 @@ impl BenchmarkExchange for BybitTraderExchange {
     ) -> Result<Order, GlowError> {
         let trading_settings = self.get_trading_settings();
         let close_order_type = match final_status {
-            OrderStatus::StoppedBR
-            | OrderStatus::StoppedSL
-            | OrderStatus::StoppedTP
-            | OrderStatus::StoppedTSL => trading_settings.get_close_order_type(),
+            OrderStatus::StoppedBR | OrderStatus::StoppedSL | OrderStatus::StoppedTP => {
+                trading_settings.get_close_order_type()
+            }
             _ => OrderType::Market,
         };
         let id = format!("{}_{}", trade_id, OrderStage::Close.to_string());
@@ -1741,8 +1731,7 @@ impl BenchmarkExchange for BybitTraderExchange {
 
         let is_stop = final_status == OrderStatus::StoppedBR
             || final_status == OrderStatus::StoppedSL
-            || final_status == OrderStatus::StoppedTP
-            || final_status == OrderStatus::StoppedTSL;
+            || final_status == OrderStatus::StoppedTP;
 
         let order = Order::new(
             order_uuid,
@@ -1769,130 +1758,168 @@ impl BenchmarkExchange for BybitTraderExchange {
         Ok(order)
     }
 
-    fn check_price_level_modifiers(
+    fn close_benchmark_trade_on_binding_price(
         &self,
         trade: &Trade,
         current_timestamp: i64,
-        close_price: f64,
-        stop_loss: Option<&PriceLevel>,
-        take_profit: Option<&PriceLevel>,
-        trailing_stop_loss: Option<&PriceLevel>,
-        current_peak_returns: f64,
-    ) -> Result<Option<Trade>, GlowError> {
-        if trade.open_order.leverage_factor > 1.0 {
-            let bankruptcy_price = trade
-                .open_order
-                .get_bankruptcy_price()
-                .expect("check_price_level_modifiers -> get_bankruptcy_price unwrap");
+        binding_price: f64,
+    ) -> Result<Trade, GlowError> {
+        let stop_loss_price = trade.open_order.stop_loss_price.unwrap_or_default();
+        let take_profit_price = trade.open_order.take_profit_price.unwrap_or_default();
+        let bankruptcy_price = trade.open_order.get_bankruptcy_price().unwrap_or_default();
+        let final_status = if binding_price == stop_loss_price {
+            OrderStatus::StoppedSL
+        } else if binding_price == take_profit_price {
+            OrderStatus::StoppedTP
+        } else if binding_price == bankruptcy_price {
+            OrderStatus::StoppedBR
+        } else {
+            return Err(GlowError::new(
+                "Invalid binding price".to_owned(),
+                format!(
+                    "binding price = {:?}, SL price = {:?}, TP price = {:?} BR price = {:?}",
+                    binding_price, stop_loss_price, take_profit_price, bankruptcy_price
+                ),
+            ));
+        };
 
-            if trade.open_order.side == Side::Sell && bankruptcy_price <= close_price
-                || trade.open_order.side == Side::Buy && bankruptcy_price >= close_price
-            {
-                let close_order = self.new_benchmark_close_order(
-                    current_timestamp,
-                    &trade.id,
-                    close_price,
-                    trade.open_order.clone(),
-                    OrderStatus::StoppedBR,
-                )?;
+        let close_order = self.new_benchmark_close_order(
+            current_timestamp,
+            &trade.id,
+            binding_price,
+            trade.open_order.clone(),
+            final_status,
+        )?;
 
-                let closed_trade = trade.update_trade(close_order)?;
-                return Ok(Some(closed_trade));
-            }
-        }
-        if stop_loss.is_some() || take_profit.is_some() || trailing_stop_loss.is_some() {
-            let (_, returns) = trade.calculate_unrealized_pnl_and_returns(close_price);
-            if let Some(stop_loss) = stop_loss {
-                let stop_loss_percentage = stop_loss.get_percentage();
-                if returns < 0.0 && stop_loss_percentage <= returns.abs() {
-                    println!(
-                        "Stop loss took effect: returns = {}, stop loss percentage = {}",
-                        returns, stop_loss_percentage
-                    );
-                    let close_order = self.new_benchmark_close_order(
-                        current_timestamp,
-                        &trade.id,
-                        close_price,
-                        trade.open_order.clone(),
-                        OrderStatus::StoppedSL,
-                    )?;
-
-                    let closed_trade = trade.update_trade(close_order)?;
-                    return Ok(Some(closed_trade));
-                }
-            }
-
-            if let Some(take_profit) = take_profit {
-                let take_profit_percentage = take_profit.get_percentage();
-                if returns > 0.0 && take_profit_percentage <= returns.abs() {
-                    println!(
-                        "Take profit took effect: returns = {}, take profit percentage = {}",
-                        returns, take_profit_percentage
-                    );
-                    let close_order = self.new_benchmark_close_order(
-                        current_timestamp,
-                        &trade.id,
-                        close_price,
-                        trade.open_order.clone(),
-                        OrderStatus::StoppedTP,
-                    )?;
-
-                    let closed_trade = trade.update_trade(close_order)?;
-                    return Ok(Some(closed_trade));
-                }
-            }
-
-            if let Some(trailing_stop_loss) = trailing_stop_loss {
-                match trailing_stop_loss {
-                    PriceLevel::TrailingStopLoss(tsl) => match tsl {
-                        TrailingStopLoss::Percent(percentage, start_percentage) => {
-                            if start_percentage < &current_peak_returns {
-                                let acceptable_returns = percentage * current_peak_returns;
-                                let acceptable_returns = acceptable_returns.max(*start_percentage);
-
-                                if returns <= acceptable_returns {
-                                    let close_order = self.new_benchmark_close_order(
-                                        current_timestamp,
-                                        &trade.id,
-                                        close_price,
-                                        trade.open_order.clone(),
-                                        OrderStatus::StoppedTSL,
-                                    )?;
-
-                                    let closed_trade = trade.update_trade(close_order)?;
-                                    return Ok(Some(closed_trade));
-                                }
-                            }
-                        }
-                        TrailingStopLoss::Stepped(percentage, start_percentage) => {
-                            if start_percentage < &current_peak_returns {
-                                let acceptable_returns =
-                                    closest_multiple_below(*percentage, current_peak_returns);
-                                let acceptable_returns = acceptable_returns.max(*start_percentage);
-                                // println!(
-                                //     "@@@ start_percentage {} current returns {}, acceptable_returns {}",
-                                //     start_percentage, returns, acceptable_returns
-                                // );
-                                if returns <= acceptable_returns {
-                                    let close_order = self.new_benchmark_close_order(
-                                        current_timestamp,
-                                        &trade.id,
-                                        close_price,
-                                        trade.open_order.clone(),
-                                        OrderStatus::StoppedTP,
-                                    )?;
-
-                                    let closed_trade = trade.update_trade(close_order)?;
-                                    return Ok(Some(closed_trade));
-                                }
-                            }
-                        }
-                    },
-                    _ => {}
-                }
-            }
-        }
-
-        Ok(None)
+        let closed_trade = trade.update_trade(close_order)?;
+        Ok(closed_trade)
     }
 }
+
+// legacy impl
+// fn check_price_level_modifiers(
+//     &self,
+//     trade: &Trade,
+//     current_timestamp: i64,
+//     close_price: f64,
+//     stop_loss: Option<&PriceLevel>,
+//     take_profit: Option<&PriceLevel>,
+//     trailing_stop_loss: Option<&PriceLevel>,
+//     current_peak_returns: f64,
+// ) -> Result<Option<Trade>, GlowError> {
+//     if trade.open_order.leverage_factor > 1.0 {
+//         let bankruptcy_price = trade
+//             .open_order
+//             .get_bankruptcy_price()
+//             .expect("check_price_level_modifiers -> get_bankruptcy_price unwrap");
+
+//         if trade.open_order.side == Side::Sell && bankruptcy_price <= close_price
+//             || trade.open_order.side == Side::Buy && bankruptcy_price >= close_price
+//         {
+//             let close_order = self.new_benchmark_close_order(
+//                 current_timestamp,
+//                 &trade.id,
+//                 close_price,
+//                 trade.open_order.clone(),
+//                 OrderStatus::StoppedBR,
+//             )?;
+
+//             let closed_trade = trade.update_trade(close_order)?;
+//             return Ok(Some(closed_trade));
+//         }
+//     }
+//     if stop_loss.is_some() || take_profit.is_some() || trailing_stop_loss.is_some() {
+//         let (_, returns) = trade.calculate_unrealized_pnl_and_returns(close_price);
+//         if let Some(stop_loss) = stop_loss {
+//             let stop_loss_percentage = stop_loss.get_percentage();
+//             if returns < 0.0 && stop_loss_percentage <= returns.abs() {
+//                 println!(
+//                     "Stop loss took effect: returns = {}, stop loss percentage = {}",
+//                     returns, stop_loss_percentage
+//                 );
+//                 let close_order = self.new_benchmark_close_order(
+//                     current_timestamp,
+//                     &trade.id,
+//                     close_price,
+//                     trade.open_order.clone(),
+//                     OrderStatus::StoppedSL,
+//                 )?;
+
+//                 let closed_trade = trade.update_trade(close_order)?;
+//                 return Ok(Some(closed_trade));
+//             }
+//         }
+
+//         if let Some(take_profit) = take_profit {
+//             let take_profit_percentage = take_profit.get_percentage();
+//             if returns > 0.0 && take_profit_percentage <= returns.abs() {
+//                 println!(
+//                     "Take profit took effect: returns = {}, take profit percentage = {}",
+//                     returns, take_profit_percentage
+//                 );
+//                 let close_order = self.new_benchmark_close_order(
+//                     current_timestamp,
+//                     &trade.id,
+//                     close_price,
+//                     trade.open_order.clone(),
+//                     OrderStatus::StoppedTP,
+//                 )?;
+
+//                 let closed_trade = trade.update_trade(close_order)?;
+//                 return Ok(Some(closed_trade));
+//             }
+//         }
+
+//         if let Some(trailing_stop_loss) = trailing_stop_loss {
+//             match trailing_stop_loss {
+//                 PriceLevel::TrailingStopLoss(tsl) => match tsl {
+//                     TrailingStopLoss::Percent(percentage, start_percentage) => {
+//                         if start_percentage < &current_peak_returns {
+//                             let acceptable_returns = percentage * current_peak_returns;
+//                             let acceptable_returns = acceptable_returns.max(*start_percentage);
+
+//                             if returns <= acceptable_returns {
+//                                 let close_order = self.new_benchmark_close_order(
+//                                     current_timestamp,
+//                                     &trade.id,
+//                                     close_price,
+//                                     trade.open_order.clone(),
+//                                     OrderStatus::StoppedTSL,
+//                                 )?;
+
+//                                 let closed_trade = trade.update_trade(close_order)?;
+//                                 return Ok(Some(closed_trade));
+//                             }
+//                         }
+//                     }
+//                     TrailingStopLoss::Stepped(percentage, start_percentage) => {
+//                         if start_percentage < &current_peak_returns {
+//                             let acceptable_returns =
+//                                 closest_multiple_below(*percentage, current_peak_returns);
+//                             let acceptable_returns = acceptable_returns.max(*start_percentage);
+//                             // println!(
+//                             //     "@@@ start_percentage {} current returns {}, acceptable_returns {}",
+//                             //     start_percentage, returns, acceptable_returns
+//                             // );
+//                             if returns <= acceptable_returns {
+//                                 let close_order = self.new_benchmark_close_order(
+//                                     current_timestamp,
+//                                     &trade.id,
+//                                     close_price,
+//                                     trade.open_order.clone(),
+//                                     OrderStatus::StoppedTP,
+//                                 )?;
+
+//                                 let closed_trade = trade.update_trade(close_order)?;
+//                                 return Ok(Some(closed_trade));
+//                             }
+//                         }
+//                     }
+//                 },
+//                 _ => {}
+//             }
+//         }
+//     }
+
+//     Ok(None)
+// }

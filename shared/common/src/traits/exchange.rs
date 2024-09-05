@@ -191,16 +191,20 @@ pub trait BenchmarkExchange: TraderHelper {
         final_status: OrderStatus,
     ) -> Result<Order, GlowError>;
 
-    fn check_price_level_modifiers(
+    fn close_benchmark_trade_on_binding_price(
         &self,
         trade: &Trade,
         current_timestamp: i64,
-        close_price: f64,
-        stop_loss: Option<&PriceLevel>,
-        take_profit: Option<&PriceLevel>,
-        trailing_stop_loss: Option<&PriceLevel>,
-        current_peak_returns: f64,
-    ) -> Result<Option<Trade>, GlowError>;
+        binding_price: f64,
+    ) -> Result<Trade, GlowError>;
+
+    // fn check_price_level_modifiers(
+    //     &self,
+    //     trade: &Trade,
+    //     current_timestamp: i64,
+    //     min_price: f64,
+    //     max_price: f64,
+    // ) -> Result<Option<Trade>, GlowError>;
 }
 
 pub trait DataProviderExchange {
