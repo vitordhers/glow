@@ -2,15 +2,9 @@ use crate::{binance::structs::BinanceDataProvider, bybit::BybitTraderExchange};
 use chrono::{Duration, NaiveDateTime};
 use common::{
     enums::{
-        balance::Balance,
-        modifiers::{leverage::Leverage, price_level::PriceLevel},
-        order_action::OrderAction,
-        order_status::OrderStatus,
-        order_type::OrderType,
-        side::Side,
-        symbol_id::SymbolId,
-        trade_status::TradeStatus,
-        trading_data_update::KlinesDataUpdate,
+        balance::Balance, modifiers::leverage::Leverage, order_action::OrderAction,
+        order_status::OrderStatus, order_type::OrderType, side::Side, symbol_id::SymbolId,
+        trade_status::TradeStatus, trading_data_update::TradingDataUpdate,
     },
     structs::{BehaviorSubject, Contract, Execution, Order, SymbolsPair, Trade, TradingSettings},
     traits::exchange::{BenchmarkExchange, DataProviderExchange, TraderExchange, TraderHelper},
@@ -44,7 +38,7 @@ impl DataProviderExchangeWrapper {
         last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
         minimum_klines_for_benchmarking: u32,
         symbols_pair: SymbolsPair,
-        klines_data_update_emitter: &BehaviorSubject<KlinesDataUpdate>,
+        klines_data_update_emitter: &BehaviorSubject<TradingDataUpdate>,
     ) -> Self {
         match selected_exchange {
             DataProviderExchangeId::Binance => Self::Binance(BinanceDataProvider::new(
@@ -112,6 +106,12 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
                 ex.handle_committed_ticks_data(benchmark_end, trading_data_schema)
                     .await
             }
+        }
+    }
+
+    fn handle_ws_error(&self, trading_data_schema: &Schema) -> Option<NaiveDateTime> {
+        match self {
+            Self::Binance(ex) => ex.handle_ws_error(trading_data_schema),
         }
     }
 }

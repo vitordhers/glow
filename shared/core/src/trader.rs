@@ -2,7 +2,7 @@ use common::{
     enums::{
         balance::Balance, modifiers::price_level::PriceLevel, order_action::OrderAction,
         order_status::OrderStatus, side::Side, signal_category::SignalCategory,
-        trade_status::TradeStatus, trading_data_update::StrategyDataUpdate,
+        trade_status::TradeStatus, trading_data_update::TradingDataUpdate,
     },
     functions::{
         check_last_index_for_signal, current_datetime, current_timestamp_ms, get_price_columns,
@@ -16,21 +16,22 @@ use futures_util::StreamExt;
 use glow_error::GlowError;
 use polars::prelude::*;
 use std::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     time::Instant,
 };
 use tokio::{spawn, task::JoinHandle};
 
 #[derive(Clone)]
 pub struct Trader {
-    benchmark_data_emitter: BehaviorSubject<DataFrame>,
     current_balance_listener: BehaviorSubject<Balance>,
     current_trade_listener: BehaviorSubject<Option<Trade>>,
     exchange_listener: BehaviorSubject<TraderExchangeWrapper>,
+    performance_data_emitter: BehaviorSubject<TradingDataUpdate>,
     signal_listener: BehaviorSubject<SignalCategory>,
-    strategy_data_listener: BehaviorSubject<StrategyDataUpdate>,
+    strategy_data_listener: BehaviorSubject<TradingDataUpdate>,
     temp_executions: Arc<Mutex<Vec<Execution>>>,
     trading_data: Arc<Mutex<DataFrame>>,
+    trading_data_klines_limit: Arc<RwLock<u32>>,
     update_balance_listener: BehaviorSubject<Option<Balance>>,
     update_order_listener: BehaviorSubject<Option<OrderAction>>,
     update_executions_listener: BehaviorSubject<Vec<Execution>>,
@@ -38,19 +39,20 @@ pub struct Trader {
 
 impl Trader {
     pub fn new(
-        benchmark_data_emitter: &BehaviorSubject<DataFrame>,
         current_balance_listener: &BehaviorSubject<Balance>,
         current_trade_listener: &BehaviorSubject<Option<Trade>>,
         exchange_listener: &BehaviorSubject<TraderExchangeWrapper>,
+        performance_data_emitter: &BehaviorSubject<TradingDataUpdate>,
         signal_listener: &BehaviorSubject<SignalCategory>,
-        strategy_data_listener: &BehaviorSubject<StrategyDataUpdate>,
+        strategy_data_listener: &BehaviorSubject<TradingDataUpdate>,
         trading_data: &Arc<Mutex<DataFrame>>,
+        trading_data_klines_limit: &Arc<RwLock<u32>>,
         update_balance_listener: &BehaviorSubject<Option<Balance>>,
         update_order_listener: &BehaviorSubject<Option<OrderAction>>,
         update_executions_listener: &BehaviorSubject<Vec<Execution>>,
     ) -> Trader {
         Trader {
-            benchmark_data_emitter: benchmark_data_emitter.clone(),
+            performance_data_emitter: performance_data_emitter.clone(),
             current_balance_listener: current_balance_listener.clone(),
             current_trade_listener: current_trade_listener.clone(),
             exchange_listener: exchange_listener.clone(),
@@ -58,6 +60,7 @@ impl Trader {
             temp_executions: Arc::new(Mutex::new(Vec::new())),
             strategy_data_listener: strategy_data_listener.clone(),
             trading_data: trading_data.clone(),
+            trading_data_klines_limit: trading_data_klines_limit.clone(),
             update_balance_listener: update_balance_listener.clone(),
             update_order_listener: update_order_listener.clone(),
             update_executions_listener: update_executions_listener.clone(),
@@ -881,7 +884,8 @@ impl Trader {
     ) -> Result<(), GlowError> {
         let benchmark_data = self.compute_benchmark_positions(initial_strategy_df)?;
         self.update_trading_data(benchmark_data.clone())?;
-        self.benchmark_data_emitter.next(benchmark_data);
+        let trading_data_update = TradingDataUpdate::Initial(benchmark_data);
+        self.performance_data_emitter.next(trading_data_update);
         Ok(())
     }
 
@@ -1006,12 +1010,7 @@ impl Trader {
         Ok(emitted_signal)
     }
 
-    fn clean_data(&self, trading_data: DataFrame) -> Result<(), GlowError> {
-        // let mut performance_guard = performance_arc
-        //     .lock()
-        //     .expect("TradingDataUpdate::CleanUp -> performance_arc.unwrap");
-        // let _ = performance_guard.update_trading_stats(&trading_data);
-
+    fn clean_temp_executions(&self) -> Result<(), GlowError> {
         let current_trade = self.current_trade_listener.value();
         if current_trade.is_none() {
             return Ok(());
@@ -1056,13 +1055,28 @@ impl Trader {
         Ok(())
     }
 
+    fn clean_trading_data(&self, trading_data: DataFrame) -> Result<DataFrame, GlowError> {
+        let trading_data_klines_limit = self.trading_data_klines_limit.read().unwrap();
+        let trading_data_klines_limit = trading_data_klines_limit.clone();
+        let trading_data = trading_data.tail(Some(trading_data_klines_limit as usize));
+
+        Ok(trading_data)
+    }
+
     fn handle_updated_strategy_data(
         &self,
         updated_strategy_df: DataFrame,
     ) -> Result<(), GlowError> {
-        let updated_strategy_df = self.update_trading_columns(updated_strategy_df)?;
-        let signal = self.generate_last_position_signal(&updated_strategy_df)?;
+        // updates trading columns with latest indicators/signals
+        let updated_df = self.update_trading_columns(updated_strategy_df)?;
+        // derives latest signal from them
+        let signal = self.generate_last_position_signal(&updated_df)?;
+        // emits it.
         self.signal_listener.next(signal);
+        // cleans trade executions
+        self.clean_temp_executions()?;
+        // then data
+        let updated_strategy_df = self.clean_trading_data(updated_df)?;
         self.update_trading_data(updated_strategy_df)?;
         Ok(())
     }
@@ -1073,10 +1087,10 @@ impl Trader {
             let mut subscription = trader.strategy_data_listener.subscribe();
             while let Some(strategy_data_update) = subscription.next().await {
                 let result = match strategy_data_update {
-                    StrategyDataUpdate::Initial(initial_strategy_df) => {
+                    TradingDataUpdate::Initial(initial_strategy_df) => {
                         trader.handle_initial_strategy_data(initial_strategy_df)
                     }
-                    StrategyDataUpdate::Market(updated_strategy_df) => {
+                    TradingDataUpdate::Market(updated_strategy_df) => {
                         trader.handle_updated_strategy_data(updated_strategy_df)
                     }
                     _ => Ok(()),

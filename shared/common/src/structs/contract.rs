@@ -4,7 +4,7 @@ use chrono::{Duration, NaiveDateTime, NaiveTime};
 #[derive(Clone, Debug)]
 pub struct Contract {
     pub available_since: NaiveDateTime,
-    funding_interval: Duration,
+    _funding_interval: Duration,
     pub funding_rate: f64,
     pub max_leverage: f64,
     pub maximum_order_size: f64, // in contract Symbol
@@ -28,7 +28,7 @@ impl Contract {
     ) -> Self {
         Contract {
             available_since,
-            funding_interval,
+            _funding_interval: funding_interval,
             funding_rate,
             max_leverage,
             maximum_order_size,
@@ -39,7 +39,7 @@ impl Contract {
         }
     }
 
-    pub fn update_next_funding(&mut self, time: NaiveTime) {
+    pub fn update_next_funding(&mut self, _time: NaiveTime) {
         todo!("implement this");
         // self.next_funding = Some(date_time);
     }

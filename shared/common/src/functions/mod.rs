@@ -275,6 +275,7 @@ pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
 //     Ok(DataFrame::new(df_series)?.fill_null(FillNullStrategy::Forward(None))?)
 // }
 
+// TODO: deprecate this
 pub fn map_and_downsample_ticks_data_to_df2(
     ticks_data: &Vec<TickData>,
     unique_symbols: &Vec<&Symbol>,

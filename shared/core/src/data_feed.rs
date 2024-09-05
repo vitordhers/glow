@@ -1,5 +1,5 @@
 use chrono::NaiveDateTime;
-use common::enums::trading_data_update::{KlinesDataUpdate, StrategyDataUpdate};
+use common::enums::trading_data_update::TradingDataUpdate;
 use common::structs::Symbol;
 use common::{
     structs::BehaviorSubject,
@@ -20,13 +20,13 @@ pub struct DataFeed {
     // pub current_trade_listener: BehaviorSubject<Option<Trade>>, // TODO check if this is really necessary
     data_provider_exchange: DataProviderExchangeWrapper,
     data_provider_last_ws_error_ts: Arc<Mutex<Option<i64>>>,
-    kline_data_listener: BehaviorSubject<KlinesDataUpdate>,
+    kline_data_listener: BehaviorSubject<TradingDataUpdate>,
     run_benchmark_only: bool, // TODO check if this is really necessary
     // pub kline_data_schema: Schema, // TODO check if this is really necessary
     minimum_klines_for_benchmarking: u32, // TODO check if this is really necessary
     // signal_listener: BehaviorSubject<SignalCategory>,
     strategy: Strategy,
-    strategy_data_emitter: BehaviorSubject<StrategyDataUpdate>,
+    strategy_data_emitter: BehaviorSubject<TradingDataUpdate>,
     trading_data: Arc<Mutex<DataFrame>>,
     trading_data_schema: Schema,
     // pub trading_data_update_listener: BehaviorSubject<TradingDataUpdate>, // TODO: deprecate this
@@ -78,10 +78,10 @@ impl DataFeed {
         benchmark_datetimes: (Option<NaiveDateTime>, Option<NaiveDateTime>),
         data_provider_exchange: DataProviderExchangeWrapper,
         data_provider_last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
-        kline_data_listener: &BehaviorSubject<KlinesDataUpdate>,
+        kline_data_listener: &BehaviorSubject<TradingDataUpdate>,
         run_benchmark_only: bool,
         strategy: &Strategy,
-        strategy_data_emitter: &BehaviorSubject<StrategyDataUpdate>,
+        strategy_data_emitter: &BehaviorSubject<TradingDataUpdate>,
         trader_exchange_listener: BehaviorSubject<TraderExchangeWrapper>,
         trading_data: &Arc<Mutex<DataFrame>>,
     ) -> DataFeed {
@@ -182,10 +182,10 @@ impl DataFeed {
             let mut subscription = data_feed.kline_data_listener.subscribe();
             while let Some(klines_data) = subscription.next().await {
                 match klines_data {
-                    KlinesDataUpdate::Initial(initial_klines_df) => {
+                    TradingDataUpdate::Initial(initial_klines_df) => {
                         match data_feed.handle_initial_klines(initial_klines_df) {
                             Ok(initial_strategy_df) => {
-                                let payload = StrategyDataUpdate::Initial(initial_strategy_df);
+                                let payload = TradingDataUpdate::Initial(initial_strategy_df);
                                 data_feed.strategy_data_emitter.next(payload);
                             }
                             Err(error) => {
@@ -193,10 +193,10 @@ impl DataFeed {
                             }
                         }
                     }
-                    KlinesDataUpdate::Market(market_klines_df) => {
+                    TradingDataUpdate::Market(market_klines_df) => {
                         match data_feed.handle_market_klines(market_klines_df) {
                             Ok(updated_strategy_df) => {
-                                let payload = StrategyDataUpdate::Market(updated_strategy_df);
+                                let payload = TradingDataUpdate::Market(updated_strategy_df);
                                 data_feed.strategy_data_emitter.next(payload);
                             }
                             Err(error) => {
@@ -206,150 +206,6 @@ impl DataFeed {
                     }
                     _ => {}
                 }
-
-                // match trading_data_update {
-                //     TradingDataUpdate::InitialKlinesData(initial_klines_lf) => {
-                //         data_feed.handle_initial_klines_data(initial_klines_lf)
-                //     }
-                //     TradingDataUpdate::InitialStrategyData(initial_strategy_lf) => {
-                //         match data_feed.compute_benchmark_positions(&initial_strategy_lf) {
-                //             Ok(benchmark_lf) => {
-                //                 let trading_data_update =
-                //                     TradingDataUpdate::BenchmarkData(benchmark_lf);
-                //                 data_feed
-                //                     .trading_data_update_listener
-                //                     .next(trading_data_update);
-                //             }
-                //             Err(error) => {
-                //                 todo!("treat error");
-                //             }
-                //         }
-                //     }
-                //     TradingDataUpdate::KlinesData(klines_data) => {
-                //         data_feed.handle_klines_data(klines_data)
-                //     }
-                //     TradingDataUpdate::StrategyData(strategy_lf) => {
-                //         // let strategy_data = trading_data_listener.value();
-                //         // let exchange_socket_error_ts;
-                //         // {
-                //         //     let exchange_socket_error_guard = exchange_socket_error_arc.lock().expect(
-                //         //         "TradingDataUpdate::StrategyData -> exchange_socket_error_guard.unwrap",
-                //         //     );
-                //         //     exchange_socket_error_ts = exchange_socket_error_guard.clone();
-                //         // }
-
-                //         // // checks for exchange ws error
-                //         // if exchange_socket_error_ts.is_some() {
-                //         //     // in case of exchange ws error, this function fetches updates at this point and update listener accordingly
-                //         //     // TODO: check this
-                //         //     // let _ = update_position_data_on_faulty_exchange_ws(
-                //         //     //     &exchange_socket_error_arc,
-                //         //     //     &exchange_listener,
-                //         //     //     &current_trade_listener,
-                //         //     //     &update_balance_listener,
-                //         //     //     &update_order_listener,
-                //         //     //     &update_executions_listener,
-                //         //     // )
-                //         //     // .await;
-                //         // }
-                //         match data_feed.update_trading_data(strategy_lf) {
-                //             Ok(updated_trading_data) => {
-                //                 // TODO: store this as field
-                //                 {
-                //                     let mut lock = data_feed
-                //                         .trading_data
-                //                         .lock()
-                //                         .expect("trading data deadlock");
-                //                     *lock = updated_trading_data.clone();
-                //                 }
-
-                //                 let trading_data_update =
-                //                     TradingDataUpdate::EmitSignal(updated_trading_data);
-
-                //                 data_feed
-                //                     .trading_data_update_listener
-                //                     .next(trading_data_update);
-                //             }
-                //             Err(error) => {
-                //                 todo!("treat error");
-                //             }
-                //         }
-                //     }
-                //     TradingDataUpdate::EmitSignal(updated_trading_data) => {
-                //         // TODO: updated_trading_data can be taken from data_feed = self
-
-                //         match data_feed.generate_last_position_signal(&updated_trading_data) {
-                //             Ok(signal) => {
-                //                 data_feed.signal_listener.next(Some(signal));
-                //                 let trading_data_update =
-                //                     TradingDataUpdate::CleanUp(updated_trading_data);
-
-                //                 data_feed
-                //                     .trading_data_update_listener
-                //                     .next(trading_data_update);
-                //             }
-                //             Err(error) => {
-                //                 todo!("treat error");
-                //             }
-                //         }
-                //     }
-                //     TradingDataUpdate::CleanUp(trading_data) => {
-                //         // TODD: check if this is supposed to be at trader
-                //         // let trading_data = trading_data_listener.value();
-                //         // let mut performance_guard = performance_arc
-                //         //     .lock()
-                //         //     .expect("TradingDataUpdate::CleanUp -> performance_arc.unwrap");
-                //         // let _ = performance_guard.update_trading_stats(&trading_data);
-
-                //         // let current_trade = current_trade_listener.value();
-
-                //         // if let Some(current_trade) = current_trade {
-                //         //     let mut temp_executions_guard = temp_executions_arc
-                //         //         .lock()
-                //         //         .expect("TradingDataUpdate::CleanUp -> temp_executions deadlock");
-
-                //         //     let open_order_uuid = &current_trade.open_order.uuid;
-
-                //         //     let close_order_uuid =
-                //         //         &current_trade.close_order.clone().unwrap_or_default().uuid;
-
-                //         //     let mut pending_executions = vec![];
-                //         //     let mut removed_executions_ids = vec![];
-
-                //         //     while let Some(execution) = temp_executions_guard.iter().next() {
-                //         //         if &execution.order_uuid == open_order_uuid
-                //         //             || close_order_uuid != ""
-                //         //                 && &execution.order_uuid == close_order_uuid
-                //         //         {
-                //         //             pending_executions.push(execution.clone());
-                //         //             removed_executions_ids.push(execution.id.clone());
-                //         //         }
-                //         //     }
-
-                //         //     if pending_executions.len() > 0 {
-                //         //         let updated_trade = current_trade
-                //         //             .update_executions(pending_executions)
-                //         //             .expect("TradingDataUpdate::CleanUp update_executions unwrap");
-
-                //         //         if updated_trade.is_some() {
-                //         //             let updated_trade = updated_trade.unwrap();
-                //         //             current_trade_listener.next(Some(updated_trade));
-
-                //         //             let filtered_temp_executions = temp_executions_guard
-                //         //                 .clone()
-                //         //                 .into_iter()
-                //         //                 .filter(|execution| {
-                //         //                     !removed_executions_ids.contains(&execution.id)
-                //         //                 })
-                //         //                 .collect::<Vec<Execution>>();
-
-                //         //             *temp_executions_guard = filtered_temp_executions;
-                //         //         }
-                //         //     }
-                //         // }
-                //     }
-                //     _ => {}
-                // }
             }
         })
     }
@@ -391,16 +247,6 @@ impl DataFeed {
     pub async fn init(&'static mut self) -> Result<(), GlowError> {
         self.init_kline_data_handler();
         self.init_data_provider_handler();
-
-        // let _ = data_provider_handle.await;
-
-        // if run_benchmark_only {
-        //     return Ok(());
-        // }
-        // TODO: move to trader?
-        // let mut trader_binding = self.trader_exchange_listener.value();
-        // let trader_handle = spawn(async move { trader_binding.init().await });
-        // let _ = trader_handle.await;
 
         Ok(())
     }
