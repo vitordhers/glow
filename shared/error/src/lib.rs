@@ -25,6 +25,13 @@ impl GlowError {
         Self { title, description }
     }
 
+    pub fn new_str(title: &str, description: &str) -> Self {
+        Self {
+            title: title.to_owned(),
+            description: description.to_owned(),
+        }
+    }
+
     pub fn new_unsuccessful_response(description: String) -> Self {
         Self {
             title: String::from("Unsuccessful Response"),

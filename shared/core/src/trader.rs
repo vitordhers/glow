@@ -445,89 +445,73 @@ impl Trader {
     }
 
     // TODO: refactor this
-    fn on_close_update_trading_data(
-        &self,
-        strategy_updated_data: DataFrame,
-    ) -> Result<Option<DataFrame>, GlowError> {
-        println!("{} on_close_update_trading_data", current_timestamp_ms());
+    fn on_close_trade_update_trading_data(&self) -> Result<(), GlowError> {
+        // println!("{} on_close_trade_update_trading_data", current_timestamp_ms());
+        let current_trade = self.current_trade_listener.value();
+        if current_trade.is_none() {
+            let error = GlowError::new_str("Invalid Trade Status", "Trade is None");
+            return Err(error);
+        }
+        let current_trade = current_trade.unwrap();
+        let trade_status = current_trade.status();
+        if trade_status != TradeStatus::Cancelled && trade_status != TradeStatus::Closed {
+            let error = GlowError::new_str(
+                "Invalid Trade Status",
+                "Status should've been TradeStatus::Closed or TradeStatus::Cancelled",
+            );
+            return Err(error);
+        }
+
         // missing trade_fees, units, profit_and_loss, returns, balance, position, action
-        let mut strategy_updated_data_clone = strategy_updated_data.clone();
+        let trading_data = self.get_trading_data()?;
 
         let (
             start_times,
-            mut trades_fees,
+            mut fees_col,
             mut units,
-            mut pnl,
-            mut returns,
+            mut pnl_col,
+            mut returns_col,
             mut balances,
             mut positions,
             mut actions,
-        ) = get_trading_columns_values(&strategy_updated_data)?;
+        ) = get_trading_columns_values(&trading_data)?;
 
         let index = start_times.len() - 1;
-
         let balance = self.current_balance_listener.value();
-        balances[index] = Some(balance.available_to_withdraw);
         let signal = self.signal_listener.value();
+
+        let (fees, pnl, returns) = if trade_status == TradeStatus::Cancelled {
+            (0.0, 0.0, 0.0)
+        } else {
+            let start_timestamp = start_times[index].expect(
+                "on_close_trade_update_trading_data -> TradeStatus::Closed arm -> interval_start_timestamp unwrap",
+            );
+            let end_timestamp = current_timestamp_ms() as i64;
+            let (pnl, returns) = current_trade.calculate_pnl_and_returns();
+            let fees =
+                current_trade.get_executed_fees_between_interval(start_timestamp, end_timestamp);
+            (fees, pnl, returns)
+        };
+        fees_col[index] = Some(fees);
+        units[index] = Some(0.0);
+        pnl_col[index] = Some(pnl);
+        returns_col[index] = Some(returns);
+        positions[index] = Some(0);
+        balances[index] = Some(balance.available_to_withdraw);
         actions[index] = Some(signal.get_column());
-        let trade = self.current_trade_listener.value();
 
-        let mut result = None;
-        match trade {
-            Some(current_trade) => {
-                let trade_status = current_trade.status();
-                match trade_status {
-                    TradeStatus::Cancelled | TradeStatus::Closed => {
-                        if trade_status == TradeStatus::Cancelled {
-                            trades_fees[index] = Some(0.0);
-                            units[index] = Some(0.0);
-                            pnl[index] = Some(0.0);
-                            returns[index] = Some(0.0);
-                            positions[index] = Some(0);
-                        } else {
-                            let interval_start_timestamp =  start_times[index]
-                                    .expect("update_trading_data -> TradeStatus::Closed arm -> interval_start_timestamp unwrap");
-                            let interval_end_timestamp = current_timestamp_ms() as i64;
+        let mut trading_data = trading_data.clone();
+        trading_data.replace("trade_fees", Series::new("trade_fees", fees_col))?;
+        trading_data.replace("units", Series::new("units", units))?;
+        trading_data.replace("profit_and_loss", Series::new("profit_and_loss", pnl_col))?;
+        trading_data.replace("returns", Series::new("returns", returns_col))?;
+        trading_data.replace("balance", Series::new("balance", balances))?;
+        trading_data.replace("position", Series::new("position", positions))?;
+        trading_data.replace("action", Series::new("action", actions))?;
 
-                            let (profit_and_loss, current_returns) =
-                                current_trade.calculate_pnl_and_returns();
+        self.update_trading_data(trading_data)?;
 
-                            let interval_fee = current_trade.get_executed_fees_between_interval(
-                                interval_start_timestamp,
-                                interval_end_timestamp,
-                            );
-
-                            trades_fees[index] = Some(interval_fee);
-                            units[index] = Some(0.0);
-                            pnl[index] = Some(profit_and_loss);
-                            returns[index] = Some(current_returns);
-                            positions[index] = Some(0);
-                        }
-
-                        // updates df
-                        strategy_updated_data_clone
-                            .replace("trade_fees", Series::new("trade_fees", trades_fees))?;
-                        strategy_updated_data_clone
-                            .replace("units", Series::new("units", units))?;
-                        strategy_updated_data_clone
-                            .replace("profit_and_loss", Series::new("profit_and_loss", pnl))?;
-                        strategy_updated_data_clone
-                            .replace("returns", Series::new("returns", returns))?;
-                        strategy_updated_data_clone
-                            .replace("balance", Series::new("balance", balances))?;
-                        strategy_updated_data_clone
-                            .replace("position", Series::new("position", positions))?;
-                        strategy_updated_data_clone
-                            .replace("action", Series::new("action", actions))?;
-                        result = Some(strategy_updated_data_clone);
-                    }
-                    _ => {}
-                }
-            }
-            None => {}
-        }
-
-        Ok(result)
+        Ok(())
     }
 
     // TODO: refactor this
@@ -542,11 +526,14 @@ impl Trader {
 
                 let current_trade = current_trade.unwrap();
                 let trade_status = current_trade.status();
-                if trade_status == TradeStatus::Cancelled || trade_status == TradeStatus::Closed {
-                    if trade_status == TradeStatus::Closed {
-                        let close_order = current_trade.clone().close_order.unwrap();
-                        let (pnl, returns) = current_trade.calculate_pnl_and_returns();
-                        println!(
+                if trade_status != TradeStatus::Cancelled && trade_status != TradeStatus::Closed {
+                    continue;
+                }
+
+                if trade_status == TradeStatus::Closed {
+                    let close_order = current_trade.clone().close_order.unwrap();
+                    let (pnl, returns) = current_trade.calculate_pnl_and_returns();
+                    println!(
                             "\n{:?} | 📕 Closed Order {:?} side ({:?} units), profit/loss: {}, returns: {}",
                             current_datetime(),
                             current_trade.open_order.side,
@@ -554,27 +541,17 @@ impl Trader {
                             pnl,
                             returns
                         );
-                    } else {
-                        println!(
-                            "\n{:?} | ❌ Current Order side {:?} cancelled successfully!",
-                            current_datetime(),
-                            current_trade.open_order.side,
-                        );
-                    }
+                } else {
+                    println!(
+                        "\n{:?} | ❌ Current Order side {:?} cancelled successfully!",
+                        current_datetime(),
+                        current_trade.open_order.side,
+                    );
+                }
 
-                    // let trading_data = trader.trading_data_listener.value();
-                    // let updated_trading_data = trader.on_close_update_trading_data(
-                    //     trading_data
-                    // )
-                    // .expect(
-                    //     "get_current_trade_update_handle -> on_close_update_trading_data unwrap failed",
-                    // );
-                    // if updated_trading_data.is_some() {
-                    //     let updated_trading_data = updated_trading_data.unwrap();
-                    //     trader.trading_data_listener.next(updated_trading_data);
-                    // }
-
-                    trader.current_trade_listener.next(None);
+                match trader.on_close_trade_update_trading_data() {
+                    Ok(_) => {}
+                    Err(error) => println!("on_close_trade_update_trading_data error {:?}", error),
                 }
             }
         })
@@ -1029,57 +1006,55 @@ impl Trader {
         Ok(emitted_signal)
     }
 
-    // fn clean_data(&self, trading_data: DataFrame) -> Result<(), GlowError> {
-    //     // let mut performance_guard = performance_arc
-    //     //     .lock()
-    //     //     .expect("TradingDataUpdate::CleanUp -> performance_arc.unwrap");
-    //     // let _ = performance_guard.update_trading_stats(&trading_data);
+    fn clean_data(&self, trading_data: DataFrame) -> Result<(), GlowError> {
+        // let mut performance_guard = performance_arc
+        //     .lock()
+        //     .expect("TradingDataUpdate::CleanUp -> performance_arc.unwrap");
+        // let _ = performance_guard.update_trading_stats(&trading_data);
 
-    //     let current_trade = self.current_trade_listener.value();
-
-    //     if current_trade.is_none() {
-    //         return Ok(());
-    //     }
-    //     let current_trade = current_trade.unwrap();
-    //     let mut temp_executions_guard = temp_executions_arc
-    //         .lock()
-    //         .expect("TradingDataUpdate::CleanUp -> temp_executions deadlock");
-
-    //     let open_order_uuid = &current_trade.open_order.uuid;
-
-    //     let close_order_uuid = &current_trade.close_order.clone().unwrap_or_default().uuid;
-
-    //     let mut pending_executions = vec![];
-    //     let mut removed_executions_ids = vec![];
-
-    //     while let Some(execution) = temp_executions_guard.iter().next() {
-    //         if &execution.order_uuid == open_order_uuid
-    //             || close_order_uuid != "" && &execution.order_uuid == close_order_uuid
-    //         {
-    //             pending_executions.push(execution.clone());
-    //             removed_executions_ids.push(execution.id.clone());
-    //         }
-    //     }
-
-    //     if pending_executions.len() > 0 {
-    //         let updated_trade = current_trade
-    //             .update_executions(pending_executions)
-    //             .expect("TradingDataUpdate::CleanUp update_executions unwrap");
-
-    //         if updated_trade.is_some() {
-    //             let updated_trade = updated_trade.unwrap();
-    //             current_trade_listener.next(Some(updated_trade));
-
-    //             let filtered_temp_executions = temp_executions_guard
-    //                 .clone()
-    //                 .into_iter()
-    //                 .filter(|execution| !removed_executions_ids.contains(&execution.id))
-    //                 .collect::<Vec<Execution>>();
-
-    //             *temp_executions_guard = filtered_temp_executions;
-    //         }
-    //     }
-    // }
+        let current_trade = self.current_trade_listener.value();
+        if current_trade.is_none() {
+            return Ok(());
+        }
+        let current_trade = current_trade.unwrap();
+        let mut temp_executions_guard = self
+            .temp_executions
+            .lock()
+            .expect("TradingDataUpdate::CleanUp -> temp_executions deadlock");
+        if temp_executions_guard.len() <= 0 {
+            return Ok(());
+        }
+        let open_order_uuid = &current_trade.open_order.uuid;
+        let close_order_uuid = &current_trade.close_order.clone().unwrap_or_default().uuid;
+        let mut pending_executions = vec![];
+        let mut removed_executions_ids = vec![];
+        for execution in temp_executions_guard.iter() {
+            if &execution.order_uuid == open_order_uuid
+                || close_order_uuid != "" && &execution.order_uuid == close_order_uuid
+            {
+                pending_executions.push(execution.clone());
+                removed_executions_ids.push(execution.id.clone());
+            }
+        }
+        if pending_executions.len() <= 0 {
+            return Ok(());
+        }
+        let updated_trade = current_trade
+            .update_executions(pending_executions)
+            .expect("TradingDataUpdate::CleanUp update_executions unwrap");
+        if updated_trade.is_none() {
+            return Ok(());
+        }
+        let updated_trade = updated_trade.unwrap();
+        self.current_trade_listener.next(Some(updated_trade));
+        let filtered_temp_executions = temp_executions_guard
+            .clone()
+            .into_iter()
+            .filter(|execution| !removed_executions_ids.contains(&execution.id))
+            .collect::<Vec<Execution>>();
+        *temp_executions_guard = filtered_temp_executions;
+        Ok(())
+    }
 
     fn handle_updated_strategy_data(
         &self,
