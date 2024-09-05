@@ -33,12 +33,11 @@ use std::{
     collections::HashMap,
     env::var as env_var,
     sync::{Arc, Mutex},
-    time::{Duration as StdDuration, SystemTime, UNIX_EPOCH},
+    time::Duration as StdDuration,
 };
 use tokio::{
     net::TcpStream,
     spawn,
-    task::JoinHandle,
     time::{sleep, sleep_until, Instant},
 };
 use tokio_stream::StreamExt;

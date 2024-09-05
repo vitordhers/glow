@@ -48,12 +48,7 @@ use reqwest::{
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{from_str, to_string as to_json_string};
 use serde_urlencoded::to_string as to_url_string;
-use std::{
-    collections::HashMap,
-    sync::Mutex,
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, sync::Mutex, time::Duration};
 use structs::{
     BybitHttpResponseWrapper, CancelOrderDto, CreateOrderDto, FetchWalletBalanceDto,
     HttpResultList, PingWsMessage, WalletData,
