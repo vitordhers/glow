@@ -13,9 +13,10 @@ use std::{
 };
 
 pub mod csv;
+pub mod performance;
 
 use crate::{
-    constants::{MINUTES_IN_DAY, NANOS_IN_SECOND, SECONDS_IN_MIN},
+    constants::{NANOS_IN_SECOND, SECONDS_IN_MIN},
     enums::signal_category::SignalCategory,
     r#static::SYMBOLS_MAP,
     structs::{Symbol, TickData},

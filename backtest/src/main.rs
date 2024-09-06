@@ -11,7 +11,7 @@ use dotenv::dotenv;
 use exchanges::enums::{
     DataProviderExchangeId, DataProviderExchangeWrapper, TraderExchangeId, TraderExchangeWrapper,
 };
-use futures_util::StreamExt;
+
 use std::env;
 use std::sync::{Arc, Mutex};
 use strategy::{Strategy, StrategyId};

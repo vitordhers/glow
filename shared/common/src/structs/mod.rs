@@ -19,5 +19,8 @@ pub use trade::*;
 mod trading_settings;
 pub use trading_settings::*;
 
+mod statistics;
+pub use statistics::*;
+
 mod symbol;
 pub use symbol::*;

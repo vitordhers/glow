@@ -12,7 +12,6 @@ use common::{
     traits::exchange::{BenchmarkExchange, TraderExchange, TraderHelper},
 };
 use exchanges::enums::TraderExchangeWrapper;
-use futures_util::StreamExt;
 use glow_error::GlowError;
 use polars::prelude::*;
 use std::{
@@ -20,6 +19,7 @@ use std::{
     time::Instant,
 };
 use tokio::{spawn, task::JoinHandle};
+use tokio_stream::StreamExt;
 
 #[derive(Clone)]
 pub struct Trader {
@@ -447,7 +447,6 @@ impl Trader {
         })
     }
 
-    // TODO: refactor this
     fn on_close_trade_update_trading_data(&self) -> Result<(), GlowError> {
         // println!("{} on_close_trade_update_trading_data", current_timestamp_ms());
         let current_trade = self.current_trade_listener.value();
@@ -514,6 +513,7 @@ impl Trader {
 
         self.update_trading_data(trading_data)?;
 
+        self.current_trade_listener.next(None);
         Ok(())
     }
 
