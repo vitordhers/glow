@@ -32,7 +32,6 @@ pub struct Trader {
     temp_executions: Arc<Mutex<Vec<Execution>>>,
     trading_data: Arc<Mutex<DataFrame>>,
     trading_data_klines_limit: Arc<RwLock<u32>>,
-    update_balance_listener: BehaviorSubject<Option<Balance>>,
     update_order_listener: BehaviorSubject<Option<OrderAction>>,
     update_executions_listener: BehaviorSubject<Vec<Execution>>,
 }
@@ -43,25 +42,22 @@ impl Trader {
         current_trade_listener: &BehaviorSubject<Option<Trade>>,
         exchange_listener: &BehaviorSubject<TraderExchangeWrapper>,
         performance_data_emitter: &BehaviorSubject<TradingDataUpdate>,
-        signal_listener: &BehaviorSubject<SignalCategory>,
         strategy_data_listener: &BehaviorSubject<TradingDataUpdate>,
         trading_data: &Arc<Mutex<DataFrame>>,
         trading_data_klines_limit: &Arc<RwLock<u32>>,
-        update_balance_listener: &BehaviorSubject<Option<Balance>>,
         update_order_listener: &BehaviorSubject<Option<OrderAction>>,
         update_executions_listener: &BehaviorSubject<Vec<Execution>>,
     ) -> Trader {
         Trader {
-            performance_data_emitter: performance_data_emitter.clone(),
             current_balance_listener: current_balance_listener.clone(),
             current_trade_listener: current_trade_listener.clone(),
             exchange_listener: exchange_listener.clone(),
-            signal_listener: signal_listener.clone(),
+            performance_data_emitter: performance_data_emitter.clone(),
+            signal_listener: BehaviorSubject::new(SignalCategory::default()),
             temp_executions: Arc::new(Mutex::new(Vec::new())),
             strategy_data_listener: strategy_data_listener.clone(),
             trading_data: trading_data.clone(),
             trading_data_klines_limit: trading_data_klines_limit.clone(),
-            update_balance_listener: update_balance_listener.clone(),
             update_order_listener: update_order_listener.clone(),
             update_executions_listener: update_executions_listener.clone(),
         }
@@ -290,18 +286,17 @@ impl Trader {
         })
     }
 
-    // TODO: check if it makes sense to have two behavior subjects for apparently the same data
-    fn init_balance_update_handler(&self) -> JoinHandle<()> {
-        let trader = self.clone();
-        spawn(async move {
-            let mut subscription = trader.update_balance_listener.subscribe();
-            while let Some(balance_update) = subscription.next().await {
-                if let Some(balance) = balance_update {
-                    trader.current_balance_listener.next(balance)
-                }
-            }
-        })
-    }
+    // fn init_balance_update_handler(&self) -> JoinHandle<()> {
+    //     let trader = self.clone();
+    //     spawn(async move {
+    //         let mut subscription = trader.update_balance_listener.subscribe();
+    //         while let Some(balance_update) = subscription.next().await {
+    //             if let Some(balance) = balance_update {
+    //                 trader.current_balance_listener.next(balance)
+    //             }
+    //         }
+    //     })
+    // }
 
     fn add_executions_to_order_and_remove_from_temp(&self, order: Order) -> Order {
         // let mut updated_order = order.clone();
@@ -1128,7 +1123,7 @@ impl Trader {
         //     }
         // });
         self.init_strategy_data_handler();
-        self.init_balance_update_handler();
+        // self.init_balance_update_handler();
         self.init_executions_update_handler();
         self.init_order_update_handler();
         self.init_signal_handler();
