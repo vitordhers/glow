@@ -1,9 +1,9 @@
 use chrono::NaiveDateTime;
+use common::enums::trading_data_update::TradingDataUpdate;
 use common::structs::Symbol;
 use common::{
-    enums::{balance::Balance, order_action::OrderAction, trading_data_update::TradingDataUpdate},
-    structs::{BehaviorSubject, Execution, Trade},
-    traits::exchange::{DataProviderExchange, TraderExchange, TraderHelper},
+    structs::BehaviorSubject,
+    traits::exchange::{DataProviderExchange, TraderHelper},
 };
 use exchanges::enums::{DataProviderExchangeWrapper, TraderExchangeWrapper};
 use glow_error::GlowError;
@@ -11,29 +11,33 @@ use polars::prelude::*;
 use std::sync::{Arc, Mutex};
 use strategy::Strategy;
 use tokio::spawn;
+use tokio::task::JoinHandle;
+use tokio_stream::StreamExt;
 
 #[derive(Clone)]
 pub struct DataFeed {
     benchmark_datetimes: (Option<NaiveDateTime>, Option<NaiveDateTime>), // (start, end)
-    pub current_trade_listener: BehaviorSubject<Option<Trade>>,
-    pub data_provider_exchange: DataProviderExchangeWrapper,
-    pub data_provider_last_ws_error_ts: Arc<Mutex<Option<i64>>>,
-    pub run_benchmark_only: bool,
-    pub kline_data_schema: Schema,
-    pub minimum_klines_for_benchmarking: u32,
-    pub trading_data_schema: Schema,
-    pub trading_data_update_listener: BehaviorSubject<TradingDataUpdate>,
-    pub trader_exchange_listener: BehaviorSubject<TraderExchangeWrapper>,
-    pub update_balance_listener: BehaviorSubject<Option<Balance>>,
-    pub update_executions_listener: BehaviorSubject<Vec<Execution>>,
-    pub update_order_listener: BehaviorSubject<Option<OrderAction>>,
+    // pub current_trade_listener: BehaviorSubject<Option<Trade>>, // TODO check if this is really necessary
+    data_provider_exchange: DataProviderExchangeWrapper,
+    data_provider_last_ws_error_ts: Arc<Mutex<Option<i64>>>,
+    kline_data_listener: BehaviorSubject<TradingDataUpdate>,
+    run_benchmark_only: bool, // TODO check if this is really necessary
+    // pub kline_data_schema: Schema, // TODO check if this is really necessary
+    minimum_klines_for_benchmarking: u32, // TODO check if this is really necessary
+    // signal_listener: BehaviorSubject<SignalCategory>,
+    strategy: Strategy,
+    strategy_data_emitter: BehaviorSubject<TradingDataUpdate>,
+    trading_data: Arc<Mutex<DataFrame>>,
+    trading_data_schema: Schema,
+    // pub trading_data_update_listener: BehaviorSubject<TradingDataUpdate>, // TODO: deprecate this
+    // pub trader_exchange_listener: BehaviorSubject<TraderExchangeWrapper>, // TODO check if this is really necessary
+    // pub update_balance_listener: BehaviorSubject<Option<Balance>>, // TODO check if this is really necessary
+    // pub update_executions_listener: BehaviorSubject<Vec<Execution>>, // TODO check if this is really necessary
+    // pub update_order_listener: BehaviorSubject<Option<OrderAction>>, // TODO check if this is really necessary
 }
 
 impl DataFeed {
-    fn insert_kline_fields(
-        schema_fields: &mut Vec<Field>,
-        unique_symbols: &Vec<&Symbol>,
-    ) -> Schema {
+    fn insert_kline_fields(schema_fields: &mut Vec<Field>, unique_symbols: &Vec<&Symbol>) {
         for symbol in unique_symbols {
             let (open_col, high_col, low_col, close_col) = symbol.get_ohlc_cols();
             schema_fields.push(Field::new(&open_col, DataType::Float64));
@@ -41,8 +45,6 @@ impl DataFeed {
             schema_fields.push(Field::new(&close_col, DataType::Float64));
             schema_fields.push(Field::new(&low_col, DataType::Float64));
         }
-
-        Schema::from_iter(schema_fields.clone().into_iter())
     }
 
     fn insert_indicators_fields(schema_fields: &mut Vec<Field>, strategy: &Strategy) {
@@ -61,7 +63,7 @@ impl DataFeed {
         }
     }
 
-    fn insert_performance_fields(schema_fields: &mut Vec<Field>) -> Schema {
+    fn insert_trading_fields(schema_fields: &mut Vec<Field>) -> Schema {
         schema_fields.push(Field::new("trade_fees", DataType::Float64));
         schema_fields.push(Field::new("units", DataType::Float64));
         schema_fields.push(Field::new("profit_and_loss", DataType::Float64));
@@ -74,16 +76,14 @@ impl DataFeed {
 
     pub fn new(
         benchmark_datetimes: (Option<NaiveDateTime>, Option<NaiveDateTime>),
-        current_trade_listener: &BehaviorSubject<Option<Trade>>,
-        data_provider_last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
         data_provider_exchange: DataProviderExchangeWrapper,
+        data_provider_last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
+        kline_data_listener: &BehaviorSubject<TradingDataUpdate>,
         run_benchmark_only: bool,
         strategy: &Strategy,
-        trading_data_update_listener: &BehaviorSubject<TradingDataUpdate>,
-        trader_exchange_listener: &BehaviorSubject<TraderExchangeWrapper>,
-        update_balance_listener: &BehaviorSubject<Option<Balance>>,
-        update_executions_listener: &BehaviorSubject<Vec<Execution>>,
-        update_order_listener: &BehaviorSubject<Option<OrderAction>>,
+        strategy_data_emitter: &BehaviorSubject<TradingDataUpdate>,
+        trader_exchange_listener: BehaviorSubject<TraderExchangeWrapper>,
+        trading_data: &Arc<Mutex<DataFrame>>,
     ) -> DataFeed {
         if let (Some(benchmark_start), Some(benchmark_end)) = benchmark_datetimes {
             assert!(
@@ -101,61 +101,185 @@ impl DataFeed {
         let trading_settings = trader_exchange.get_trading_settings();
         let unique_symbols = trading_settings.get_unique_symbols();
 
-        let kline_data_schema = Self::insert_kline_fields(&mut schema_fields, &unique_symbols);
+        Self::insert_kline_fields(&mut schema_fields, &unique_symbols);
 
         Self::insert_indicators_fields(&mut schema_fields, &strategy);
         Self::insert_signals_fields(&mut schema_fields, &strategy);
 
         let minimum_klines_for_benchmarking = strategy.get_minimum_klines_for_calculation();
 
-        let trading_data_schema = Self::insert_performance_fields(&mut schema_fields);
+        let trading_data_schema = Self::insert_trading_fields(&mut schema_fields);
+        let trading_data = trading_data.clone();
+        {
+            let mut trading_data_lock = trading_data.lock().unwrap();
+            *trading_data_lock = DataFrame::from(&trading_data_schema);
+        }
 
         DataFeed {
             benchmark_datetimes,
-            current_trade_listener: current_trade_listener.clone(),
+            // benchmark_data_emitter: benchmark_data_emitter.clone(),
+            // current_trade_listener: current_trade_listener.clone(),
             data_provider_exchange,
             data_provider_last_ws_error_ts: data_provider_last_ws_error_ts.clone(),
             run_benchmark_only,
-            kline_data_schema,
+            kline_data_listener: kline_data_listener.clone(),
+            // kline_data_schema,
             minimum_klines_for_benchmarking,
+            // signal_listener: signal_listener.clone(),
+            strategy: strategy.clone(),
+            strategy_data_emitter: strategy_data_emitter.clone(),
+            trading_data,
             trading_data_schema,
-            trading_data_update_listener: trading_data_update_listener.clone(),
-            trader_exchange_listener: trader_exchange_listener.clone(),
-            update_balance_listener: update_balance_listener.clone(),
-            update_executions_listener: update_executions_listener.clone(),
-            update_order_listener: update_order_listener.clone(),
+            // trading_data_update_listener: trading_data_update_listener.clone(),
+            // trader_exchange_listener: trader_exchange_listener.clone(),
+            // update_balance_listener: update_balance_listener.clone(),
+            // update_executions_listener: update_executions_listener.clone(),
+            // update_order_listener: update_order_listener.clone(),
         }
     }
 
-    pub async fn init(&'static mut self) -> Result<(), GlowError> {
+    fn set_initial_strategy_data(
+        &self,
+        initial_klines_lf: LazyFrame,
+    ) -> Result<LazyFrame, GlowError> {
+        let initial_strategy_lf = self.strategy.append_indicators_to_lf(initial_klines_lf)?;
+        let initial_strategy_lf = self.strategy.append_signals_to_lf(initial_strategy_lf)?;
+        let initial_strategy_lf = initial_strategy_lf.cache();
+        Ok(initial_strategy_lf)
+    }
+
+    fn handle_initial_klines(&self, initial_klines_df: DataFrame) -> Result<DataFrame, GlowError> {
+        let initial_klines_lf = initial_klines_df.lazy();
+        let initial_klines_lf = self.set_initial_strategy_data(initial_klines_lf)?;
+        let initial_strategy_data = initial_klines_lf.collect()?;
+        Ok(initial_strategy_data)
+    }
+
+    fn update_strategy_data(&self, market_klines_df: DataFrame) -> Result<DataFrame, GlowError> {
+        let trading_data: DataFrame;
+
+        {
+            let trading_data_lock = self.trading_data.lock().unwrap();
+            trading_data = trading_data_lock.clone();
+        }
+        let updated_strategy_data = trading_data.vstack(&market_klines_df)?;
+
+        let updated_strategy_data = self
+            .strategy
+            .append_indicators_to_df(updated_strategy_data)?;
+        let updated_strategy_data = self.strategy.append_signals_to_df(updated_strategy_data)?;
+        Ok(updated_strategy_data)
+    }
+
+    fn handle_market_klines(&self, market_klines_df: DataFrame) -> Result<DataFrame, GlowError> {
+        let updated_strategy_df = self.update_strategy_data(market_klines_df)?;
+        Ok(updated_strategy_df)
+    }
+
+    fn init_kline_data_handler(&self) -> JoinHandle<()> {
+        let data_feed = self.clone();
+        spawn(async move {
+            let mut subscription = data_feed.kline_data_listener.subscribe();
+            while let Some(klines_data) = subscription.next().await {
+                match klines_data {
+                    TradingDataUpdate::Initial(initial_klines_df) => {
+                        match data_feed.handle_initial_klines(initial_klines_df) {
+                            Ok(initial_strategy_df) => {
+                                let payload = TradingDataUpdate::Initial(initial_strategy_df);
+                                data_feed.strategy_data_emitter.next(payload);
+                            }
+                            Err(error) => {
+                                println!("handle_initial_klines error {:?}", error);
+                            }
+                        }
+                    }
+                    TradingDataUpdate::Market(market_klines_df) => {
+                        match data_feed.handle_market_klines(market_klines_df) {
+                            Ok(updated_strategy_df) => {
+                                let payload = TradingDataUpdate::Market(updated_strategy_df);
+                                data_feed.strategy_data_emitter.next(payload);
+                            }
+                            Err(error) => {
+                                println!("handle_market_klines error {:?}", error);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        })
+    }
+
+    fn init_data_provider_handler(&self) -> JoinHandle<()> {
         let mut data_provider_binding = self.data_provider_exchange.clone();
-        let kline_data_schema = self.kline_data_schema.clone();
         let run_benchmark_only = self.run_benchmark_only;
         let trading_data_schema = self.trading_data_schema.clone();
         let benchmark_start = self.benchmark_datetimes.0;
         let benchmark_end = self.benchmark_datetimes.1;
 
-        let data_provider_handle = spawn(async move {
+        spawn(async move {
             let _ = data_provider_binding
                 .init(
                     benchmark_start,
                     benchmark_end,
-                    kline_data_schema,
                     run_benchmark_only,
                     trading_data_schema,
                 )
                 .await;
-        });
-        let _ = data_provider_handle.await;
+        })
+    }
 
-        if run_benchmark_only {
-            return Ok(());
-        }
+    fn init_data_provider(&self) -> JoinHandle<()> {
+        let mut data_feed = self.clone();
+        spawn(async move {
+            let _ = data_feed
+                .data_provider_exchange
+                .init(
+                    data_feed.benchmark_datetimes.0,
+                    data_feed.benchmark_datetimes.1,
+                    data_feed.run_benchmark_only,
+                    data_feed.trading_data_schema,
+                )
+                .await;
+        })
+    }
 
-        let mut trader_binding = self.trader_exchange_listener.value();
-        let trader_handle = spawn(async move { trader_binding.init().await });
-        let _ = trader_handle.await;
+    pub async fn init(&'static mut self) -> Result<(), GlowError> {
+        self.init_kline_data_handler();
+        self.init_data_provider_handler();
 
         Ok(())
     }
 }
+
+// #[test]
+// fn test_vstack() {
+//     use common::functions::coerce_df_to_schema;
+
+//     let df1 = df![
+//         "start_time" => &[1, 2, 3],
+//         "col2" => &["1", "2", "3"],
+//         "col3" => &["1", "2", "3"],
+//     ]
+//     .unwrap();
+
+//     let df2 = df![
+//         "start_time" => &[4],
+//         "col2" => &["4"],
+//     ]
+//     .unwrap();
+
+//     let df2 = coerce_df_to_schema(df2, &df1.schema()).unwrap();
+
+//     let mut result_df = df1.vstack(&df2).unwrap();
+
+//     let update_last_col =  |series: &Series| -> Series {
+//         let test = series.utf8().unwrap().app
+
+//         series2
+//     };
+
+//     result_df.apply("col3", update_last_col).unwrap();
+
+//     println!("{:?}", result_df);
+// }

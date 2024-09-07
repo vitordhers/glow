@@ -164,3 +164,12 @@ fn create_directories(path: &str) -> std::io::Result<()> {
     }
     Ok(())
 }
+
+pub fn get_current_env_log_path() -> String {
+    let env = env::var("ENV_NAME").unwrap().to_uppercase();
+    if env == "PROD".to_string() {
+        "data/journals".to_string()
+    } else {
+        "data/test".to_string()
+    }
+}

@@ -10,5 +10,5 @@ pub enum OrderStatus {
     StoppedBR, // stop bankruptcy
     StoppedSL, // stop loss
     StoppedTP, // taking profit
-    StoppedTSL // trailing stop loss
+    // StoppedTSL // trailing stop loss
 }

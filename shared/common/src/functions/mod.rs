@@ -13,9 +13,11 @@ use std::{
 };
 
 pub mod csv;
+pub mod performance;
 
 use crate::{
-    constants::{MINUTES_IN_DAY, NANOS_IN_SECOND, SECONDS_IN_MIN},
+    constants::{NANOS_IN_SECOND, SECONDS_IN_MIN},
+    enums::signal_category::SignalCategory,
     r#static::SYMBOLS_MAP,
     structs::{Symbol, TickData},
 };
@@ -274,6 +276,7 @@ pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
 //     Ok(DataFrame::new(df_series)?.fill_null(FillNullStrategy::Forward(None))?)
 // }
 
+// TODO: deprecate this
 pub fn map_and_downsample_ticks_data_to_df2(
     ticks_data: &Vec<TickData>,
     unique_symbols: &Vec<&Symbol>,
@@ -371,6 +374,23 @@ pub fn map_ticks_data_to_df(ticks_data: &Vec<TickData>) -> Result<DataFrame, Glo
         },
     ))?;
     Ok(df)
+}
+
+pub fn coerce_df_to_schema(df: DataFrame, schema: &Schema) -> Result<DataFrame, GlowError> {
+    let current_schema = df.schema();
+    let data_size = df.height();
+    let mut result_df = df.clone();
+    for (col, dtype) in schema.clone().into_iter() {
+        let is_already_in_df = current_schema.contains(&col);
+        if is_already_in_df {
+            continue;
+        }
+
+        let null_series = Series::full_null(&col, data_size, &dtype);
+        let _ = result_df.with_column(null_series);
+    }
+
+    Ok(result_df)
 }
 
 fn map_ticks_data_to_kline_df(
@@ -711,6 +731,131 @@ pub fn calculate_hmac(api_secret: &str, message: &str) -> Result<String, FromUtf
         .collect::<String>();
 
     Ok(signature)
+}
+
+pub fn get_trading_columns_values(
+    df: &DataFrame,
+) -> Result<
+    (
+        Vec<Option<i64>>,
+        Vec<Option<f64>>,
+        Vec<Option<f64>>,
+        Vec<Option<f64>>,
+        Vec<Option<f64>>,
+        Vec<Option<f64>>,
+        Vec<Option<i32>>,
+        Vec<Option<&str>>,
+    ),
+    GlowError,
+> {
+    let series_binding = df.columns([
+        "start_time",
+        "trade_fees",
+        "units",
+        "profit_and_loss",
+        "returns",
+        "balance",
+        "position",
+        "action",
+    ])?;
+
+    let mut series = series_binding.iter();
+    let start_times: Vec<Option<i64>> = series.next().unwrap().datetime()?.into_iter().collect();
+    let trades_fees: Vec<Option<f64>> = series.next().unwrap().f64()?.into_iter().collect();
+    let units: Vec<Option<f64>> = series.next().unwrap().f64()?.into_iter().collect();
+    let pnl: Vec<Option<f64>> = series.next().unwrap().f64()?.into_iter().collect();
+    let returns: Vec<Option<f64>> = series.next().unwrap().f64()?.into_iter().collect();
+    let balances: Vec<Option<f64>> = series.next().unwrap().f64()?.into_iter().collect();
+    let positions: Vec<Option<i32>> = series.next().unwrap().i32()?.into_iter().collect();
+    let actions: Vec<Option<&str>> = series.next().unwrap().utf8()?.into_iter().collect();
+    Ok((
+        start_times,
+        trades_fees,
+        units,
+        pnl,
+        returns,
+        balances,
+        positions,
+        actions,
+    ))
+}
+
+pub fn check_last_index_for_signal(
+    trading_data_df: &DataFrame,
+    signal_category: SignalCategory,
+) -> Result<bool, GlowError> {
+    let trading_data_schema = trading_data_df.schema();
+    let signal_column = signal_category.get_column();
+    if !trading_data_schema.contains(signal_column) {
+        return Ok(false);
+    }
+
+    let last_index = trading_data_df.height() - 1;
+    let column = trading_data_df
+        .column(signal_column)?
+        .i32()
+        .unwrap()
+        .into_no_null_iter()
+        .collect::<Vec<i32>>();
+    let value = column.get(last_index).unwrap();
+    return Ok(value == &1);
+}
+
+pub fn get_signal_col_values(
+    df: &DataFrame,
+    signal_category: SignalCategory,
+) -> Result<Vec<i32>, GlowError> {
+    let schema = df.schema();
+    let signal_column = signal_category.get_column();
+    let df_height = df.height();
+    if !schema.contains(signal_column) {
+        return Ok(vec![0; df_height]);
+    }
+
+    let result = df
+        .column(signal_column)?
+        .i32()
+        .unwrap()
+        .into_no_null_iter()
+        .collect::<Vec<i32>>();
+    Ok(result)
+}
+
+pub fn get_price_columns(
+    df: &DataFrame,
+    symbol: &Symbol,
+) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>), GlowError> {
+    let (open_col, high_col, low_col, close_col) = symbol.get_ohlc_cols();
+    let opens = df
+        .column(&open_col)
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect::<Vec<f64>>();
+    let highs = df
+        .column(&high_col)
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect::<Vec<f64>>();
+    let lows = df
+        .column(&low_col)
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect::<Vec<f64>>();
+    let closes = df
+        .column(&close_col)
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect::<Vec<f64>>();
+
+    Ok((opens, highs, lows, closes))
 }
 
 pub fn calculate_remainder(dividend: f64, divisor: f64) -> f64 {

@@ -38,7 +38,7 @@ impl DataProviderExchangeWrapper {
         last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
         minimum_klines_for_benchmarking: u32,
         symbols_pair: SymbolsPair,
-        trading_data_update_listener: &BehaviorSubject<TradingDataUpdate>,
+        klines_data_update_emitter: &BehaviorSubject<TradingDataUpdate>,
     ) -> Self {
         match selected_exchange {
             DataProviderExchangeId::Binance => Self::Binance(BinanceDataProvider::new(
@@ -46,7 +46,7 @@ impl DataProviderExchangeWrapper {
                 last_ws_error_ts,
                 minimum_klines_for_benchmarking,
                 symbols_pair,
-                trading_data_update_listener,
+                klines_data_update_emitter,
             )),
         }
     }
@@ -70,7 +70,6 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
         &mut self,
         benchmark_start: Option<NaiveDateTime>,
         benchmark_end: Option<NaiveDateTime>,
-        kline_data_schema: Schema,
         run_benchmark_only: bool,
         trading_data_schema: Schema,
     ) -> Result<(), GlowError> {
@@ -79,7 +78,6 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
                 ex.init(
                     benchmark_start,
                     benchmark_end,
-                    kline_data_schema,
                     run_benchmark_only,
                     trading_data_schema,
                 )
@@ -101,18 +99,19 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
     async fn handle_committed_ticks_data(
         &self,
         benchmark_end: NaiveDateTime,
-        kline_data_schema: &Schema,
         trading_data_schema: &Schema,
     ) -> Result<(), GlowError> {
         match self {
             Self::Binance(ex) => {
-                ex.handle_committed_ticks_data(
-                    benchmark_end,
-                    kline_data_schema,
-                    trading_data_schema,
-                )
-                .await
+                ex.handle_committed_ticks_data(benchmark_end, trading_data_schema)
+                    .await
             }
+        }
+    }
+
+    fn handle_ws_error(&self, trading_data_schema: &Schema) -> Option<NaiveDateTime> {
+        match self {
+            Self::Binance(ex) => ex.handle_ws_error(trading_data_schema),
         }
     }
 }
@@ -441,26 +440,35 @@ impl BenchmarkExchange for TraderExchangeWrapper {
         }
     }
 
-    fn check_price_level_modifiers(
+    fn close_benchmark_trade_on_binding_price(
         &self,
         trade: &Trade,
         current_timestamp: i64,
-        close_price: f64,
-        stop_loss: Option<&common::enums::modifiers::price_level::PriceLevel>,
-        take_profit: Option<&common::enums::modifiers::price_level::PriceLevel>,
-        trailing_stop_loss: Option<&common::enums::modifiers::price_level::PriceLevel>,
-        current_peak_returns: f64,
-    ) -> Result<Option<Trade>, GlowError> {
+        binding_price: f64,
+    ) -> Result<Trade, GlowError> {
         match self {
-            Self::Bybit(ex) => ex.check_price_level_modifiers(
-                trade,
-                current_timestamp,
-                close_price,
-                stop_loss,
-                take_profit,
-                trailing_stop_loss,
-                current_peak_returns,
-            ),
+            Self::Bybit(ex) => {
+                ex.close_benchmark_trade_on_binding_price(trade, current_timestamp, binding_price)
+            }
         }
     }
+
+    // fn check_price_level_modifiers(
+    //     &self,
+    //     trade: &Trade,
+    //     current_timestamp: i64,
+
+    // ) -> Result<Option<Trade>, GlowError> {
+    //     match self {
+    //         Self::Bybit(ex) => ex.check_price_level_modifiers(
+    //             trade,
+    //             current_timestamp,
+    //             close_price,
+    //             stop_loss,
+    //             take_profit,
+    //             trailing_stop_loss,
+    //             current_peak_returns,
+    //         ),
+    //     }
+    // }
 }

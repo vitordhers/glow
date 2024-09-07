@@ -1,12 +1,7 @@
 use crate::{
     enums::{
-        balance::Balance,
-        modifiers::{leverage::Leverage, price_level::PriceLevel},
-        order_status::OrderStatus,
-        order_type::OrderType,
-        side::Side,
-        symbol_id::SymbolId,
-        trade_status::TradeStatus,
+        balance::Balance, modifiers::leverage::Leverage, order_status::OrderStatus,
+        order_type::OrderType, side::Side, symbol_id::SymbolId, trade_status::TradeStatus,
     },
     structs::{Contract, Execution, Order, Symbol, Trade, TradingSettings},
 };
@@ -15,7 +10,7 @@ use glow_error::GlowError;
 use polars::prelude::Schema;
 use reqwest::Client;
 use std::{collections::HashMap, future::Future};
-use tokio::net::TcpStream;
+use tokio::{net::TcpStream, task::JoinHandle};
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
@@ -76,7 +71,6 @@ pub trait TraderHelper {
     fn get_order_fee_rate(&self, order_type: OrderType) -> (f64, bool);
 }
 
-// TODO: change this name
 pub trait TraderExchange: TraderHelper {
     /// This function creates a new order from a given amount of USDT
     ///
@@ -191,19 +185,23 @@ pub trait BenchmarkExchange: TraderHelper {
         final_status: OrderStatus,
     ) -> Result<Order, GlowError>;
 
-    fn check_price_level_modifiers(
+    fn close_benchmark_trade_on_binding_price(
         &self,
         trade: &Trade,
         current_timestamp: i64,
-        close_price: f64,
-        stop_loss: Option<&PriceLevel>,
-        take_profit: Option<&PriceLevel>,
-        trailing_stop_loss: Option<&PriceLevel>,
-        current_peak_returns: f64,
-    ) -> Result<Option<Trade>, GlowError>;
+        binding_price: f64,
+    ) -> Result<Trade, GlowError>;
+
+    // fn check_price_level_modifiers(
+    //     &self,
+    //     trade: &Trade,
+    //     current_timestamp: i64,
+    //     min_price: f64,
+    //     max_price: f64,
+    // ) -> Result<Option<Trade>, GlowError>;
 }
 
-pub trait DataProviderExchange {
+pub trait DataProviderExchange: Clone {
     fn subscribe_to_tick_stream(
         &mut self,
         wss: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -212,14 +210,15 @@ pub trait DataProviderExchange {
     fn listen_ticks(
         &mut self,
         wss: WebSocketStream<MaybeTlsStream<TcpStream>>,
-        benchmark_end: NaiveDateTime,
+        discard_ticks_before: NaiveDateTime,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
+
+    fn handle_ws_error(&self, trading_data_schema: &Schema) -> Option<NaiveDateTime>;
 
     fn init(
         &mut self,
         benchmark_start: Option<NaiveDateTime>,
         benchmark_end: Option<NaiveDateTime>,
-        kline_data_schema: Schema,
         run_benchmark_only: bool,
         trading_data_schema: Schema,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
@@ -228,9 +227,7 @@ pub trait DataProviderExchange {
 
     fn handle_committed_ticks_data(
         &self,
-        benchmark_end: NaiveDateTime,
-        kline_data_schema: &Schema,
+        discard_ticks_before: NaiveDateTime,
         trading_data_schema: &Schema,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
-
 }
