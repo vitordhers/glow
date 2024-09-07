@@ -12,7 +12,7 @@ use common::{
         },
         round_down_nth_decimal,
     },
-    structs::{BehaviorSubject, Statistics, Symbol, TradingSettings},
+    structs::{BehaviorSubject, Statistics, Symbol, SymbolsPair, TradingSettings},
 };
 use glow_error::GlowError;
 use polars::prelude::*;
@@ -27,24 +27,25 @@ pub struct Performance {
     _http: Client,
     risk_free_returns: f64,
     initial_datetime: NaiveDateTime,
+    symbols: SymbolsPair,
     traded_data_listener: BehaviorSubject<TradingDataUpdate>,
     trading_stats: Arc<Mutex<Statistics>>,
-    trading_settings: Arc<Mutex<TradingSettings>>,
 }
 
 impl Performance {
     pub fn new(
-        trading_settings: &Arc<Mutex<TradingSettings>>,
+        trading_settings: &TradingSettings,
         traded_data_listener: &BehaviorSubject<TradingDataUpdate>,
     ) -> Self {
+        let symbols = trading_settings.symbols_pair;
         Self {
             benchmark_stats: Arc::new(Mutex::new(Statistics::default())),
             _http: Client::new(),
             risk_free_returns: 0.0,
             initial_datetime: current_datetime(),
+            symbols,
             traded_data_listener: traded_data_listener.clone(),
             trading_stats: Arc::new(Mutex::new(Statistics::default())),
-            trading_settings: trading_settings.clone(),
         }
     }
 
@@ -73,20 +74,12 @@ impl Performance {
     }
 
     fn set_benchmark_stats(&self, benchmark_trading_df: DataFrame) -> Result<(), GlowError> {
-        let traded_symbol;
-        let anchor_symbol;
-        {
-            let settings = self.trading_settings.lock().expect("trading settings lock");
-            traded_symbol = settings.get_traded_symbol();
-            anchor_symbol = settings.get_anchor_symbol();
-        }
-
         let journey_formmated_datetime_start =
             self.initial_datetime.format("%H:%M-%d-%m-%Y").to_string();
 
         let trading_journey_identifier = format!(
             "{}_{}_{}",
-            journey_formmated_datetime_start, anchor_symbol.name, traded_symbol.name
+            journey_formmated_datetime_start, self.symbols.anchor.name, self.symbols.traded.name
         );
 
         let path = get_current_env_log_path();
@@ -94,8 +87,11 @@ impl Performance {
         save_csv(path.clone(), file_name, &benchmark_trading_df, true)?;
 
         let benchmark_trading_lf = benchmark_trading_df.lazy();
-        let (benchmark_data, benchmark_stats) =
-            calculate_benchmark_data(benchmark_trading_lf, self.risk_free_returns, traded_symbol)?;
+        let (benchmark_data, benchmark_stats) = calculate_benchmark_data(
+            benchmark_trading_lf,
+            self.risk_free_returns,
+            self.symbols.traded,
+        )?;
         {
             let mut lock = self.benchmark_stats.lock().unwrap();
             *lock = benchmark_stats;
@@ -117,19 +113,12 @@ impl Performance {
     }
 
     fn update_trading_stats(&self, traded_data: DataFrame) -> Result<(), GlowError> {
-        let traded_symbol;
-        let anchor_symbol;
-        {
-            let settings = self.trading_settings.lock().expect("trading settings lock");
-            traded_symbol = settings.get_traded_symbol();
-            anchor_symbol = settings.get_anchor_symbol();
-        }
         let journey_formmated_datetime_start =
             self.initial_datetime.format("%H:%M-%d-%m-%Y").to_string();
 
         let trading_journey_identifier = format!(
             "{}_{}_{}",
-            journey_formmated_datetime_start, anchor_symbol.name, traded_symbol.name
+            journey_formmated_datetime_start, self.symbols.anchor.name, self.symbols.traded.name
         );
         let trading_journey_start = self.initial_datetime.timestamp_millis();
         let filter_mask = traded_data
@@ -142,7 +131,7 @@ impl Performance {
         let (trading_data, trading_stats) = update_trading_data(
             &trading_data,
             self.risk_free_returns,
-            traded_symbol,
+            self.symbols.traded,
             Some(self.initial_datetime),
         )?;
         {

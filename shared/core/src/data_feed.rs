@@ -1,6 +1,6 @@
 use chrono::NaiveDateTime;
 use common::enums::trading_data_update::TradingDataUpdate;
-use common::structs::Symbol;
+use common::structs::{Symbol, TradingSettings};
 use common::{structs::BehaviorSubject, traits::exchange::DataProviderExchange};
 use exchanges::enums::DataProviderExchangeWrapper;
 use glow_error::GlowError;
@@ -18,7 +18,7 @@ pub struct DataFeed {
     run_benchmark_only: bool, // TODO check if this is really necessary
     pub minimum_klines_for_benchmarking: Arc<RwLock<u32>>,
     strategy: Strategy,
-    strategy_data_emitter: BehaviorSubject<TradingDataUpdate>,
+    pub strategy_data_emitter: BehaviorSubject<TradingDataUpdate>,
     pub trading_data: Arc<Mutex<DataFrame>>,
     trading_data_schema: Schema,
     unique_symbols: Vec<&'static Symbol>,
@@ -96,12 +96,9 @@ impl DataFeed {
     pub fn new(
         benchmark_datetimes: (Option<NaiveDateTime>, Option<NaiveDateTime>),
         data_provider_exchange: DataProviderExchangeWrapper,
-        // data_provider_last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
-        kline_data_listener: &BehaviorSubject<TradingDataUpdate>,
         run_benchmark_only: bool,
         strategy: &Strategy,
-        strategy_data_emitter: &BehaviorSubject<TradingDataUpdate>,
-        unique_symbols: &Vec<&'static Symbol>,
+        trading_settings: &TradingSettings,
     ) -> DataFeed {
         if let (Some(benchmark_start), Some(benchmark_end)) = benchmark_datetimes {
             assert!(
@@ -111,19 +108,21 @@ impl DataFeed {
         }
 
         let trading_data = Arc::new(Mutex::new(DataFrame::empty()));
-
+        let unique_symbols = &trading_settings.get_unique_symbols();
         let (trading_data_schema, trading_data_df, minimum_klines_for_benchmarking) =
             Self::set_schema(strategy, unique_symbols);
         Self::update_trading_data_df(&trading_data, &trading_data_df);
+        let strategy_data_emitter = BehaviorSubject::new(TradingDataUpdate::default());
+        let kline_data_listener = data_provider_exchange.get_kline_data_emitter().clone();
 
         DataFeed {
             benchmark_datetimes,
             data_provider_exchange,
             run_benchmark_only,
-            kline_data_listener: kline_data_listener.clone(),
+            kline_data_listener,
             minimum_klines_for_benchmarking: Arc::new(RwLock::new(minimum_klines_for_benchmarking)),
             strategy: strategy.clone(),
-            strategy_data_emitter: strategy_data_emitter.clone(),
+            strategy_data_emitter,
             trading_data,
             trading_data_schema,
             unique_symbols: unique_symbols.clone(),
@@ -131,9 +130,19 @@ impl DataFeed {
     }
 
     /// this must be run before init
-    pub fn patch_symbols(&mut self, unique_symbols: &Vec<&Symbol>) {
+    pub fn patch_benchmark_datetimes(
+        &mut self,
+        benchmark_start: Option<NaiveDateTime>,
+        benchmark_end: Option<NaiveDateTime>,
+    ) {
+        self.benchmark_datetimes = (benchmark_start, benchmark_end)
+    }
+
+    pub fn patch_trading_settings(&mut self, trading_settings: &TradingSettings) {
+        self.data_provider_exchange.patch_settings(trading_settings);
+        let unique_symbols = trading_settings.symbols_pair.get_unique_symbols();
         let (trading_data_schema, trading_data_df, minimum_klines_for_benchmarking) =
-            Self::set_schema(&self.strategy, unique_symbols);
+            Self::set_schema(&self.strategy, &unique_symbols);
         Self::update_trading_data_df(&self.trading_data, &trading_data_df);
         Self::update_minimum_klines_for_benchmarking(
             &self.minimum_klines_for_benchmarking,
@@ -143,6 +152,7 @@ impl DataFeed {
     }
 
     pub fn patch_strategy(&mut self, strategy: &Strategy) {
+        self.data_provider_exchange.patch_strategy(strategy);
         let (trading_data_schema, trading_data_df, minimum_klines_for_benchmarking) =
             Self::set_schema(strategy, &self.unique_symbols);
         Self::update_trading_data_df(&self.trading_data, &trading_data_df);
