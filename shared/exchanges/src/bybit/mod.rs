@@ -66,29 +66,22 @@ use url::Url;
 
 #[derive(Clone)]
 pub struct BybitTraderExchange {
+    balance_update_emitter: BehaviorSubject<Balance>,
     pub contracts: &'static HashMap<SymbolId, Contract>,
     credentials: ApiCredentials,
-    current_trade_listener: BehaviorSubject<Option<Trade>>,
     endpoints: ApiEndpoints,
+    executions_update_emitter: BehaviorSubject<Vec<Execution>>,
     pub fee_rates: (f64, f64),
     http: Client,
     last_ws_error_ts: Arc<Mutex<Option<i64>>>,
     pub name: &'static str,
     pub trading_settings: TradingSettings,
-    update_balance_listener: BehaviorSubject<Option<Balance>>,
-    update_executions_listener: BehaviorSubject<Vec<Execution>>,
-    update_order_listener: BehaviorSubject<Option<OrderAction>>,
+    order_update_emitter: BehaviorSubject<OrderAction>,
+    trade_update_emitter: BehaviorSubject<Option<Trade>>,
 }
 
 impl BybitTraderExchange {
-    pub fn new(
-        current_trade_listener: &BehaviorSubject<Option<Trade>>,
-        last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
-        trading_settings: &TradingSettings,
-        update_balance_listener: &BehaviorSubject<Option<Balance>>,
-        update_executions_listener: &BehaviorSubject<Vec<Execution>>,
-        update_order_listener: &BehaviorSubject<Option<OrderAction>>,
-    ) -> Self {
+    pub fn new(trading_settings: &TradingSettings) -> Self {
         let config = TRADER_EXCHANGES_CONFIG_MAP
             .get(&TraderExchangeId::Bybit)
             .expect("Bybit to has Exchange Config");
@@ -109,23 +102,32 @@ impl BybitTraderExchange {
         );
         headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
 
+        let balance_update_emitter = BehaviorSubject::new(Balance::default());
+        let executions_update_emitter = BehaviorSubject::new(vec![]);
+        let order_update_emitter = BehaviorSubject::new(OrderAction::default());
+        let trade_update_emitter = BehaviorSubject::new(None);
+
         Self {
+            balance_update_emitter,
             contracts: &context.contracts,
             credentials: config.credentials,
-            current_trade_listener: current_trade_listener.clone(),
+            executions_update_emitter,
             endpoints: config.endpoints,
             fee_rates: (context.maker_fee, context.taker_fee),
             http: Client::builder()
                 .default_headers(headers)
                 .build()
                 .expect("Reqwest client to build"),
-            last_ws_error_ts: last_ws_error_ts.clone(),
+            last_ws_error_ts: Arc::new(Mutex::new(None)),
             name: "Bybit",
+            order_update_emitter,
+            trade_update_emitter,
             trading_settings: trading_settings.clone(),
-            update_balance_listener: update_balance_listener.clone(),
-            update_executions_listener: update_executions_listener.clone(),
-            update_order_listener: update_order_listener.clone(),
         }
+    }
+
+    pub fn patch_settings(&mut self, trading_settings: &TradingSettings) {
+        self.trading_settings = trading_settings.clone(); 
     }
 
     async fn try_parse_response<T: DeserializeOwned>(
@@ -546,7 +548,7 @@ impl TraderExchange for BybitTraderExchange {
                         )
                     })
                     .collect();
-                self.update_executions_listener.next(executions);
+                self.executions_update_emitter.next(executions);
                 Ok(())
             }
             BybitWsMessage::Order(message) => {
@@ -569,7 +571,7 @@ impl TraderExchange for BybitTraderExchange {
                         self.get_taker_fee(),
                     );
                     let cancel_order_action = OrderAction::Cancel(cancelled_order);
-                    self.update_order_listener.next(Some(cancel_order_action));
+                    self.order_update_emitter.next(cancel_order_action);
                     return Ok(());
                 }
                 let updated_order: Order = order_response
@@ -577,12 +579,12 @@ impl TraderExchange for BybitTraderExchange {
 
                 if updated_order.is_stop {
                     let stop_order_action = OrderAction::Stop(updated_order);
-                    self.update_order_listener.next(Some(stop_order_action));
+                    self.order_update_emitter.next(stop_order_action);
                     return Ok(());
                 }
 
-                let order_action = OrderAction::Update(updated_order);
-                self.update_order_listener.next(Some(order_action));
+                let update_order_action = OrderAction::Update(updated_order);
+                self.order_update_emitter.next(update_order_action);
                 Ok(())
             }
             BybitWsMessage::Wallet(message) => {
@@ -609,7 +611,7 @@ impl TraderExchange for BybitTraderExchange {
                     available_to_withdraw: usdt_data.available_to_withdraw,
                     wallet_balance: usdt_data.wallet_balance,
                 };
-                self.update_balance_listener.next(Some(balance));
+                self.balance_update_emitter.next(balance);
                 Ok(())
             }
         }
@@ -1412,7 +1414,7 @@ impl TraderExchange for BybitTraderExchange {
             .await
             .expect("set_current_balance_handle -> get_current_usdt_balance error");
         // let update_action = UpdateAction::Balance(balance);
-        self.update_balance_listener.next(Some(balance));
+        self.balance_update_emitter.next(balance);
 
         let mut last_error_ts = None;
         {
@@ -1422,7 +1424,7 @@ impl TraderExchange for BybitTraderExchange {
             }
         }
 
-        let current_trade = self.current_trade_listener.value();
+        let current_trade = self.trade_update_emitter.value();
         // check for last_error_ts
         if let None = last_error_ts {
             // get open trade and set if any is open
@@ -1434,7 +1436,7 @@ impl TraderExchange for BybitTraderExchange {
                     trade.clone().unwrap()
                 );
             }
-            self.current_trade_listener.next(trade);
+            self.trade_update_emitter.next(trade);
             return Ok(());
         }
         let last_error_ts = last_error_ts.unwrap();
@@ -1478,7 +1480,7 @@ impl TraderExchange for BybitTraderExchange {
                         // if executions were updated, we emit new executions action
                         if interim_executions.len() > 0 {
                             // let update_action = UpdateAction::Executions(interim_executions);
-                            self.update_executions_listener.next(interim_executions);
+                            self.executions_update_emitter.next(interim_executions);
                         }
                         let current_order_id = current_trade.get_active_order_id()
                                 .expect(&format!("update_position_data_on_faulty_exchange_ws -> missing current order id. trade = {:?}", &current_trade));
@@ -1495,7 +1497,7 @@ impl TraderExchange for BybitTraderExchange {
                                     OrderAction::Update(updated_order)
                                 };
                                 // let update_action = UpdateAction::Order(Some(order_action));
-                                self.update_order_listener.next(Some(order_action));
+                                self.order_update_emitter.next(order_action);
                             }
                             Err(error) => {
                                 println!("handle_exchange_websocket -> fetch_opened_order failed {:?}. Error = {:?}", current_trade_status, error);
@@ -1604,6 +1606,26 @@ impl TraderExchange for BybitTraderExchange {
                 }
             }
         }
+    }
+
+    #[inline]
+    fn get_balance_update_emitter(&self) -> &BehaviorSubject<Balance> {
+        &self.balance_update_emitter
+    }
+
+    #[inline]
+    fn get_executions_update_emitter(&self) -> &BehaviorSubject<Vec<Execution>> {
+        &self.executions_update_emitter
+    }
+
+    #[inline]
+    fn get_order_update_emitter(&self) -> &BehaviorSubject<OrderAction> {
+        &self.order_update_emitter
+    }
+
+    #[inline]
+    fn get_trade_update_emitter(&self) -> &BehaviorSubject<Option<Trade>> {
+        &self.trade_update_emitter
     }
 }
 

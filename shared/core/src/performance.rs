@@ -1,4 +1,4 @@
-use chrono::NaiveDateTime;
+use chrono::{Duration, NaiveDateTime};
 use common::{
     constants::DAY_IN_MS,
     enums::trading_data_update::TradingDataUpdate,
@@ -34,6 +34,7 @@ pub struct Performance {
 
 impl Performance {
     pub fn new(
+        initial_datetime: NaiveDateTime,
         trading_settings: &TradingSettings,
         traded_data_listener: &BehaviorSubject<TradingDataUpdate>,
     ) -> Self {
@@ -42,23 +43,27 @@ impl Performance {
             benchmark_stats: Arc::new(Mutex::new(Statistics::default())),
             _http: Client::new(),
             risk_free_returns: 0.0,
-            initial_datetime: current_datetime(),
+            initial_datetime,
             symbols,
             traded_data_listener: traded_data_listener.clone(),
             trading_stats: Arc::new(Mutex::new(Statistics::default())),
         }
     }
 
-    // pub fn default() -> Self {
-    //     Self {
-    //         http: Client::new(),
-    //         trading_data: DataFrame::default(),
-    //         benchmark_data: DataFrame::default(),
-    //         benchmark_stats: Statistics::default(),
-    //         trading_stats: Statistics::default(),
-    //         risk_free_returns: 0.0,
-    //     }
-    // }
+    pub fn patch_benchmark_datetimes(
+        &mut self,
+        benchmark_start: Option<NaiveDateTime>,
+        benchmark_end: Option<NaiveDateTime>,
+    ) {
+        self.initial_datetime = benchmark_start.unwrap_or_else(|| {
+            let benchmark_end = benchmark_end.unwrap();
+            benchmark_end - Duration::days(1)
+        });
+    }
+
+    pub fn patch_settings(&mut self, trading_settings: &TradingSettings) {
+        self.symbols = trading_settings.symbols_pair.clone();
+    }
 }
 
 // risk-adjusted-return = reward / risk = mean returns / std of returns
@@ -171,7 +176,7 @@ impl Performance {
         })
     }
 
-    pub fn init(self) {
+    pub fn init(&self) {
         self.init_traded_data_handler();
     }
 }

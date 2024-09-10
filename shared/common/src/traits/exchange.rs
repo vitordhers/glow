@@ -1,9 +1,10 @@
 use crate::{
     enums::{
-        balance::Balance, modifiers::leverage::Leverage, order_status::OrderStatus,
-        order_type::OrderType, side::Side, symbol_id::SymbolId, trade_status::TradeStatus,
+        balance::Balance, modifiers::leverage::Leverage, order_action::OrderAction,
+        order_status::OrderStatus, order_type::OrderType, side::Side, symbol_id::SymbolId,
+        trade_status::TradeStatus, trading_data_update::TradingDataUpdate,
     },
-    structs::{Contract, Execution, Order, Symbol, Trade, TradingSettings},
+    structs::{BehaviorSubject, Contract, Execution, Order, Symbol, Trade, TradingSettings},
 };
 use chrono::NaiveDateTime;
 use glow_error::GlowError;
@@ -81,13 +82,15 @@ pub trait TraderExchange: TraderHelper {
     /// * `price_opt`: (Optional) Price for opening the position. Required for OrderType::Limit.
     ///
     fn new_open_order(&self, side: Side, order_cost: f64, price: f64) -> Result<Order, GlowError>;
-
     fn get_ws_url(&self) -> Result<Url, GlowError>;
     fn process_ws_message(&self, json: &String) -> Result<(), GlowError>;
     fn get_http_client(&self) -> &Client;
     fn get_ws_ping_interval(&self) -> u64;
     fn get_ws_ping_message(&self) -> Result<Message, GlowError>;
-
+    fn get_balance_update_emitter(&self) -> &BehaviorSubject<Balance>;
+    fn get_executions_update_emitter(&self) -> &BehaviorSubject<Vec<Execution>>;
+    fn get_order_update_emitter(&self) -> &BehaviorSubject<OrderAction>;
+    fn get_trade_update_emitter(&self) -> &BehaviorSubject<Option<Trade>>;
     // async methods
     // ws
     fn auth_ws(
@@ -152,6 +155,7 @@ pub trait TraderExchange: TraderHelper {
         &self,
         order_id: String,
     ) -> impl Future<Output = Result<bool, GlowError>> + Send;
+
     fn set_leverage(
         &self,
         leverage: Leverage,
@@ -202,15 +206,12 @@ pub trait BenchmarkExchange: TraderHelper {
 }
 
 pub trait DataProviderExchange: Clone {
-    fn subscribe_to_tick_stream(
-        &mut self,
-        wss: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-    ) -> impl Future<Output = Result<(), GlowError>> + Send;
+    fn get_kline_data_emitter(&self) -> &BehaviorSubject<TradingDataUpdate>;
 
-    fn listen_ticks(
-        &mut self,
-        wss: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    fn handle_committed_ticks_data(
+        &self,
         discard_ticks_before: NaiveDateTime,
+        trading_data_schema: &Schema,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
 
     fn handle_ws_error(&self, trading_data_schema: &Schema) -> Option<NaiveDateTime>;
@@ -223,11 +224,14 @@ pub trait DataProviderExchange: Clone {
         trading_data_schema: Schema,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
 
-    // fn handle_ws_error(&self) -> impl Future<Output = Result<(), GlowError>> + Send;
-
-    fn handle_committed_ticks_data(
-        &self,
+    fn listen_ticks(
+        &mut self,
+        wss: WebSocketStream<MaybeTlsStream<TcpStream>>,
         discard_ticks_before: NaiveDateTime,
-        trading_data_schema: &Schema,
+    ) -> impl Future<Output = Result<(), GlowError>> + Send;
+
+    fn subscribe_to_tick_stream(
+        &mut self,
+        wss: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
 }

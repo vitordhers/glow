@@ -8,7 +8,7 @@ use common::{
         check_last_index_for_signal, current_datetime, current_timestamp_ms, get_price_columns,
         get_signal_col_values, get_trading_columns_values,
     },
-    structs::{BehaviorSubject, Execution, Order, Trade},
+    structs::{BehaviorSubject, Execution, Order, Trade, TradingSettings},
     traits::exchange::{BenchmarkExchange, TraderExchange, TraderHelper},
 };
 use exchanges::enums::TraderExchangeWrapper;
@@ -84,6 +84,10 @@ impl Trader {
             trading_data: trading_data.clone(),
             trading_data_klines_limit: trading_data_klines_limit.clone(),
         }
+    }
+
+    pub fn patch_settings(&mut self, trading_settings: &TradingSettings) {
+        self.trader_exchange.patch_settings(trading_settings);
     }
 
     fn get_trading_data(&self) -> Result<DataFrame, GlowError> {
@@ -439,7 +443,7 @@ impl Trader {
                             .expect("OrderAction::Cancel -> update_trade unwrap");
 
                         trader.current_trade_listener.next(Some(updated_trade));
-                    },
+                    }
                     _ => {}
                 }
             }

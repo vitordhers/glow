@@ -254,7 +254,7 @@ impl DataFeed {
         })
     }
 
-    pub async fn init(&'static mut self) -> Result<(), GlowError> {
+    pub fn init(&self) -> Result<(), GlowError> {
         self.init_kline_data_handler();
         self.init_data_provider_handler();
 

@@ -1,7 +1,7 @@
 use crate::{data_feed::DataFeed, trader::Trader};
 
 use super::performance::Performance;
-use chrono::NaiveDateTime;
+use chrono::{Duration, NaiveDateTime};
 use common::{functions::current_datetime, structs::TradingSettings};
 use exchanges::enums::{
     DataProviderExchangeId, DataProviderExchangeWrapper, TraderExchangeId, TraderExchangeWrapper,
@@ -13,9 +13,9 @@ use tokio_stream::StreamExt;
 
 #[derive(Clone)]
 pub struct Controller {
-    data_feed: Arc<Mutex<DataFeed>>,
-    performance: Arc<Mutex<Performance>>,
-    trader: Arc<Mutex<Trader>>,
+    data_feed: DataFeed,
+    performance: Performance,
+    trader: Trader,
 }
 
 impl Controller {
@@ -51,17 +51,41 @@ impl Controller {
             &data_feed.minimum_klines_for_benchmarking,
         );
 
-        let performance =
-            Performance::new(&default_trading_settings, &trader.performance_data_emitter);
+        let default_initial_datetime = default_datetimes.1.unwrap() + Duration::days(1);
+
+        let performance = Performance::new(
+            default_initial_datetime,
+            &default_trading_settings,
+            &trader.performance_data_emitter,
+        );
 
         Self {
-            data_feed: Arc::new(Mutex::new(data_feed)),
-            performance: Arc::new(Mutex::new(performance)),
-            trader: Arc::new(Mutex::new(trader)),
+            data_feed,
+            performance,
+            trader,
         }
     }
 
-    pub async fn init(&self) {
+    pub fn patch_benchmark_datetimes(
+        &mut self,
+        benchmark_start: Option<NaiveDateTime>,
+        benchmark_end: Option<NaiveDateTime>,
+    ) {
+        self.data_feed.patch_benchmark_datetimes(benchmark_start, benchmark_end);
+        self.performance.patch_benchmark_datetimes(benchmark_start, benchmark_end);
+    }
+
+    pub fn patch_settings(&mut self, trading_settings: &TradingSettings) {
+        self.data_feed.patch_trading_settings(trading_settings);
+        self.trader.patch_settings(trading_settings);
+        self.performance.patch_settings(trading_settings);
+    }
+
+    pub fn patch_strategy(&mut self, strategy: &Strategy) {
+        self.data_feed.patch_strategy(strategy);
+    }
+
+    pub fn init(&self) {
         // init core modules
     }
 }

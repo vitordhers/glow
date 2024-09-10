@@ -1,21 +1,19 @@
 use crate::{binance::structs::BinanceDataProvider, bybit::BybitTraderExchange};
-use chrono::{Duration, NaiveDateTime};
+use chrono::NaiveDateTime;
 use common::{
     enums::{
         balance::Balance, modifiers::leverage::Leverage, order_action::OrderAction,
         order_status::OrderStatus, order_type::OrderType, side::Side, symbol_id::SymbolId,
         trade_status::TradeStatus, trading_data_update::TradingDataUpdate,
     },
-    structs::{BehaviorSubject, Contract, Execution, Order, SymbolsPair, Trade, TradingSettings},
+    structs::{BehaviorSubject, Contract, Execution, Order, Trade, TradingSettings},
     traits::exchange::{BenchmarkExchange, DataProviderExchange, TraderExchange, TraderHelper},
 };
 use glow_error::GlowError;
 use polars::prelude::Schema;
 use reqwest::Client;
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::collections::HashMap;
+use strategy::Strategy;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::Url;
@@ -34,29 +32,40 @@ pub enum DataProviderExchangeWrapper {
 impl DataProviderExchangeWrapper {
     pub fn new(
         selected_exchange: DataProviderExchangeId,
-        kline_duration: Duration,
-        last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
-        minimum_klines_for_benchmarking: u32,
-        symbols_pair: SymbolsPair,
-        klines_data_update_emitter: &BehaviorSubject<TradingDataUpdate>,
+        strategy: &Strategy,
+        trading_settings: &TradingSettings,
     ) -> Self {
         match selected_exchange {
-            DataProviderExchangeId::Binance => Self::Binance(BinanceDataProvider::new(
-                kline_duration,
-                last_ws_error_ts,
-                minimum_klines_for_benchmarking,
-                symbols_pair,
-                klines_data_update_emitter,
-            )),
+            DataProviderExchangeId::Binance => {
+                Self::Binance(BinanceDataProvider::new(trading_settings, strategy))
+            }
         }
     }
 
     pub fn get_selection_list() -> Vec<String> {
         vec![String::from("Binance")]
     }
+
+    pub fn patch_settings(&mut self, trading_settings: &TradingSettings) {
+        match self {
+            Self::Binance(ex) => ex.patch_settings(trading_settings),
+        }
+    }
+
+    pub fn patch_strategy(&mut self, strategy: &Strategy) {
+        match self {
+            Self::Binance(ex) => ex.patch_strategy(strategy),
+        }
+    }
 }
 
 impl DataProviderExchange for DataProviderExchangeWrapper {
+    fn get_kline_data_emitter(&self) -> &BehaviorSubject<TradingDataUpdate> {
+        match self {
+            Self::Binance(ex) => ex.get_kline_data_emitter(),
+        }
+    }
+
     async fn subscribe_to_tick_stream(
         &mut self,
         wss: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -128,29 +137,20 @@ pub enum TraderExchangeWrapper {
 }
 
 impl TraderExchangeWrapper {
-    pub fn new(
-        selected_exchange: TraderExchangeId,
-        current_trade_listener: &BehaviorSubject<Option<Trade>>,
-        last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
-        trading_settings: &TradingSettings,
-        update_balance_listener: &BehaviorSubject<Option<Balance>>,
-        update_executions_listener: &BehaviorSubject<Vec<Execution>>,
-        update_order_listener: &BehaviorSubject<Option<OrderAction>>,
-    ) -> Self {
+    pub fn new(selected_exchange: TraderExchangeId, trading_settings: &TradingSettings) -> Self {
         match selected_exchange {
-            TraderExchangeId::Bybit => Self::Bybit(BybitTraderExchange::new(
-                current_trade_listener,
-                last_ws_error_ts,
-                trading_settings,
-                update_balance_listener,
-                update_executions_listener,
-                update_order_listener,
-            )),
+            TraderExchangeId::Bybit => Self::Bybit(BybitTraderExchange::new(trading_settings)),
         }
     }
 
     pub fn get_selection_list() -> Vec<String> {
         vec![String::from("Bybit")]
+    }
+
+    pub fn patch_settings(&mut self, trading_settings: &TradingSettings) {
+        match self {
+            TraderExchangeWrapper::Bybit(ex) => ex.patch_settings(trading_settings),
+        }
     }
 }
 
@@ -404,6 +404,30 @@ impl TraderExchange for TraderExchangeWrapper {
     ) -> Result<(), GlowError> {
         match self {
             Self::Bybit(ex) => ex.listen_messages(wss).await,
+        }
+    }
+
+    fn get_balance_update_emitter(&self) -> &BehaviorSubject<Balance> {
+        match self {
+            TraderExchangeWrapper::Bybit(ex) => ex.get_balance_update_emitter(),
+        }
+    }
+
+    fn get_executions_update_emitter(&self) -> &BehaviorSubject<Vec<Execution>> {
+        match self {
+            TraderExchangeWrapper::Bybit(ex) => ex.get_executions_update_emitter(),
+        }
+    }
+
+    fn get_order_update_emitter(&self) -> &BehaviorSubject<OrderAction> {
+        match self {
+            TraderExchangeWrapper::Bybit(ex) => ex.get_order_update_emitter(),
+        }
+    }
+
+    fn get_trade_update_emitter(&self) -> &BehaviorSubject<Option<Trade>> {
+        match self {
+            TraderExchangeWrapper::Bybit(ex) => ex.get_trade_update_emitter(),
         }
     }
 }

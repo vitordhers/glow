@@ -1,3 +1,5 @@
+use crate::functions::current_timestamp;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Balance {
     pub timestamp: i64,
@@ -11,6 +13,16 @@ impl Balance {
             timestamp,
             available_to_withdraw,
             wallet_balance,
+        }
+    }
+}
+
+impl Default for Balance {
+    fn default() -> Self {
+        Self {
+            timestamp: current_timestamp(),
+            available_to_withdraw: 0.0,
+            wallet_balance: 0.0,
         }
     }
 }
