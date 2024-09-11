@@ -17,7 +17,7 @@ pub struct DataFeed {
     kline_data_listener: BehaviorSubject<TradingDataUpdate>,
     run_benchmark_only: bool, // TODO check if this is really necessary
     pub minimum_klines_for_benchmarking: Arc<RwLock<u32>>,
-    strategy: Strategy,
+    pub strategy: Strategy,
     pub strategy_data_emitter: BehaviorSubject<TradingDataUpdate>,
     pub trading_data: Arc<Mutex<DataFrame>>,
     trading_data_schema: Schema,
@@ -254,11 +254,9 @@ impl DataFeed {
         })
     }
 
-    pub fn init(&self) -> Result<(), GlowError> {
+    pub fn init(&self) {
         self.init_kline_data_handler();
         self.init_data_provider_handler();
-
-        Ok(())
     }
 }
 

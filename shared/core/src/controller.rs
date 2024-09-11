@@ -6,20 +6,17 @@ use common::{functions::current_datetime, structs::TradingSettings};
 use exchanges::enums::{
     DataProviderExchangeId, DataProviderExchangeWrapper, TraderExchangeId, TraderExchangeWrapper,
 };
-use std::sync::{Arc, Mutex};
 use strategy::Strategy;
-use tokio::{spawn, task::JoinHandle};
-use tokio_stream::StreamExt;
 
 #[derive(Clone)]
 pub struct Controller {
-    data_feed: DataFeed,
-    performance: Performance,
-    trader: Trader,
+    pub data_feed: DataFeed,
+    pub performance: Performance,
+    pub trader: Trader,
 }
 
 impl Controller {
-    pub fn new() -> Self {
+    pub fn new(run_benchmark_only: bool) -> Self {
         let default_trading_settings = TradingSettings::load_or_default();
         let default_strategy = Strategy::default();
         let default_datetimes = (None::<NaiveDateTime>, Some(current_datetime()));
@@ -34,7 +31,7 @@ impl Controller {
         let data_feed = DataFeed::new(
             default_datetimes,
             default_data_provider_exchange,
-            true,
+            run_benchmark_only,
             &default_strategy,
             &default_trading_settings,
         );
@@ -71,8 +68,10 @@ impl Controller {
         benchmark_start: Option<NaiveDateTime>,
         benchmark_end: Option<NaiveDateTime>,
     ) {
-        self.data_feed.patch_benchmark_datetimes(benchmark_start, benchmark_end);
-        self.performance.patch_benchmark_datetimes(benchmark_start, benchmark_end);
+        self.data_feed
+            .patch_benchmark_datetimes(benchmark_start, benchmark_end);
+        self.performance
+            .patch_benchmark_datetimes(benchmark_start, benchmark_end);
     }
 
     pub fn patch_settings(&mut self, trading_settings: &TradingSettings) {
@@ -86,6 +85,8 @@ impl Controller {
     }
 
     pub fn init(&self) {
-        // init core modules
+        self.performance.init();
+        self.trader.init();
+        self.data_feed.init();
     }
 }

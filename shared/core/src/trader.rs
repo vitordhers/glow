@@ -31,7 +31,7 @@ pub struct Trader {
     signal_listener: BehaviorSubject<SignalCategory>,
     strategy_data_listener: BehaviorSubject<TradingDataUpdate>,
     temp_executions: Arc<Mutex<Vec<Execution>>>,
-    trader_exchange: TraderExchangeWrapper,
+    pub trader_exchange: TraderExchangeWrapper,
     trading_data: Arc<Mutex<DataFrame>>,
     trading_data_klines_limit: Arc<RwLock<u32>>,
 }
@@ -1123,7 +1123,7 @@ impl Trader {
         })
     }
 
-    pub async fn init(&self) {
+    pub fn init(&self) {
         // let leverage_listener = self.leverage_listener.clone();
 
         // TODO: This query should be run at trader exchange level, same as balance
