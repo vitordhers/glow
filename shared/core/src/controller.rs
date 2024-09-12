@@ -78,6 +78,7 @@ impl Controller {
         self.data_feed.patch_trading_settings(trading_settings);
         self.trader.patch_settings(trading_settings);
         self.performance.patch_settings(trading_settings);
+        let _ = trading_settings.save_config();
     }
 
     pub fn patch_strategy(&mut self, strategy: &Strategy) {

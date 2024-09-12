@@ -1,12 +1,12 @@
 use chrono::Duration;
 use cli::{change_benchmark_datetimes, change_symbols_pair, select_from_list};
-use common::functions::current_datetime;
+use common::functions::current_datetime_minute_start;
 use common::traits::exchange::TraderHelper;
-use tokio::time::sleep;
 use core::controller::Controller;
-use std::time::Duration as StdDuration;
 use dialoguer::console::Term;
 use dotenv::dotenv;
+use std::time::Duration as StdDuration;
+use tokio::time::sleep;
 
 use std::env;
 
@@ -17,8 +17,8 @@ async fn main() {
     let max_rows = "40".to_string();
     env::set_var("POLARS_FMT_MAX_ROWS", max_rows);
 
-    let mut end_datetime = current_datetime();
-    let mut start_datetime = end_datetime - Duration::days(1);
+    let end_datetime = current_datetime_minute_start();
+    let start_datetime = end_datetime - Duration::days(1);
 
     let term = Term::stdout();
     let mut controller = Controller::new(true);
@@ -34,9 +34,9 @@ async fn main() {
         .unwrap();
 
         term.write_line(&format!(
-            "Current Start Time: {:?} \nCurrent End Time: {:?}\nCurrent Settings {:?}",
-            start_datetime,
-            end_datetime,
+            "🕛 Current Start Time: {} \n🕒 Current End Time: {}\n🔧 Current Settings {:?}",
+            start_datetime.format("%d-%m-%Y %H:%M:%S").to_string(),
+            end_datetime.format("%d-%m-%Y %H:%M:%S").to_string(),
             controller.trader.trader_exchange.get_trading_settings()
         ))
         .unwrap();
@@ -44,8 +44,8 @@ async fn main() {
         let options = vec![
             "📆 Select Benchmark Datetimes",
             "🪙  Change Trading Coins",
-            "📥 Select Data Provider Exchange",
-            "📤 Select Trader Exchange",
+            "📈 Select Data Provider Exchange",
+            "💱 Select Trader Exchange",
             "🧐 Change Strategy",
             "🎛  Change Trading Settings",
             "▶️ Run Benchmark",
@@ -67,8 +67,10 @@ async fn main() {
                     continue;
                 }
                 let (updated_start_datetime, updated_end_datetime) = result.unwrap();
-                start_datetime = updated_start_datetime;
-                end_datetime = updated_end_datetime;
+                controller.patch_benchmark_datetimes(
+                    Some(updated_start_datetime),
+                    Some(updated_end_datetime),
+                );
             }
             1 => {
                 let current_trading_settings =
@@ -97,19 +99,15 @@ async fn main() {
             }
             6 => {
                 // RUN BENCHMARK
-                println!("RUN BENCHMARK SELECTED");
                 controller.init();
+                sleep(StdDuration::new(5, 0)).await;
+                let options = vec!["Press enter to run again"];
+                select_from_list("Benchmark is done", &options, Some(default_index));
             }
             selection => {
                 println!("Invalid option {}", selection);
                 continue;
             }
         }
-        let options = vec!["Press enter to run again"];
-        select_from_list("Benchmark is done", &options, Some(default_index));
-        sleep(StdDuration::new(5, 0)).await;
-        
-
-
     }
 }

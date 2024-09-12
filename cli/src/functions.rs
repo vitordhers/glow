@@ -1,4 +1,3 @@
-use common::functions::current_timestamp;
 use crossterm::{
     event::{poll, read, Event, KeyCode, KeyEvent},
     terminal::{disable_raw_mode, enable_raw_mode},
@@ -7,7 +6,6 @@ use dialoguer::{theme::ColorfulTheme, Select};
 use std::time::Duration;
 
 pub fn select_from_list<T: ToString>(prompt: &str, items: &[T], default: Option<usize>) -> usize {
-    println!("SELECT FROM LIST {}", current_timestamp());
     Select::with_theme(&ColorfulTheme::default())
         .with_prompt(prompt)
         .items(&items)

@@ -27,6 +27,15 @@ pub fn current_datetime() -> NaiveDateTime {
     Utc::now().naive_utc().with_nanosecond(0).unwrap()
 }
 
+pub fn current_datetime_minute_start() -> NaiveDateTime {
+    Utc::now()
+        .naive_utc()
+        .with_second(0)
+        .unwrap()
+        .with_nanosecond(0)
+        .unwrap()
+}
+
 #[inline]
 pub fn current_timestamp() -> i64 {
     Utc::now().with_nanosecond(0).unwrap().timestamp()

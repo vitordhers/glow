@@ -125,7 +125,7 @@ impl BinanceDataProvider {
                 if total_klines == daily_klines {
                     let _ = save_kline_df_to_csv(&fetched_data_df, date, "binance", &symbol.name)?;
                 }
-
+                let fetched_data_df = coerce_df_to_schema(fetched_data_df, &trading_data_schema)?;
                 match result_df.vstack(&fetched_data_df) {
                     Ok(stacked_df) => {
                         result_df = stacked_df.sort(["start_time"], false, false)?;
