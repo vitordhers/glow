@@ -253,20 +253,15 @@ impl BinanceDataProvider {
                 self.kline_duration,
             )
             .await?;
-        println!("@@@ initial_kline_data_df SCHEMA {:?}", &initial_kline_data_df.schema());
-
 
         let current_datetime = current_datetime();
         let is_last_kline_available = current_datetime > benchmark_end;
 
         if is_last_kline_available {
-            println!("LAST KLINE IS AVAILABLE {:?}", initial_kline_data_df);
             let initial_data = TradingDataUpdate::Initial(initial_kline_data_df);
             self.klines_data_update_emitter.next(initial_data);
             return Ok(());
         }
-
-        println!("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ LAST KLINE NOT AVAILABLE");
 
         let current_timestamp = current_timestamp();
         let seconds_until_pending_kline_available = benchmark_end.timestamp() - current_timestamp;
@@ -278,7 +273,6 @@ impl BinanceDataProvider {
         let start_ms = (current_timestamp - remaining_seconds_from_current_ts) * 1000;
         let end_ms = benchmark_end.timestamp_millis();
 
-        println!("FETCH KLINES");
         let pending_kline_df = self
             .fetch_data_after_waiting(
                 pending_kline_available_at,
@@ -287,16 +281,10 @@ impl BinanceDataProvider {
                 trading_data_schema,
             )
             .await?;
-        
-        println!("@@@@ initial_kline_data_df SCHEMA {:?}", &initial_kline_data_df.schema());
-        println!("@@@@@ pending_kline_df SCHEMA {:?}", &pending_kline_df.schema());
 
         let initial_kline_data_df = initial_kline_data_df.vstack(&pending_kline_df)?;
-
-
         let initial_data = TradingDataUpdate::Initial(initial_kline_data_df);
         self.klines_data_update_emitter.next(initial_data);
-
         Ok(())
     }
 }
@@ -403,7 +391,6 @@ impl DataProviderExchange for BinanceDataProvider {
         run_benchmark_only: bool,
         trading_data_schema: Schema,
     ) -> Result<(), GlowError> {
-        println!("@@@@@@@@@@@@@@@@@22 DATA FEED INIT");
         let (benchmark_start, benchmark_end) = adjust_benchmark_datetimes(
             benchmark_start,
             benchmark_end,

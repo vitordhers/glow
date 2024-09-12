@@ -903,7 +903,6 @@ impl Trader {
         &self,
         initial_strategy_df: DataFrame,
     ) -> Result<(), GlowError> {
-        println!("@@@@@@ handle_initial_strategy_data {:?}", &initial_strategy_df);
         let benchmark_data = self.compute_benchmark_positions(initial_strategy_df)?;
         self.update_trading_data(benchmark_data.clone())?;
         let trading_data_update = TradingDataUpdate::Initial(benchmark_data);
@@ -1109,7 +1108,6 @@ impl Trader {
             while let Some(strategy_data_update) = subscription.next().await {
                 let result = match strategy_data_update {
                     TradingDataUpdate::Initial(initial_strategy_df) => {
-                        println!("@@@@@@@@@@@@ init_strategy_data_handler {:?}", &initial_strategy_df);
                         trader.handle_initial_strategy_data(initial_strategy_df)
                     }
                     TradingDataUpdate::Market(updated_strategy_df) => {

@@ -832,7 +832,6 @@ pub fn get_price_columns(
     df: &DataFrame,
     symbol: &Symbol,
 ) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>), GlowError> {
-    println!("@@@ THE DFFFFFFFFFFFFFFFFFF {:?}", df);
     let (open_col, high_col, low_col, close_col) = symbol.get_ohlc_cols();
     let opens = df
         .column(&open_col)

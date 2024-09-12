@@ -66,7 +66,7 @@ impl Schema for SimpleTrendStrategySchema {
             ignore_nulls: false,
         };
 
-        let mut lf = lf
+        let lf = lf
             .with_columns([
                 col(close_col).ewm_mean(slow_opts).alias(ema_slow_col),
                 col(close_col).ewm_mean(fast_opts).alias(ema_fast_col),
@@ -81,14 +81,6 @@ impl Schema for SimpleTrendStrategySchema {
                     )
                     .alias(&TREND_COL),
             );
-
-        // TODO: check if select needs to be done
-        lf = lf.select([
-            col("start_time"),
-            col(&TREND_COL),
-            col(ema_slow_col),
-            col(ema_fast_col),
-        ]);
 
         Ok(lf)
     }
@@ -128,47 +120,31 @@ impl Schema for SimpleTrendStrategySchema {
         let fast_ema_col = format!("{}_fast_ema", &symbols_pair.anchor.name);
         let slow_ema_col = format!("{}_slow_ema", &symbols_pair.anchor.name);
 
+        let fast_ema_lesser_than_slow_ema = col(&fast_ema_col).lt(col(&slow_ema_col));
+        let fast_ema_greater_than_slow_ema = col(&fast_ema_col).gt(col(&slow_ema_col));
+
+        let prev_fast_ema_lesser_than_prev_slow_ema =
+            col(&fast_ema_col).shift(1).lt(col(&slow_ema_col).shift(1));
+        let prev_fast_ema_greater_than_prev_slow_ema =
+            col(&fast_ema_col).shift(1).gt(col(&slow_ema_col).shift(1));
+
         let signal_lf = lf.clone().with_columns([
-            when(
-                col(&fast_ema_col).lt(col(&slow_ema_col)).and(
-                    col(&slow_ema_col)
-                        .shift(1)
-                        .lt_eq(col(&fast_ema_col).shift(1)),
-                ),
-            )
-            .then(lit(1))
-            .otherwise(lit(0))
-            .alias(short_col),
-            when(
-                col(&fast_ema_col).gt(col(&slow_ema_col)).and(
-                    col(&slow_ema_col)
-                        .shift(1)
-                        .gt_eq(col(&fast_ema_col).shift(1)),
-                ),
-            )
-            .then(lit(1))
-            .otherwise(lit(0))
-            .alias(long_col),
-            when(
-                col(&fast_ema_col).gt(col(&slow_ema_col)).and(
-                    col(&slow_ema_col)
-                        .shift(1)
-                        .gt_eq(col(&fast_ema_col).shift(1)),
-                ),
-            )
-            .then(lit(1))
-            .otherwise(lit(0))
-            .alias(close_long_col),
-            when(
-                col(&fast_ema_col).gt(col(&slow_ema_col)).and(
-                    col(&slow_ema_col)
-                        .shift(1)
-                        .gt_eq(col(&fast_ema_col).shift(1)),
-                ),
-            )
-            .then(lit(1))
-            .otherwise(lit(0))
-            .alias(close_short_col),
+            when(fast_ema_lesser_than_slow_ema.clone().and(prev_fast_ema_greater_than_prev_slow_ema.clone()))
+                .then(lit(1))
+                .otherwise(lit(0))
+                .alias(short_col),
+            when(fast_ema_greater_than_slow_ema.clone().and(prev_fast_ema_lesser_than_prev_slow_ema.clone()))
+                .then(lit(1))
+                .otherwise(lit(0))
+                .alias(long_col),
+            when(fast_ema_greater_than_slow_ema.and(prev_fast_ema_lesser_than_prev_slow_ema))
+                .then(lit(1))
+                .otherwise(lit(0))
+                .alias(close_short_col),
+            when(fast_ema_lesser_than_slow_ema.and(prev_fast_ema_greater_than_prev_slow_ema))
+                .then(lit(1))
+                .otherwise(lit(0))
+                .alias(close_long_col),
         ]);
 
         Ok(signal_lf)
