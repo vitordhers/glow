@@ -95,14 +95,15 @@ impl BinanceDataProvider {
         trading_data_schema: &Schema,
         start_datetime: NaiveDateTime,
         end_datetime: NaiveDateTime,
+        tick_duration: Duration,
     ) -> Result<DataFrame, GlowError> {
         let mut kline_df = DataFrame::from(trading_data_schema);
-
         for symbol in &self.symbols.get_unique_symbols() {
             let (loaded_data_df, not_loaded_dates) =
                 load_interval_tick_dataframe(start_datetime, end_datetime, &symbol, "binance")?;
 
-            let mut result_df = loaded_data_df;
+            let mut result_df =
+                loaded_data_df.unwrap_or_else(|| DataFrame::from(trading_data_schema));
 
             for (i, date) in not_loaded_dates.into_iter().enumerate() {
                 let datetimes = get_date_start_and_end_timestamps(date);
@@ -118,30 +119,52 @@ impl BinanceDataProvider {
                     day_ticks_data.extend(fetched_ticks);
                 }
                 let fetched_data_df = map_ticks_data_to_df(&day_ticks_data)?;
-                let _ = save_kline_df_to_csv(&fetched_data_df, date, "binance", &symbol.name)?;
-                result_df = result_df.vstack(&fetched_data_df)?;
-                result_df = result_df.sort(["start_time"], false, false)?;
-            }
+                let total_klines = fetched_data_df.height() as i64;
+                let daily_klines = Duration::days(1).num_seconds() / tick_duration.num_seconds();
 
+                if total_klines == daily_klines {
+                    let _ = save_kline_df_to_csv(&fetched_data_df, date, "binance", &symbol.name)?;
+                }
+
+                match result_df.vstack(&fetched_data_df) {
+                    Ok(stacked_df) => {
+                        result_df = stacked_df.sort(["start_time"], false, false)?;
+                    }
+                    Err(error) => {
+                        println!("STACK ERROR 1 {:?}", error);
+                    }
+                }
+            }
             result_df = coerce_df_to_schema(result_df, &trading_data_schema)?;
-            // TODO: check if no concat is needed
-            kline_df = kline_df.vstack(&result_df)?;
+            match kline_df.vstack(&result_df) {
+                Ok(stacked_df) => {
+                    kline_df = stacked_df;
+                }
+                Err(error) => {
+                    println!("STACK ERROR 2 {:?}", error);
+                }
+            };
         }
 
-        kline_df.align_chunks();
+        let mut kline_df = kline_df.sort(["start_time"], false, false)?;
 
+        kline_df.align_chunks();
         let kline_lf = filter_df_timestamps_to_lf(kline_df, start_datetime, end_datetime)?;
         let kline_lf = downsample_tick_lf_to_kline_duration(
             &self.symbols.get_unique_symbols(),
             self.kline_duration,
             kline_lf,
             ClosedWindow::Left,
-            None,
+            Some(trading_data_schema),
         )?;
 
-        let kline_df = kline_lf.collect()?;
-
-        Ok(kline_df)
+        match kline_lf.collect() {
+            Ok(kline_df) => Ok(kline_df),
+            Err(error) => {
+                println!("COLLECT ERROR {:?}", error);
+                Err(error.into())
+            }
+        }
     }
 
     async fn fetch_tick_data(
@@ -223,17 +246,27 @@ impl BinanceDataProvider {
         trading_data_schema: &Schema,
     ) -> Result<(), GlowError> {
         let initial_kline_data_df = self
-            .load_or_fetch_kline_data(trading_data_schema, benchmark_start, benchmark_end)
+            .load_or_fetch_kline_data(
+                trading_data_schema,
+                benchmark_start,
+                benchmark_end,
+                self.kline_duration,
+            )
             .await?;
+        println!("@@@ initial_kline_data_df SCHEMA {:?}", &initial_kline_data_df.schema());
+
 
         let current_datetime = current_datetime();
         let is_last_kline_available = current_datetime > benchmark_end;
 
         if is_last_kline_available {
+            println!("LAST KLINE IS AVAILABLE {:?}", initial_kline_data_df);
             let initial_data = TradingDataUpdate::Initial(initial_kline_data_df);
             self.klines_data_update_emitter.next(initial_data);
             return Ok(());
         }
+
+        println!("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ LAST KLINE NOT AVAILABLE");
 
         let current_timestamp = current_timestamp();
         let seconds_until_pending_kline_available = benchmark_end.timestamp() - current_timestamp;
@@ -245,6 +278,7 @@ impl BinanceDataProvider {
         let start_ms = (current_timestamp - remaining_seconds_from_current_ts) * 1000;
         let end_ms = benchmark_end.timestamp_millis();
 
+        println!("FETCH KLINES");
         let pending_kline_df = self
             .fetch_data_after_waiting(
                 pending_kline_available_at,
@@ -253,8 +287,12 @@ impl BinanceDataProvider {
                 trading_data_schema,
             )
             .await?;
+        
+        println!("@@@@ initial_kline_data_df SCHEMA {:?}", &initial_kline_data_df.schema());
+        println!("@@@@@ pending_kline_df SCHEMA {:?}", &pending_kline_df.schema());
 
         let initial_kline_data_df = initial_kline_data_df.vstack(&pending_kline_df)?;
+
 
         let initial_data = TradingDataUpdate::Initial(initial_kline_data_df);
         self.klines_data_update_emitter.next(initial_data);
@@ -365,6 +403,7 @@ impl DataProviderExchange for BinanceDataProvider {
         run_benchmark_only: bool,
         trading_data_schema: Schema,
     ) -> Result<(), GlowError> {
+        println!("@@@@@@@@@@@@@@@@@22 DATA FEED INIT");
         let (benchmark_start, benchmark_end) = adjust_benchmark_datetimes(
             benchmark_start,
             benchmark_end,

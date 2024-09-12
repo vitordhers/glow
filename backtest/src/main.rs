@@ -2,7 +2,9 @@ use chrono::Duration;
 use cli::{change_benchmark_datetimes, change_symbols_pair, select_from_list};
 use common::functions::current_datetime;
 use common::traits::exchange::TraderHelper;
+use tokio::time::sleep;
 use core::controller::Controller;
+use std::time::Duration as StdDuration;
 use dialoguer::console::Term;
 use dotenv::dotenv;
 
@@ -49,7 +51,7 @@ async fn main() {
             "▶️ Run Benchmark",
         ];
 
-        let default_index = options.len() + 1;
+        let default_index = options.len() - 1;
         let selection = select_from_list("Select an option", &options, Some(default_index));
         match selection {
             0 => {
@@ -95,12 +97,19 @@ async fn main() {
             }
             6 => {
                 // RUN BENCHMARK
+                println!("RUN BENCHMARK SELECTED");
                 controller.init();
             }
-            _ => {
-                println!("Invalid option");
+            selection => {
+                println!("Invalid option {}", selection);
                 continue;
             }
         }
+        let options = vec!["Press enter to run again"];
+        select_from_list("Benchmark is done", &options, Some(default_index));
+        sleep(StdDuration::new(5, 0)).await;
+        
+
+
     }
 }

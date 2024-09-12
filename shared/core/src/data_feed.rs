@@ -30,8 +30,8 @@ impl DataFeed {
             let (open_col, high_col, low_col, close_col) = symbol.get_ohlc_cols();
             schema_fields.push(Field::new(&open_col, DataType::Float64));
             schema_fields.push(Field::new(&high_col, DataType::Float64));
-            schema_fields.push(Field::new(&close_col, DataType::Float64));
             schema_fields.push(Field::new(&low_col, DataType::Float64));
+            schema_fields.push(Field::new(&close_col, DataType::Float64));
         }
     }
 

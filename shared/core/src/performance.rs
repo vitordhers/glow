@@ -4,7 +4,6 @@ use common::{
     enums::trading_data_update::TradingDataUpdate,
     functions::{
         csv::{get_current_env_log_path, save_csv},
-        current_datetime,
         performance::{
             calculate_calmar_ratio, calculate_max_drawdown_and_duration,
             calculate_risk_adjusted_returns, calculate_sharpe_ratio, calculate_sortino_ratio,

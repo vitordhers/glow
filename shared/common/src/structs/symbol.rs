@@ -2,6 +2,7 @@ use crate::{
     enums::symbol_id::SymbolId,
     r#static::{get_default_symbol, SYMBOLS_MAP},
 };
+use polars::prelude::{DataType, Schema, TimeUnit};
 use serde::{
     de::{Deserializer, Error, IgnoredAny, MapAccess, Visitor},
     ser::{Serialize, SerializeStruct, Serializer},
@@ -53,6 +54,21 @@ impl Symbol {
 
     pub fn get_ohlc_cols(&self) -> (&'static str, &'static str, &'static str, &'static str) {
         (self.open, self.high, self.low, self.close)
+    }
+
+    pub fn derive_symbol_tick_data_schema(&self) -> Schema {
+        let mut schema = Schema::new();
+        let _ = schema.insert_at_index(
+            0,
+            "start_time".into(),
+            DataType::Datetime(TimeUnit::Milliseconds, None),
+        );
+        let (open, high, low, close) = self.get_ohlc_cols();
+        let _ = schema.insert_at_index(1, open.into(), DataType::Float64);
+        let _ = schema.insert_at_index(2, high.into(), DataType::Float64);
+        let _ = schema.insert_at_index(3, low.into(), DataType::Float64);
+        let _ = schema.insert_at_index(4, close.into(), DataType::Float64);
+        schema
     }
 }
 

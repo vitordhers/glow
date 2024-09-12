@@ -361,10 +361,14 @@ pub fn map_ticks_data_to_df(ticks_data: &Vec<TickData>) -> Result<DataFrame, Glo
             .push(tick.close);
     }
 
-    let series_init = vec![Series::new(
+    let timestamp_series = Series::new(
         "start_time",
         timestamps.into_iter().collect::<Vec<NaiveDateTime>>(),
-    )];
+    );
+    let mut timestamp_series = timestamp_series.sort(false);
+    timestamp_series.set_sorted_flag(IsSorted::Ascending);
+
+    let series_init = vec![timestamp_series];
 
     let df = DataFrame::new(data.into_iter().fold(
         series_init,
@@ -373,6 +377,8 @@ pub fn map_ticks_data_to_df(ticks_data: &Vec<TickData>) -> Result<DataFrame, Glo
             series
         },
     ))?;
+    let df = df.sort(["start_time"], false, false)?;
+
     Ok(df)
 }
 
@@ -576,6 +582,7 @@ pub fn get_days_between(
 }
 
 pub fn get_date_start_and_end_timestamps(date: NaiveDate) -> [(i64, i64); 2] {
+    println!("get_date_start_and_end_timestamps {:?}", &date);
     let first_start_time = NaiveTime::from_hms_milli_opt(0, 0, 0, 0).unwrap();
     let first_start_datetime = NaiveDateTime::new(date, first_start_time);
 
@@ -585,7 +592,7 @@ pub fn get_date_start_and_end_timestamps(date: NaiveDate) -> [(i64, i64); 2] {
     let second_start_time = NaiveTime::from_hms_milli_opt(12, 0, 0, 0).unwrap();
     let second_start_datetime = NaiveDateTime::new(date, second_start_time);
 
-    let second_end_time = NaiveTime::from_hms_milli_opt(24, 59, 0, 0).unwrap();
+    let second_end_time = NaiveTime::from_hms_milli_opt(23, 59, 0, 0).unwrap();
     let second_end_datetime = NaiveDateTime::new(date, second_end_time);
 
     [
@@ -825,6 +832,7 @@ pub fn get_price_columns(
     df: &DataFrame,
     symbol: &Symbol,
 ) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>), GlowError> {
+    println!("@@@ THE DFFFFFFFFFFFFFFFFFF {:?}", df);
     let (open_col, high_col, low_col, close_col) = symbol.get_ohlc_cols();
     let opens = df
         .column(&open_col)
