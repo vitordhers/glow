@@ -23,7 +23,7 @@ async fn main() {
     let term = Term::stdout();
     let mut controller = Controller::new(true);
     loop {
-        term.clear_screen().unwrap();
+        term.clear_screen().unwrap(); // comment this to debug
 
         term.write_line("Glow Backtesting Suite - v0.02.").unwrap();
         term.write_line(
@@ -34,7 +34,7 @@ async fn main() {
         .unwrap();
 
         term.write_line(&format!(
-            "🕛 Current Start Time: {} \n🕒 Current End Time: {}\n🔧 Current Settings {:?}",
+            "🕛 Current Start Time: {} \n🕒 Current End Time: {}\n⚙️ Current Settings {:?}",
             start_datetime.format("%d-%m-%Y %H:%M:%S").to_string(),
             end_datetime.format("%d-%m-%Y %H:%M:%S").to_string(),
             controller.trader.trader_exchange.get_trading_settings()

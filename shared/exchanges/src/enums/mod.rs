@@ -31,11 +31,11 @@ pub enum DataProviderExchangeWrapper {
 
 impl DataProviderExchangeWrapper {
     pub fn new(
-        selected_exchange: DataProviderExchangeId,
+        exchange_id: DataProviderExchangeId,
         strategy: &Strategy,
         trading_settings: &TradingSettings,
     ) -> Self {
-        match selected_exchange {
+        match exchange_id {
             DataProviderExchangeId::Binance => {
                 Self::Binance(BinanceDataProvider::new(trading_settings, strategy))
             }

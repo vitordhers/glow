@@ -6,7 +6,7 @@ use common::{functions::current_datetime, structs::TradingSettings};
 use exchanges::enums::{
     DataProviderExchangeId, DataProviderExchangeWrapper, TraderExchangeId, TraderExchangeWrapper,
 };
-use strategy::Strategy;
+use strategy::{Strategy, StrategyId};
 
 #[derive(Clone)]
 pub struct Controller {
@@ -17,29 +17,31 @@ pub struct Controller {
 
 impl Controller {
     pub fn new(run_benchmark_only: bool) -> Self {
-        let default_trading_settings = TradingSettings::load_or_default();
-        let default_strategy = Strategy::default();
+        let trading_settings = TradingSettings::load_or_default();
+        let default_strategy_id = StrategyId::default();
+        let strategy = Strategy::new(default_strategy_id, trading_settings.symbols_pair);
         let default_datetimes = (None::<NaiveDateTime>, Some(current_datetime()));
 
         let default_data_provider_exchange_id = DataProviderExchangeId::default();
+
         let default_data_provider_exchange = DataProviderExchangeWrapper::new(
             default_data_provider_exchange_id,
-            &default_strategy,
-            &default_trading_settings,
+            &strategy,
+            &trading_settings,
         );
 
         let data_feed = DataFeed::new(
             default_datetimes,
             default_data_provider_exchange,
             run_benchmark_only,
-            &default_strategy,
-            &default_trading_settings,
+            &strategy,
+            &trading_settings,
         );
 
         let default_trader_exchange_id = TraderExchangeId::default();
 
         let default_trader_exchange =
-            TraderExchangeWrapper::new(default_trader_exchange_id, &default_trading_settings);
+            TraderExchangeWrapper::new(default_trader_exchange_id, &trading_settings);
 
         let trader = Trader::new(
             &data_feed.strategy_data_emitter,
@@ -52,7 +54,7 @@ impl Controller {
 
         let performance = Performance::new(
             default_initial_datetime,
-            &default_trading_settings,
+            &trading_settings,
             &trader.performance_data_emitter,
         );
 

@@ -20,7 +20,7 @@ pub struct DataFeed {
     pub strategy: Strategy,
     pub strategy_data_emitter: BehaviorSubject<TradingDataUpdate>,
     pub trading_data: Arc<Mutex<DataFrame>>,
-    trading_data_schema: Schema,
+    pub trading_data_schema: Schema,
     unique_symbols: Vec<&'static Symbol>,
 }
 
