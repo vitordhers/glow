@@ -12,13 +12,14 @@ use common::{
 use glow_error::GlowError;
 use polars::prelude::Schema;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use strategy::Strategy;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub enum DataProviderExchangeId {
     #[default]
     Binance,
@@ -125,7 +126,7 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TraderExchangeId {
     #[default]
     Bybit,
@@ -137,8 +138,8 @@ pub enum TraderExchangeWrapper {
 }
 
 impl TraderExchangeWrapper {
-    pub fn new(selected_exchange: TraderExchangeId, trading_settings: &TradingSettings) -> Self {
-        match selected_exchange {
+    pub fn new(trader_exchange_id: TraderExchangeId, trading_settings: &TradingSettings) -> Self {
+        match trader_exchange_id {
             TraderExchangeId::Bybit => Self::Bybit(BybitTraderExchange::new(trading_settings)),
         }
     }

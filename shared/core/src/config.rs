@@ -13,10 +13,10 @@ use strategy::StrategyId;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BenchmarkSettings {
-    datetimes: (Option<NaiveDateTime>, Option<NaiveDateTime>),
-    strategy_id: StrategyId,
-    data_provider_id: DataProviderExchangeId,
-    trader_exchange_id: TraderExchangeId,
+    pub datetimes: (Option<NaiveDateTime>, Option<NaiveDateTime>),
+    pub strategy_id: StrategyId,
+    pub data_provider_id: DataProviderExchangeId,
+    pub trader_exchange_id: TraderExchangeId,
 }
 
 impl BenchmarkSettings {

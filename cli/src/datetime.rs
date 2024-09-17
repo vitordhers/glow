@@ -154,11 +154,11 @@ fn get_validated_date_input(
         };
         let current = current_date.format(format).to_string();
         println!(
-            "{} insert a date in format dd-mm-yyyy{} to proceed. Current = {}",
+            "{} insert a date in format dd-mm-yyyy{} to proceed. Current = {}. Press ESC to leave.",
             title, validation_cond, &current
         );
 
-        let input = get_escapable_input(Some(current));
+        let input = get_escapable_input(Some(current), Some(10));
         if input.is_none() {
             break None;
         }
@@ -251,11 +251,11 @@ fn get_validated_time_input(
         let current = current_time.format(format).to_string();
 
         println!(
-            "Insert a time in format hh:mm{} to proceed. Current = {}",
+            "Insert a time in format hh:mm{} to proceed. Current = {}. Press ESC to leave.",
             validation_cond, &current
         );
 
-        let input = get_escapable_input(Some(current));
+        let input = get_escapable_input(Some(current), Some(10));
         if input.is_none() {
             break None;
         }

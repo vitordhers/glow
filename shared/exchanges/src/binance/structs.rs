@@ -105,6 +105,10 @@ impl BinanceDataProvider {
             let mut result_df =
                 loaded_data_df.unwrap_or_else(|| DataFrame::from(trading_data_schema));
 
+            if result_df.schema().len() != trading_data_schema.len() {
+                result_df = coerce_df_to_schema(result_df, trading_data_schema)?;
+            }
+
             for (i, date) in not_loaded_dates.into_iter().enumerate() {
                 let datetimes = get_date_start_and_end_timestamps(date);
                 let mut day_ticks_data = vec![];
@@ -119,6 +123,7 @@ impl BinanceDataProvider {
                     day_ticks_data.extend(fetched_ticks);
                 }
                 let fetched_data_df = map_ticks_data_to_df(&day_ticks_data)?;
+
                 let total_klines = fetched_data_df.height() as i64;
                 let daily_klines = Duration::days(1).num_seconds() / tick_duration.num_seconds();
 
@@ -126,12 +131,14 @@ impl BinanceDataProvider {
                     let _ = save_kline_df_to_csv(&fetched_data_df, date, "binance", &symbol.name)?;
                 }
                 let fetched_data_df = coerce_df_to_schema(fetched_data_df, &trading_data_schema)?;
-                match result_df.vstack(&fetched_data_df) {
+                match &result_df.vstack(&fetched_data_df) {
                     Ok(stacked_df) => {
                         result_df = stacked_df.sort(["start_time"], false, false)?;
                     }
                     Err(error) => {
                         println!("STACK ERROR 1 {:?}", error);
+                        println!("RESULT DF SCHEMA {:?}", &result_df.schema());
+                        println!("FETCHED DF SCHEMA 2{:?}", &fetched_data_df.schema());
                     }
                 }
             }

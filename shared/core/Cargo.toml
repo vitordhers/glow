@@ -6,7 +6,7 @@ license.workspace = true
 edition.workspace = true
 
 [dependencies]
-chrono = { workspace = true }
+chrono = { workspace = true, features = ["serde"]}
 common = { workspace = true }
 exchanges = { workspace = true }
 futures-util = { workspace = true }

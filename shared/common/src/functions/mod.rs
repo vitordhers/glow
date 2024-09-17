@@ -393,18 +393,25 @@ pub fn map_ticks_data_to_df(ticks_data: &Vec<TickData>) -> Result<DataFrame, Glo
 
 pub fn coerce_df_to_schema(df: DataFrame, schema: &Schema) -> Result<DataFrame, GlowError> {
     let current_schema = df.schema();
+    // println!("THIS IS SCHEMA {:?}", current_schema);
     let data_size = df.height();
-    let mut result_df = df.clone();
+    // let mut result_df = DataFrame::from(schema);
+    let mut series = vec![];
+    // let start_time_series = df.column("start_time")?;
+    // series.push;
     for (col, dtype) in schema.clone().into_iter() {
         let is_already_in_df = current_schema.contains(&col);
         if is_already_in_df {
+            let column_series = df.column(&col)?.clone();
+            series.push(column_series);
             continue;
         }
-
         let null_series = Series::full_null(&col, data_size, &dtype);
-        let _ = result_df.with_column(null_series);
+        series.push(null_series);
+        // let _ = result_df.replace(&col, null_series);
     }
-
+    let result_df = DataFrame::new(series)?;
+    // println!("RESULT DF {:?}", result_df);
     Ok(result_df)
 }
 
