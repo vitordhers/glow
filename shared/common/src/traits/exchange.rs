@@ -11,7 +11,7 @@ use glow_error::GlowError;
 use polars::prelude::Schema;
 use reqwest::Client;
 use std::{collections::HashMap, future::Future};
-use tokio::{net::TcpStream, task::JoinHandle};
+use tokio::net::TcpStream;
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
