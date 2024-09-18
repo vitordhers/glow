@@ -10,7 +10,7 @@ pub fn change_benchmark_datetimes(
     benchmark_start: NaiveDateTime,
     benchmark_end: NaiveDateTime,
     current_trader_exchange: &TraderExchangeWrapper,
-    get_minimum_klines_for_benchmarking: u32,
+    minimum_klines_for_benchmarking: u32,
 ) -> Option<(NaiveDateTime, NaiveDateTime)> {
     let result = loop {
         let benchmark_datetimes_options = vec![
@@ -29,12 +29,11 @@ pub fn change_benchmark_datetimes(
         let benchmark_minimum_days_duration = Duration::days(settings.bechmark_minimum_days as i64);
         let kline_duration = settings.granularity.get_chrono_duration();
         let minimum_klines_duration = Duration::minutes(
-            get_minimum_klines_for_benchmarking as i64 * kline_duration.num_minutes(),
+            minimum_klines_for_benchmarking as i64 * kline_duration.num_minutes(),
         );
         let traded_contract = current_trader_exchange.get_traded_contract();
         let current_datetime = current_datetime();
         let minimum_benchmark_duration = minimum_klines_duration + benchmark_minimum_days_duration;
-
         break match selection {
             0 => loop {
                 let start_after_datetime =
@@ -73,11 +72,13 @@ pub fn change_benchmark_datetimes(
                 let updated_benchmark_start_datetime =
                     NaiveDateTime::new(updated_benchmark_start_date, updated_benchmark_start_time);
 
-                if updated_benchmark_start_datetime < benchmark_end
+                if updated_benchmark_start_datetime > benchmark_end
                     || (updated_benchmark_start_datetime + minimum_benchmark_duration)
-                        <= benchmark_end
+                        > benchmark_end
                 {
                     println!("Datetime is not valid!");
+                    println!("updated_benchmark_start_datetime {:?}", updated_benchmark_start_datetime);
+                    println!("end {:?}", benchmark_end);
                     continue;
                 }
 
@@ -86,6 +87,7 @@ pub fn change_benchmark_datetimes(
             1 => loop {
                 let end_before_datetime = current_datetime;
                 let end_before_date = end_before_datetime.date();
+                println!("!@@@@@@ {:?}", benchmark_start);
                 let end_after_datetime = benchmark_start + minimum_benchmark_duration;
                 let end_after_date = end_after_datetime.date();
                 let updated_benchmark_end_date = get_validated_date_input(
@@ -114,11 +116,13 @@ pub fn change_benchmark_datetimes(
                 let updated_benchmark_end_datetime =
                     NaiveDateTime::new(updated_benchmark_end_date, updated_benchmark_end_time);
 
-                if benchmark_start < updated_benchmark_end_datetime
+                if benchmark_start > updated_benchmark_end_datetime
                     || (benchmark_start + minimum_benchmark_duration)
-                        <= updated_benchmark_end_datetime
+                        > updated_benchmark_end_datetime
                 {
                     println!("Datetime is not valid!");
+                    println!("start {:?}", benchmark_start);
+                    println!("end {:?}", updated_benchmark_end_datetime);
                     continue;
                 }
 
@@ -187,9 +191,8 @@ fn get_validated_date_input(
             continue;
         }
         let parsed_date = date_result.unwrap();
-
         let valid_date: Option<NaiveDate> = if let (Some(before), Some(after)) = (before, after) {
-            if parsed_date < before || parsed_date > after {
+            if parsed_date > before || parsed_date < after {
                 println!(
                     "Date must be before {} and after {}",
                     before.format(format).to_string(),
@@ -200,14 +203,14 @@ fn get_validated_date_input(
                 Some(parsed_date)
             }
         } else if let (Some(before), None) = (before, after) {
-            if parsed_date < before {
+            if parsed_date > before {
                 println!("Date must be before {}", before.format(format).to_string());
                 None
             } else {
                 Some(parsed_date)
             }
         } else if let (None, Some(after)) = (before, after) {
-            if parsed_date > after {
+            if parsed_date < after {
                 println!("Date must be after {}", after.format(format).to_string());
                 None
             } else {
@@ -248,7 +251,11 @@ fn get_validated_time_input(
             String::from("")
         };
 
-        let current = current_time.format(format).to_string();
+        let current = current_time
+            .format(format)
+            .to_string()
+            .replace("h", ":")
+            .replace("m", "");
 
         println!(
             "Insert a time in format hh:mm{} to proceed. Current = {}. Press ESC to leave.",
@@ -287,7 +294,7 @@ fn get_validated_time_input(
         let parsed_time = time_result.unwrap();
 
         let valid_time = if let (Some(before), Some(after)) = (before, after) {
-            if parsed_time < before || parsed_time > after {
+            if parsed_time > before || parsed_time < after {
                 println!(
                     "Time must be before {} and after {}",
                     before.format(format).to_string(),
@@ -298,14 +305,14 @@ fn get_validated_time_input(
                 Some(parsed_time)
             }
         } else if let (Some(before), None) = (before, after) {
-            if parsed_time < before {
+            if parsed_time > before {
                 println!("Time must be before {}", before.format(format).to_string());
                 None
             } else {
                 Some(parsed_time)
             }
         } else if let (None, Some(after)) = (before, after) {
-            if parsed_time > after {
+            if parsed_time < after {
                 println!("Time must be after {}", after.format(format).to_string());
                 None
             } else {

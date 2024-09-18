@@ -9,7 +9,7 @@ use strategy::{Strategy, StrategyId};
 
 #[derive(Clone)]
 pub struct Controller {
-    benchmark_settings: BenchmarkSettings,
+    pub benchmark_settings: BenchmarkSettings,
     pub data_feed: DataFeed,
     pub performance: Performance,
     pub trader: Trader,

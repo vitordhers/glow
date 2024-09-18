@@ -1,6 +1,6 @@
 use chrono::Duration;
 use cli::{change_benchmark_datetimes, change_symbols_pair, select_from_list};
-use common::functions::current_datetime_minute_start;
+use common::functions::{current_datetime, current_datetime_minute_start};
 use common::traits::exchange::TraderHelper;
 use core::controller::Controller;
 use dialoguer::console::Term;
@@ -17,14 +17,13 @@ async fn main() {
     let max_rows = "40".to_string();
     env::set_var("POLARS_FMT_MAX_ROWS", max_rows);
 
-    let end_datetime = current_datetime_minute_start();
-    let start_datetime = end_datetime - Duration::days(1);
-
+    
     let term = Term::stdout();
     let mut controller = Controller::new(true);
     loop {
-        term.clear_screen().unwrap(); // comment this to debug
-
+        // term.clear_screen().unwrap(); // comment this to debug
+        let start_datetime = controller.benchmark_settings.datetimes.0.unwrap_or(current_datetime());
+        let end_datetime = controller.benchmark_settings.datetimes.1.unwrap_or(current_datetime());
         term.write_line("Glow Backtesting Suite - v0.02.").unwrap();
         term.write_line(
             r#"Gloria Patri, et Filio, et Spiritui Sancto.
@@ -63,6 +62,7 @@ async fn main() {
                     &current_trade_exchange,
                     current_strategy.get_minimum_klines_for_calculation(),
                 );
+                println!("@@@@@@ RESULT {:?}", result);
                 if result.is_none() {
                     continue;
                 }

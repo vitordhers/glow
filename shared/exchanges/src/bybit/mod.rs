@@ -127,7 +127,7 @@ impl BybitTraderExchange {
     }
 
     pub fn patch_settings(&mut self, trading_settings: &TradingSettings) {
-        self.trading_settings = trading_settings.clone(); 
+        self.trading_settings = trading_settings.clone();
     }
 
     async fn try_parse_response<T: DeserializeOwned>(
@@ -1371,25 +1371,25 @@ impl TraderExchange for BybitTraderExchange {
         };
 
         let order = Order::new(
-            "".to_string(),
+            avg_price,
+            balance_remainder,
+            timestamp,
+            vec![],
             id,
-            contract.symbol.name.to_string(),
-            OrderStatus::StandBy,
+            false,
+            false,
+            leverage_factor,
             open_order_type.clone(),
             side,
+            OrderStatus::StandBy,
+            stop_loss_price,
+            contract.symbol.name.to_string(),
+            take_profit_price,
+            self.get_taker_fee(),
             time_in_force,
             units,
-            leverage_factor,
-            stop_loss_price,
-            take_profit_price,
-            avg_price,
-            vec![],
-            self.get_taker_fee(),
-            balance_remainder,
-            false,
-            false,
             timestamp,
-            timestamp,
+            "".to_string(),
         );
         Ok(order)
     }
@@ -1677,25 +1677,25 @@ impl BenchmarkExchange for BybitTraderExchange {
         );
 
         let order = Order::new(
-            order_uuid,
+            avg_price,
+            balance_remainder,
+            timestamp,
+            vec![benchmark_execution],
             id,
-            contract.symbol.name.to_string(),
-            OrderStatus::Filled,
+            false,
+            false,
+            leverage_factor,
             open_order_type,
             side,
+            OrderStatus::Filled,
+            stop_loss_price,
+            contract.symbol.name.to_string(),
+            take_profit_price,
+            self.get_taker_fee(),
             time_in_force,
             units,
-            leverage_factor,
-            stop_loss_price,
-            take_profit_price,
-            avg_price,
-            vec![benchmark_execution],
-            self.get_taker_fee(),
-            balance_remainder,
-            false,
-            false,
             timestamp,
-            timestamp,
+            order_uuid,
         );
         Ok(order)
     }
@@ -1751,25 +1751,25 @@ impl BenchmarkExchange for BybitTraderExchange {
             || final_status == OrderStatus::StoppedTP;
 
         let order = Order::new(
-            order_uuid,
-            id,
-            open_order.symbol.clone(),
-            final_status,
-            close_order_type,
-            close_side,
-            time_in_force,
-            open_order.units,
-            open_order.leverage_factor,
-            None,
-            None,
             avg_price,
+            0.0,
+            timestamp,
             executions,
-            0.0,
-            0.0,
+            id,
             true,
             is_stop,
+            open_order.leverage_factor,
+            close_order_type,
+            close_side,
+            final_status,
+            None,
+            open_order.symbol.clone(),
+            None,
+            0.0,
+            time_in_force,
+            open_order.units,
             timestamp,
-            timestamp,
+            order_uuid,
         );
 
         Ok(order)
