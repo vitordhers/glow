@@ -627,6 +627,47 @@ pub fn get_price_columns(
     Ok((opens, highs, lows, closes))
 }
 
+pub fn get_price_columns_f32(
+    df: &DataFrame,
+    symbol: &Symbol,
+) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>), GlowError> {
+    let (open_col, high_col, low_col, close_col) = symbol.get_ohlc_cols();
+    let opens = df
+        .column(&open_col)
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .map(|o| o as f32)
+        .collect::<Vec<f32>>();
+    let highs = df
+        .column(&high_col)
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .map(|h| h as f32)
+        .collect::<Vec<f32>>();
+    let lows = df
+        .column(&low_col)
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .map(|l| l as f32)
+        .collect::<Vec<f32>>();
+    let closes = df
+        .column(&close_col)
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .map(|c| c as f32)
+        .collect::<Vec<f32>>();
+
+    Ok((opens, highs, lows, closes))
+}
+
 pub fn calculate_remainder(dividend: f64, divisor: f64) -> f64 {
     dividend.rem_euclid(divisor)
 }

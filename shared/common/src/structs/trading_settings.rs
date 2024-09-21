@@ -21,7 +21,7 @@ use std::{
 pub struct TradingSettings {
     pub allocation_percentage: f64,
     pub leverage: Leverage,
-    pub order_types: (OrderType, OrderType),
+    pub order_types: (OrderType, OrderType), // for opening / closing
     pub position_lock_modifier: PositionLock,
     pub price_level_modifier_map: HashMap<String, PriceLevel>,
     pub signals_revert_its_opposite: bool,
