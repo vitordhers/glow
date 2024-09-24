@@ -1,4 +1,4 @@
-use crate::benchmark::{new_benchmark_trade, BenchmarkTrade, PriceLock};
+use crate::benchmark::{count_decimal_places, new_benchmark_trade, BenchmarkTrade, PriceLock};
 use crate::trader::Trader;
 use common::enums::order_type::OrderType;
 use common::enums::side::Side;
@@ -63,12 +63,12 @@ fn compute_benchmark_positions(
     let should_check_price_modifiers = has_leverage || stop_loss.is_some() || take_profit.is_some();
     let maker_fee_rate = trader.trader_exchange.get_maker_fee() as f32;
     let taker_fee_rate = trader.trader_exchange.get_taker_fee() as f32;
-    let open_fee_rate = if trading_settings.order_types.0 == OrderType::Market {
+    let open_order_fee_rate = if trading_settings.order_types.0 == OrderType::Market {
         taker_fee_rate
     } else {
         maker_fee_rate
     };
-    let close_fee_rate = if trading_settings.order_types.1 == OrderType::Market {
+    let close_order_fee_rate = if trading_settings.order_types.1 == OrderType::Market {
         taker_fee_rate
     } else {
         maker_fee_rate
@@ -84,6 +84,8 @@ fn compute_benchmark_positions(
     // let mut current_peak_returns = 0.0;
     let mut current_min_price_threshold = None;
     let mut current_max_price_threshold = None;
+    let symbol_decimals = count_decimal_places(order_sizes.0);
+    let allocation_pct = trading_settings.allocation_percentage as f32;
 
     // need to be updated
     // trade_fees, units, profit_and_loss, returns, balances, positions, actions
@@ -97,11 +99,11 @@ fn compute_benchmark_positions(
         let current_units = units[index - 1];
         let current_balance = balances[index - 1];
 
-        let default_results = (
-            0.0,
+        let default_results: (f32, f32, f32, f32, f32, i32, String) = (
+            0.0_f32,
             current_units,
-            0.0,
-            0.0,
+            0.0_f32,
+            0.0_f32,
             current_balance,
             current_position,
             SignalCategory::KeepPosition.get_column().to_owned(),
@@ -115,31 +117,30 @@ fn compute_benchmark_positions(
                 let end_timestamp = end_timestamps[index];
                 let open_price = opens[index];
                 let close_price = closes[index];
+                let expenditure = allocation_pct * current_balance;
 
                 match new_benchmark_trade(
                     if should_short { Side::Sell } else { Side::Buy },
                     open_price,
                     taker_fee_rate,
-                    open_fee_rate,
+                    symbol_decimals,
+                    open_order_fee_rate,
                     order_sizes,
                     leverage_factor,
-                    tick_size,
                     price_locks,
-                    trading_settings.allocation_percentage * current_balance,
+                    expenditure,
                 ) {
                     Ok((trade, remainder)) => {
-                        let open_order_cost =
-                            open_order.get_order_cost().expect("order to have cost");
                         (current_min_price_threshold, current_max_price_threshold) =
-                            open_trade.get_threshold_prices();
-                        current_trade = Some(open_trade);
+                            trade.get_threshold_prices();
+                        current_trade = Some(trade);
                         (
                             trade.open_fee,
                             trade.units,
-                            0,
-                            0,
-                            f64::max(0.0, current_balance - open_order_cost),
-                            open_order.side.into(),
+                            0.0_f32,
+                            0.0_f32,
+                            f32::max(0.0, current_balance + remainder - expenditure - trade.open_fee),
+                            trade.side.into(),
                             (if should_short {
                                 SignalCategory::GoShort
                             } else {
@@ -158,8 +159,8 @@ fn compute_benchmark_positions(
                 default_results
             }
         } else {
-            let trade = current_trade.clone().unwrap();
-            let current_side = trade.open_order.side;
+            let trade = &current_trade.unwrap();
+            let current_side = trade.side;
             let stopped_result = if should_check_price_modifiers {
                 let min_price = lows[index];
                 let max_price = highs[index];
