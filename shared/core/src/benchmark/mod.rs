@@ -1,6 +1,7 @@
 use common::enums::{modifiers::price_level::PriceLevel, side::Side};
 pub mod functions;
 
+#[derive(Clone, Copy)]
 pub struct BenchmarkTrade {
     pub initial_margin: f32,
     pub leverage_factor: f32,
@@ -8,10 +9,12 @@ pub struct BenchmarkTrade {
     pub prices: (f32, Option<f32>, Option<f32>, Option<f32>), // (price, bankruptcy_price, stop_loss_price, take_profit_price)
     pub side: Side,
     pub symbol_decimals: i32,
+    pub tick_decimals: i32,
     pub units: f32,
 }
 
-pub struct PriceLock(f32);
+#[derive(Clone, Copy)]
+pub struct PriceLock(pub f32);
 
 impl From<PriceLevel> for PriceLock {
     fn from(value: PriceLevel) -> Self {
@@ -47,13 +50,14 @@ impl BenchmarkTrade {
         side: Side,
         symbol_decimals: i32,
         units: f32,
+        tick_decimals: i32,
     ) -> Self {
         let mut bankruptcy_price = None;
         if leverage_factor != 1.0 {
             bankruptcy_price = Some(round_down_nth_decimal(
                 price * (leverage_factor + if side == Side::Sell { 1.0 } else { -1.0 })
                     / leverage_factor,
-                symbol_decimals,
+                tick_decimals,
             ))
         }
         let mut stop_loss_price = None;
@@ -61,7 +65,7 @@ impl BenchmarkTrade {
             let pct = lock.0;
             let position_mod = leverage_factor + LockType::StopLoss.get_price_mod(side, pct);
             let sl_price =
-                round_nth_decimal(price * position_mod / leverage_factor, symbol_decimals);
+                round_nth_decimal(price * position_mod / leverage_factor, tick_decimals);
             stop_loss_price = Some(sl_price);
         }
         let mut take_profit_price = None;
@@ -69,11 +73,10 @@ impl BenchmarkTrade {
             let pct = lock.0;
             let position_mod = leverage_factor + LockType::TakeProfit.get_price_mod(side, pct);
             let tp_price =
-                round_nth_decimal(price * position_mod / leverage_factor, symbol_decimals);
+                round_nth_decimal(price * position_mod / leverage_factor, tick_decimals);
             take_profit_price = Some(tp_price);
         }
-        let open_fee = round_nth_decimal(units * open_order_fee_rate * price, symbol_decimals);
-
+        let open_fee = round_nth_decimal(units * open_order_fee_rate * price, tick_decimals);
         Self {
             initial_margin,
             leverage_factor,
@@ -82,22 +85,32 @@ impl BenchmarkTrade {
             side,
             symbol_decimals,
             units,
+            tick_decimals,
         }
     }
 
-    pub fn get_pnl_returns_and_fees(&self, price: f32, close_fee_rate: f32) -> (f32, f32, f32) {
+    pub fn get_pnl_returns_and_fees(
+        &self,
+        price: f32,
+        close_order_fee_rate: f32,
+    ) -> (f32, f32, f32) {
         // short: Unrealized P&L = (Average Entry Price - Current Mark Price) × Position Size, ROI = [(Entry Price − Mark Price) × Position Size/ Initial Margin] × 100%
         // long: Unrealized P&L = (Current Mark Price - Average Entry Price) × Position Size, ROI = [(Mark Price − Entry Price) × Position Size/ Initial Margin] × 100%
         // TODO: CHECK THIS =>  here, we don't subtract fees since their effects result in having less units
-        let close_fee =
-            round_nth_decimal(self.units * price * close_fee_rate, self.symbol_decimals);
+        let close_fee = round_nth_decimal(
+            self.units * price * close_order_fee_rate,
+            self.symbol_decimals,
+        );
         let price = if self.side == Side::Sell {
             self.prices.0 - price
         } else {
             price - self.prices.0
         };
         // TODO: (self.prices.0 - price) * self.units - (close_fee + self.open_fee) make sure close_fee is not double-counted
-        let pnl = round_nth_decimal(price * self.units - close_fee, self.symbol_decimals);
+        let pnl = round_nth_decimal(
+            price * self.units - (self.open_fee + close_fee),
+            self.symbol_decimals,
+        );
         let roi = if self.initial_margin != 0.0 {
             pnl / self.initial_margin
         } else {
@@ -115,11 +128,12 @@ impl BenchmarkTrade {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BenchmarkTradeError {
+    UnitsLessThanMinSize,
+    UnitsMoreThanMaxSize,
+    ValueLessThanNotionalMin,
     ZeroUnits,
-    UnitsLessThanMinimum,
-    UnitsMoreThanMax,
 }
 
 pub fn calculate_remainder(dividend: f32, divisor: f32) -> f32 {
@@ -146,17 +160,67 @@ pub fn round_nth_decimal(n: f32, decimals: i32) -> f32 {
     (n * multiplier).round() / multiplier
 }
 
+#[derive(Clone, Copy)]
+pub struct NewBenchmarkTradeParams {
+    pub expenditure: f32,
+    pub leverage_factor: f32,
+    pub minimum_notional_value: Option<f32>,
+    pub open_order_fee_rate: f32,
+    pub order_sizes: (f32, f32), // (min,max)
+    pub price: f32,
+    pub price_locks: (Option<PriceLock>, Option<PriceLock>), // (stop_loss, take_profit)
+    pub side: Side,
+    pub symbol_decimals: i32,
+    pub taker_fee_rate: f32, // usually taker fee
+    pub tick_decimals: i32,
+}
+
+impl NewBenchmarkTradeParams {
+    pub fn new(
+        expenditure: f32,
+        leverage_factor: f32,
+        minimum_notional_value: Option<f32>,
+        open_order_fee_rate: f32,
+        order_sizes: (f32, f32), // (min,max)
+        price: f32,
+        price_locks: (Option<PriceLock>, Option<PriceLock>), // (stop_loss, take_profit)
+        side: Side,
+        symbol_decimals: i32,
+        taker_fee_rate: f32,
+        tick_decimals: i32,
+    ) -> Self {
+        Self {
+            expenditure,
+            leverage_factor,
+            minimum_notional_value,
+            open_order_fee_rate,
+            order_sizes,
+            price,
+            price_locks,
+            side,
+            symbol_decimals,
+            taker_fee_rate,
+            tick_decimals,
+        }
+    }
+}
+
 pub fn new_benchmark_trade(
-    side: Side,
-    price: f32,
-    taker_fee_rate: f32, // usually taker fee
-    symbol_decimals: i32,
-    open_order_fee_rate: f32,
-    order_sizes: (f32, f32), // (min,max)
-    leverage_factor: f32,
-    price_locks: (Option<PriceLock>, Option<PriceLock>), // (stop_loss, take_profit)
-    expenditure: f32,
+    params: NewBenchmarkTradeParams,
 ) -> Result<(BenchmarkTrade, f32), BenchmarkTradeError> {
+    let NewBenchmarkTradeParams {
+        expenditure,
+        leverage_factor,
+        minimum_notional_value,
+        open_order_fee_rate,
+        order_sizes,
+        price,
+        price_locks,
+        side,
+        symbol_decimals,
+        taker_fee_rate,
+        tick_decimals,
+    } = params;
     let price_lock_modifier = if side == Side::Sell {
         taker_fee_rate
     } else if side == Side::Buy {
@@ -173,19 +237,20 @@ pub fn new_benchmark_trade(
         return Err(BenchmarkTradeError::ZeroUnits);
     }
     if units < order_sizes.0 {
-        return Err(BenchmarkTradeError::UnitsLessThanMinimum);
+        return Err(BenchmarkTradeError::UnitsLessThanMinSize);
     }
     if units > order_sizes.1 {
-        return Err(BenchmarkTradeError::UnitsMoreThanMax);
+        return Err(BenchmarkTradeError::UnitsMoreThanMaxSize);
     }
-    // 100.0043 USDT
-    // 1.9117 USDT
-    // 98,0926
-    // 98.1017 USDT
 
-    let order_value = round_nth_decimal(units * price, symbol_decimals);
-    let initial_margin = round_nth_decimal(order_value / leverage_factor, symbol_decimals);
-    let balance_remainder = round_down_nth_decimal(expenditure - initial_margin, symbol_decimals);
+    let order_value = round_nth_decimal(units * price, tick_decimals);
+    if let Some(minimum_notional_value) = minimum_notional_value {
+        if order_value < minimum_notional_value {
+            return Err(BenchmarkTradeError::ValueLessThanNotionalMin);
+        }
+    }
+    let initial_margin = round_nth_decimal(order_value / leverage_factor, tick_decimals);
+    let balance_remainder = round_down_nth_decimal(expenditure - initial_margin, tick_decimals);
     let order = BenchmarkTrade::new(
         initial_margin,
         leverage_factor,
@@ -195,6 +260,7 @@ pub fn new_benchmark_trade(
         side,
         symbol_decimals,
         units,
+        tick_decimals
     );
     Ok((order, balance_remainder))
 }

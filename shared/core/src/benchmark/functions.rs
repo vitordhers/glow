@@ -1,13 +1,54 @@
-use crate::benchmark::{count_decimal_places, new_benchmark_trade, BenchmarkTrade, PriceLock};
+use crate::benchmark::{count_decimal_places, new_benchmark_trade, BenchmarkTrade, NewBenchmarkTradeParams, PriceLock};
 use crate::trader::Trader;
 use common::enums::order_type::OrderType;
 use common::enums::side::Side;
 use common::enums::signal_category::SignalCategory;
 use common::functions::{get_price_columns_f32, get_signal_col_values};
-use common::traits::exchange::TraderHelper;
+use common::traits::exchange::{TraderHelper, BenchmarkExchange};
 use glow_error::GlowError;
 use polars::prelude::*;
 use std::time::Instant;
+use super::BenchmarkTradeError;
+
+enum IterationsError {
+    Ok(()),
+    ZeroUnits {last_index: usize}   
+}
+
+struct IterationResult {
+    fee: f32,
+    units: f32,
+    pnl: f32,
+    roi: f32,
+    balance: f32,
+    funding: f32,
+    position: i32,
+    action: String,
+}
+
+impl IterationResult {
+    pub fn new(
+        fee: f32,
+        units: f32,
+        pnl: f32,
+        roi: f32,
+        balance: f32,
+        funding: f32,
+        position: i32,
+        action: String,
+    ) -> Self {
+        Self {
+            fee,
+            units,
+            pnl,
+            roi,
+            balance,
+            funding,
+            position,
+            action,
+        }
+    }
+}
 
 fn compute_benchmark_positions(
     trader: &Trader,
@@ -47,6 +88,7 @@ fn compute_benchmark_positions(
     let mut profit_and_loss = vec![0.0];
     let mut returns = vec![0.0];
     let mut balances = vec![100.0];
+    let mut fundings = vec![0_f32];
     let mut positions = vec![0];
     let mut actions = vec![SignalCategory::KeepPosition.get_column().to_owned()];
     let trading_settings = trader.trader_exchange.get_trading_settings();
@@ -61,6 +103,7 @@ fn compute_benchmark_positions(
         .get("tp")
         .map_or(None, |tp| Some(tp.clone().into()));
     let should_check_price_modifiers = has_leverage || stop_loss.is_some() || take_profit.is_some();
+
     let maker_fee_rate = trader.trader_exchange.get_maker_fee() as f32;
     let taker_fee_rate = trader.trader_exchange.get_taker_fee() as f32;
     let open_order_fee_rate = if trading_settings.order_types.0 == OrderType::Market {
@@ -75,22 +118,25 @@ fn compute_benchmark_positions(
     };
     let order_sizes = (
         traded_contract.minimum_order_size as f32,
-        traded_contract.maximum_order_size as f32,
+        if trading_settings.order_types.0 == OrderType::Market {traded_contract.maximum_order_sizes.0 as f32 } else {traded_contract.maximum_order_sizes.1 as f32},
     );
     let tick_size = traded_contract.tick_size;
     let price_locks = (stop_loss, take_profit);
+    let minimum_notional_value = trader.trader_exchange.get_minimum_notional_value().map(|v| v as f32);
 
     let mut current_trade: Option<BenchmarkTrade> = None;
     // let mut current_peak_returns = 0.0;
     let mut current_min_price_threshold = None;
     let mut current_max_price_threshold = None;
     let symbol_decimals = count_decimal_places(order_sizes.0);
+    let tick_decimals = count_decimal_places(traded_contract.tick_size as f32)
     let allocation_pct = trading_settings.allocation_percentage as f32;
+    let suspend_amount = 0_f32;
 
     // need to be updated
     // trade_fees, units, profit_and_loss, returns, balances, positions, actions
 
-    for index in 0..df_height {
+    let result = for index in 0..df_height {
         if index == 0 {
             continue;
         }
@@ -98,58 +144,60 @@ fn compute_benchmark_positions(
         let current_position = positions[index - 1];
         let current_units = units[index - 1];
         let current_balance = balances[index - 1];
+        let current_funding = fundings[index - 1];
 
-        let default_results: (f32, f32, f32, f32, f32, i32, String) = (
-            0.0_f32,
+        let default_results = IterationResult::new(
+            0_f32,
             current_units,
-            0.0_f32,
-            0.0_f32,
+            0_f32,
+            0_f32,
             current_balance,
+            current_funding,
             current_position,
             SignalCategory::KeepPosition.get_column().to_owned(),
         );
 
-        let (fee, unit, pnl, trade_returns, balance, position, action) = if current_position == 0 {
+        let IterationResult {
+            fee,
+            units,
+            pnl,
+            roi,
+            balance,
+            funding,
+            position,
+            action,
+        } = if current_position == 0 {
             let should_short = shorts[index - 1] == 1;
             let should_long = longs[index - 1] == 1;
             if should_short || should_long {
-                let start_timestamp = start_timestamps[index];
-                let end_timestamp = end_timestamps[index];
                 let open_price = opens[index];
                 let close_price = closes[index];
                 let expenditure = allocation_pct * current_balance;
-
-                match new_benchmark_trade(
-                    if should_short { Side::Sell } else { Side::Buy },
-                    open_price,
-                    taker_fee_rate,
-                    symbol_decimals,
+                let params = NewBenchmarkTradeParams::new(
+                    expenditure,
+                    leverage_factor,
+                    minimum_notional_value,
                     open_order_fee_rate,
                     order_sizes,
-                    leverage_factor,
+                    open_price,
                     price_locks,
-                    expenditure,
+                    if should_short { Side::Sell } else { Side::Buy },
+                    symbol_decimals,
+                    taker_fee_rate,
+                    tick_decimals
+                );
+                match new_benchmark_trade(
+                    params
                 ) {
-                    Ok((trade, remainder)) => {
-                        (current_min_price_threshold, current_max_price_threshold) =
-                            trade.get_threshold_prices();
-                        current_trade = Some(trade);
-                        (
-                            trade.open_fee,
-                            trade.units,
-                            0.0_f32,
-                            0.0_f32,
-                            f32::max(0.0, current_balance + remainder - expenditure - trade.open_fee),
-                            trade.side.into(),
-                            (if should_short {
-                                SignalCategory::GoShort
-                            } else {
-                                SignalCategory::GoLong
-                            })
-                            .get_column()
-                            .to_owned(),
+                    Ok((trade, remainder)) =>{ 
+                        let params = OnOpenTradeParams::new(close_price, close_order_fee_rate, current_balance, current_funding, expenditure, remainder, should_short, trade);
+                        on_open_trade(
+                                params,
+                            &mut current_trade,
+                            &mut current_min_price_threshold,
+                            &mut current_max_price_threshold,
                         )
-                    }
+                    },
                     Err(error) => {
                         println!("create_new_benchmark_open_order error {:?}", error);
                         default_results
@@ -334,4 +382,109 @@ fn compute_benchmark_positions(
     );
 
     df.clone()
+}
+
+#[derive(Clone, Copy)]
+struct OnOpenTradeParams {
+    pub close_price: f32,
+    pub close_order_fee_rate: f32,
+    pub current_balance: f32,
+    pub current_funding: f32,
+    pub expenditure: f32,
+    pub remainder: f32,
+    pub should_short: bool,
+    pub trade: BenchmarkTrade,
+}
+
+impl OnOpenTradeParams {
+    pub fn new(
+        close_price: f32,
+        close_order_fee_rate: f32,
+        current_balance: f32,
+        current_funding: f32,
+        expenditure: f32,
+        remainder: f32,
+        should_short: bool,
+        trade: BenchmarkTrade,
+    ) -> Self { 
+        Self {
+            close_price,
+            close_order_fee_rate,
+            current_balance,
+            current_funding,
+            expenditure,
+            remainder,
+            should_short,
+            trade,
+        }
+    }
+}
+
+fn on_open_trade(
+    params: OnOpenTradeParams,
+    current_trade: &mut Option<BenchmarkTrade>,
+    current_min_price_threshold: &mut Option<f32>,
+    current_max_price_threshold: &mut Option<f32>,
+) -> IterationResult {
+    let OnOpenTradeParams {
+        close_price,
+        close_order_fee_rate,
+        current_balance,
+        current_funding,
+        expenditure,
+        remainder,
+        should_short,
+        trade,
+    } = params;
+    (*current_min_price_threshold, *current_max_price_threshold) = trade.get_threshold_prices();
+    let side = trade.side.into();
+    let open_fee = trade.open_fee;
+    let units = trade.units;
+    let (pnl, roi, _) = trade.get_pnl_returns_and_fees(close_price, close_order_fee_rate);
+    *current_trade = Some(trade);
+    IterationResult::new(
+        open_fee,
+        units,
+        pnl,
+        roi,
+        f32::max(0.0, current_balance + remainder - expenditure - open_fee),
+        current_funding,
+        side,
+        (if should_short {
+            SignalCategory::GoShort
+        } else {
+            SignalCategory::GoLong
+        })
+        .get_column()
+        .to_owned(),
+    )
+}
+
+fn on_open_trade_error(
+    error: BenchmarkTradeError,
+    new_trade_params: NewBenchmarkTradeParams,
+    on_open_trade_params: OnOpenTradeParams,
+    current_trade: &mut Option<BenchmarkTrade>,
+    current_min_price_threshold: &mut Option<f32>,
+    current_max_price_threshold: &mut Option<f32>,
+    ) -> Result<IterationResult, IterationsError> {
+        let mut current_funding = on_open_trade_params.current_funding;
+        let mut current_balance = on_open_trade_params.current_balance;
+        let mut expenditure = on_open_trade_params.expenditure;
+        let mut new_trade_params = new_trade_params;
+
+        let mut result:  Result<(BenchmarkTrade, f32), BenchmarkTradeError> = Err(error);
+        current_funding = if error == BenchmarkTradeError::UnitsLessThanMinSize {current_balance / 2.0 } else { 0.0};
+        current_balance = if error == BenchmarkTradeError::UnitsMoreThanMaxSize {current_funding } else {current_balance + current_funding};
+
+        result = new_benchmark_trade(new_trade_params); 
+        
+        let result = result.unwrap();
+        let mut on_open_trade_params = on_open_trade_params;
+        
+        let result = on_open_trade(on_open_trade_params, current_trade, current_min_price_threshold, current_max_price_threshold);
+        Ok(result)
+
+        
+
 }

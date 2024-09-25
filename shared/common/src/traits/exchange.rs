@@ -196,6 +196,8 @@ pub trait BenchmarkExchange: TraderHelper {
         binding_price: f64,
     ) -> Result<Trade, GlowError>;
 
+    fn get_minimum_notional_value(&self) -> Option<f64>;
+
     // fn check_price_level_modifiers(
     //     &self,
     //     trade: &Trade,

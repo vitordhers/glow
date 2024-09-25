@@ -7,8 +7,8 @@ pub struct Contract {
     _funding_interval: Duration,
     pub funding_rate: f64,
     pub max_leverage: f64,
-    pub maximum_order_size: f64, // in contract Symbol
-    pub minimum_order_size: f64, // in contract Symbol
+    pub maximum_order_sizes: (f64, f64), // (market, limit) in units
+    pub minimum_order_size: f64, // in units
     pub next_funding: Option<NaiveTime>,
     pub symbol: &'static Symbol,
     pub tick_size: f64, // in USDT
@@ -20,7 +20,7 @@ impl Contract {
         funding_interval: Duration,
         funding_rate: f64,
         max_leverage: f64,
-        maximum_order_size: f64,
+        maximum_order_sizes: (f64, f64),
         minimum_order_size: f64,
         next_funding: Option<NaiveTime>,
         symbol: &'static Symbol,
@@ -31,7 +31,7 @@ impl Contract {
             _funding_interval: funding_interval,
             funding_rate,
             max_leverage,
-            maximum_order_size,
+            maximum_order_sizes,
             minimum_order_size,
             next_funding,
             symbol,

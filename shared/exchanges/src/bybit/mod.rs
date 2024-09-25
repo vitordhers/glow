@@ -74,6 +74,7 @@ pub struct BybitTraderExchange {
     pub fee_rates: (f64, f64),
     http: Client,
     last_ws_error_ts: Arc<Mutex<Option<i64>>>,
+    minimum_notional_value: Option<f64>,
     pub name: &'static str,
     pub trading_settings: TradingSettings,
     order_update_emitter: BehaviorSubject<OrderAction>,
@@ -119,6 +120,7 @@ impl BybitTraderExchange {
                 .build()
                 .expect("Reqwest client to build"),
             last_ws_error_ts: Arc::new(Mutex::new(None)),
+            minimum_notional_value: Some(5.0),
             name: "Bybit",
             order_update_emitter,
             trade_update_emitter,
@@ -226,7 +228,6 @@ impl TraderHelper for BybitTraderExchange {
         let trading_settings = self.get_trading_settings();
         let leverage_factor = trading_settings.leverage.get_factor();
         // TODO: check if open order type is relevant to this calculation
-        let open_order_type = trading_settings.get_open_order_type();
         // Order Cost = Initial Margin + Fee to Open Position + Fee to Close Position
         // Initial Margin = (Order Price × Order Quantity) / Leverage
         // Fee to Open Position = Order Quantity × Order Price × Taker Fee Rate
@@ -236,6 +237,7 @@ impl TraderHelper for BybitTraderExchange {
         // _balance / ((price / leverage_factor) + (price * fee_rate) + (default_price * fee_rate))
         let contract = self.get_traded_contract();
         let taker_fee_rate = self.get_taker_fee();
+        let maximum_order_sizes = contract.maximum_order_sizes;
 
         // let (fee_rate, is_maker) = self.get_order_fee_rate(open_order_type);
 
@@ -261,10 +263,12 @@ impl TraderHelper for BybitTraderExchange {
         let size_decimals = count_decimal_places(contract.minimum_order_size);
 
         units = round_down_nth_decimal(units - fract_units, size_decimals);
+        let open_order_type = trading_settings.order_types.0;
+        let maximum_order_size = if open_order_type == OrderType::Market {maximum_order_sizes.0} else {maximum_order_sizes.1};
 
         if units == 0.0
             || units < contract.minimum_order_size
-            || units > contract.maximum_order_size
+            || units > maximum_order_size
             || leverage_factor > contract.max_leverage
         {
             println!("Some contract constraints stopped the order from being placed");
@@ -278,12 +282,12 @@ impl TraderHelper for BybitTraderExchange {
                     units,
                     contract.minimum_order_size
                 );
-            } else if units > contract.maximum_order_size {
+            } else if units > maximum_order_size {
                 error = format!(
                     "units > contract.maximum_order_size -> {} | units = {}, maximum order size = {}",
-                    units > contract.maximum_order_size,
+                    units > maximum_order_size,
                     units,
-                    contract.maximum_order_size
+                    maximum_order_size
                 );
             } else if leverage_factor > contract.max_leverage {
                 error = format!(
@@ -1810,6 +1814,10 @@ impl BenchmarkExchange for BybitTraderExchange {
 
         let closed_trade = trade.update_trade(close_order)?;
         Ok(closed_trade)
+    }
+
+    fn get_minimum_notional_value(&self) -> Option<f64> {
+        self.minimum_notional_value
     }
 }
 

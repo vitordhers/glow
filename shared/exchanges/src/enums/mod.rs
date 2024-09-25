@@ -478,6 +478,12 @@ impl BenchmarkExchange for TraderExchangeWrapper {
         }
     }
 
+    fn get_minimum_notional_value(&self) -> Option<f64> {
+        match self {
+            Self::Bybit(ex) => ex.get_minimum_notional_value(),
+        }
+    }
+
     // fn check_price_level_modifiers(
     //     &self,
     //     trade: &Trade,
