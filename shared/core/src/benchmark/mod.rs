@@ -1,7 +1,7 @@
 use common::enums::{modifiers::price_level::PriceLevel, side::Side};
 pub mod functions;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct BenchmarkTrade {
     pub initial_margin: f32,
     pub leverage_factor: f32,
@@ -64,16 +64,14 @@ impl BenchmarkTrade {
         if let Some(lock) = price_locks.0 {
             let pct = lock.0;
             let position_mod = leverage_factor + LockType::StopLoss.get_price_mod(side, pct);
-            let sl_price =
-                round_nth_decimal(price * position_mod / leverage_factor, tick_decimals);
+            let sl_price = round_nth_decimal(price * position_mod / leverage_factor, tick_decimals);
             stop_loss_price = Some(sl_price);
         }
         let mut take_profit_price = None;
         if let Some(lock) = price_locks.1 {
             let pct = lock.0;
             let position_mod = leverage_factor + LockType::TakeProfit.get_price_mod(side, pct);
-            let tp_price =
-                round_nth_decimal(price * position_mod / leverage_factor, tick_decimals);
+            let tp_price = round_nth_decimal(price * position_mod / leverage_factor, tick_decimals);
             take_profit_price = Some(tp_price);
         }
         let open_fee = round_nth_decimal(units * open_order_fee_rate * price, tick_decimals);
@@ -130,9 +128,16 @@ impl BenchmarkTrade {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BenchmarkTradeError {
-    UnitsLessThanMinSize,
-    UnitsMoreThanMaxSize,
-    ValueLessThanNotionalMin,
+    UnitsLessThanMinSize {
+        min_expenditure: f32,
+    },
+    UnitsMoreThanMaxSize {
+        max_expenditure: f32,
+        expenditure: f32,
+    },
+    ValueLessThanNotionalMin {
+        min_expenditure: f32,
+    },
     ZeroUnits,
 }
 
@@ -162,7 +167,8 @@ pub fn round_nth_decimal(n: f32, decimals: i32) -> f32 {
 
 #[derive(Clone, Copy)]
 pub struct NewBenchmarkTradeParams {
-    pub expenditure: f32,
+    pub allocation_pct: f32,
+    pub current_balance: f32,
     pub leverage_factor: f32,
     pub minimum_notional_value: Option<f32>,
     pub open_order_fee_rate: f32,
@@ -177,7 +183,8 @@ pub struct NewBenchmarkTradeParams {
 
 impl NewBenchmarkTradeParams {
     pub fn new(
-        expenditure: f32,
+        allocation_pct: f32,
+        current_balance: f32,
         leverage_factor: f32,
         minimum_notional_value: Option<f32>,
         open_order_fee_rate: f32,
@@ -190,7 +197,8 @@ impl NewBenchmarkTradeParams {
         tick_decimals: i32,
     ) -> Self {
         Self {
-            expenditure,
+            allocation_pct,
+            current_balance,
             leverage_factor,
             minimum_notional_value,
             open_order_fee_rate,
@@ -207,9 +215,10 @@ impl NewBenchmarkTradeParams {
 
 pub fn new_benchmark_trade(
     params: NewBenchmarkTradeParams,
-) -> Result<(BenchmarkTrade, f32), BenchmarkTradeError> {
+) -> Result<BenchmarkTrade, BenchmarkTradeError> {
     let NewBenchmarkTradeParams {
-        expenditure,
+        allocation_pct,
+        current_balance,
         leverage_factor,
         minimum_notional_value,
         open_order_fee_rate,
@@ -226,32 +235,57 @@ pub fn new_benchmark_trade(
     } else if side == Side::Buy {
         -taker_fee_rate
     } else {
-        panic!("Invalid side for opening benchmark order");
+        unreachable!();
     };
+    let expenditure =
+        round_down_nth_decimal(allocation_pct * current_balance / 100_f32, tick_decimals);
     let units = round_down_nth_decimal(
         expenditure * leverage_factor
             / (price * (((2.0 * taker_fee_rate) * leverage_factor) + (1.0 + price_lock_modifier))),
         symbol_decimals,
     );
+
     if units == 0.0 {
         return Err(BenchmarkTradeError::ZeroUnits);
     }
     if units < order_sizes.0 {
-        return Err(BenchmarkTradeError::UnitsLessThanMinSize);
+        let min_units = order_sizes.0;
+        let min_expenditure = round_down_nth_decimal(
+            min_units
+                * (price
+                    * (((2.0 * taker_fee_rate) * leverage_factor) + (1.0 + price_lock_modifier)))
+                / leverage_factor,
+            tick_decimals,
+        );
+        return Err(BenchmarkTradeError::UnitsLessThanMinSize { min_expenditure });
     }
     if units > order_sizes.1 {
-        return Err(BenchmarkTradeError::UnitsMoreThanMaxSize);
+        let max_units = order_sizes.1;
+        let max_expenditure = round_down_nth_decimal(
+            max_units
+                * (price
+                    * (((2.0 * taker_fee_rate) * leverage_factor) + (1.0 + price_lock_modifier)))
+                / leverage_factor,
+            tick_decimals,
+        );
+        return Err(BenchmarkTradeError::UnitsMoreThanMaxSize {
+            max_expenditure,
+            expenditure,
+        });
     }
 
     let order_value = round_nth_decimal(units * price, tick_decimals);
     if let Some(minimum_notional_value) = minimum_notional_value {
         if order_value < minimum_notional_value {
-            return Err(BenchmarkTradeError::ValueLessThanNotionalMin);
+            return Err(BenchmarkTradeError::ValueLessThanNotionalMin {
+                min_expenditure: minimum_notional_value,
+            });
         }
     }
     let initial_margin = round_nth_decimal(order_value / leverage_factor, tick_decimals);
-    let balance_remainder = round_down_nth_decimal(expenditure - initial_margin, tick_decimals);
-    let order = BenchmarkTrade::new(
+    // let balance_remainder = round_down_nth_decimal(expenditure - initial_margin, tick_decimals);
+
+    let trade = BenchmarkTrade::new(
         initial_margin,
         leverage_factor,
         open_order_fee_rate,
@@ -260,7 +294,7 @@ pub fn new_benchmark_trade(
         side,
         symbol_decimals,
         units,
-        tick_decimals
+        tick_decimals,
     );
-    Ok((order, balance_remainder))
+    Ok(trade)
 }
