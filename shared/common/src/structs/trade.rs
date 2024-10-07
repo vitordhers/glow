@@ -1,15 +1,11 @@
 use chrono::Utc;
 use glow_error::GlowError;
 
-use crate::{
-    enums::{
-        order_stage::OrderStage, order_status::OrderStatus, order_type::OrderType, side::Side,
-        time_in_force::TimeInForce, trade_status::TradeStatus,
-    },
-    traits::exchange::TraderExchange,
-};
-
 use super::{execution::Execution, order::Order};
+use crate::enums::{
+    order_stage::OrderStage, order_status::OrderStatus, order_type::OrderType, side::Side,
+    time_in_force::TimeInForce, trade_status::TradeStatus,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct Trade {
@@ -22,7 +18,6 @@ pub struct Trade {
 impl Trade {
     pub fn new(open_order: Order, close_order: Option<Order>) -> Self {
         let mut iter = open_order.id.splitn(3, '_');
-
         let traded_symbol = iter.next().unwrap_or("");
         let open_order_timestamp = iter.next().unwrap_or("");
         let id = format!("{}_{}", traded_symbol, open_order_timestamp).to_string();
@@ -129,37 +124,33 @@ impl Trade {
             TimeInForce::GTC
         };
         let timestamp = Utc::now().timestamp() * 1000;
-
         let executions = vec![];
-
         let avg_price = if order_type == OrderType::Limit {
             Some(est_price)
         } else {
             None
         };
-
         let close_side = self.open_order.side.get_opposite_side()?;
-
         let order = Order::new(
-            format!("pending_order_uuid_{}", timestamp),
-            id,
-            self.open_order.symbol.clone(),
-            OrderStatus::StandBy,
-            order_type,
-            close_side,
-            time_in_force,
-            self.open_order.units,
-            self.open_order.leverage_factor,
-            None,
-            None,
             avg_price,
+            0.0,
+            timestamp,
             executions,
-            0.0,
-            0.0,
+            id,
             true,
             false,
+            self.open_order.leverage_factor,
+            order_type,
+            close_side,
+            OrderStatus::StandBy,
+            None,
+            self.open_order.symbol.clone(),
+            None,
+            0.0,
+            time_in_force,
+            self.open_order.units,
             timestamp,
-            timestamp,
+            format!("pending_order_uuid_{}", timestamp),
         );
 
         Ok(order)
@@ -173,15 +164,12 @@ impl Trade {
         let realized_pnl =
             self.get_interval_profit_and_loss(self.open_order.created_at, end_timestamp);
         let (unrealized_pnl, _) = self.calculate_unrealized_pnl_and_returns(current_price);
-
         let initial_margin = self.calculate_initial_margin();
-
         let returns = if initial_margin != 0.0 {
             (realized_pnl + unrealized_pnl) / initial_margin
         } else {
             0.0
         };
-
         ((realized_pnl + unrealized_pnl), returns)
     }
 
@@ -190,19 +178,15 @@ impl Trade {
             .close_order
             .clone()
             .expect("calculate_pnl_and_returns close order unwrap");
-
         let end_timestamp = closed_order.updated_at;
         let realized_pnl =
             self.get_interval_profit_and_loss(self.open_order.created_at, end_timestamp);
-
         let initial_margin = self.calculate_initial_margin();
-
         let returns = if initial_margin != 0.0 {
             realized_pnl / initial_margin
         } else {
             0.0
         };
-
         (realized_pnl, returns)
     }
 
@@ -211,18 +195,15 @@ impl Trade {
         // long: Unrealized P&L = (Current Mark Price - Average Entry Price) × Position Size, ROI = [(Mark Price − Entry Price) × Position Size/ Initial Margin] × 100%
         let avg_entry_price = self.open_order.get_executed_avg_price();
         let executed_qty = self.open_order.get_executed_quantity();
-
         let closed_qty = if let Some(close_order) = &self.close_order {
             close_order.get_closed_quanitity()
         } else {
             0.0
         };
-
         let current_position_size = executed_qty - closed_qty;
         let bankruptcy_price = self.open_order.get_bankruptcy_price().unwrap_or_default();
         let provisional_close_fee =
             current_position_size * bankruptcy_price * self.open_order.taker_fee_rate;
-
         // TODO: CHECK THIS =>  here, we don't subtract fees since their effects result in having less units
         let unrealized_pnl = if self.open_order.side == Side::Sell {
             (avg_entry_price - current_price) * current_position_size - provisional_close_fee
@@ -231,9 +212,7 @@ impl Trade {
         } else {
             panic!("calculate_unrealized_profit -> open order position is different from -1 or 1");
         };
-
         let initial_margin = self.calculate_initial_margin();
-
         let unrealized_returns = if initial_margin != 0.0 {
             unrealized_pnl / initial_margin
         } else {
@@ -260,7 +239,6 @@ impl Trade {
             .get_executions_between_interval(start_timestamp, end_timestamp);
         let close_executions = self.get_interval_close_executions(start_timestamp, end_timestamp);
         executions.extend(close_executions);
-
         executions
     }
 
@@ -274,7 +252,6 @@ impl Trade {
             .get_interval_close_executions(self.open_order.created_at, end_timestamp)
             .iter()
             .fold(0.0, |acc, execution| acc + execution.closed_qty);
-
         open_units - closed_units
     }
 
@@ -307,7 +284,6 @@ impl Trade {
             let close_fees = close_order.get_executed_order_fee();
             total_executed_fees += close_fees;
         }
-
         let open_fees = self.open_order.get_executed_order_fee();
         total_executed_fees += open_fees;
         total_executed_fees
@@ -366,7 +342,6 @@ impl Trade {
 
     pub fn update_trade(&self, order: Order) -> Result<Trade, GlowError> {
         let mut updated_trade = self.clone();
-
         if order.is_close {
             match &self.close_order {
                 Some(close_order) => {
@@ -442,7 +417,6 @@ impl Trade {
     ) -> Result<Option<Trade>, GlowError> {
         let mut updated_trade = self.clone();
         let mut was_updated = false;
-
         if self.close_order.is_some() {
             let mut close_order = self.close_order.clone().unwrap();
             let close_order_uuid = close_order.uuid.clone();
@@ -464,7 +438,6 @@ impl Trade {
 
         let mut open_order = updated_trade.open_order.clone();
         let open_order_uuid = updated_trade.open_order.uuid.clone();
-
         if open_order_uuid != "".to_string() {
             let open_order_executions = executions
                 .clone()
@@ -478,7 +451,6 @@ impl Trade {
                 updated_trade = updated_trade.update_trade(open_order)?;
             }
         }
-
         if was_updated {
             Ok(Some(updated_trade))
         } else {

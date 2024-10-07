@@ -11,3 +11,4 @@ common = { workspace = true }
 enum_dispatch = { workspace = true }
 glow_error = { workspace = true }
 polars = { workspace = true }
+serde = { workspace = true }

@@ -6,6 +6,7 @@ use common::{
 use crate::select_from_list;
 
 pub fn change_symbols_pair(current_symbols_pair: SymbolsPair) -> Option<SymbolsPair> {
+    println!("@@change_symbols_pair");
     let result = loop {
         let benchmark_symbols_pair_options = vec![
             "⚓ Change Anchor Symbol".to_owned(),
@@ -40,7 +41,7 @@ pub fn change_symbols_pair(current_symbols_pair: SymbolsPair) -> Option<SymbolsP
                 }
                 let selected_symbol = selection.unwrap();
                 let mut updated_symbols_pair = current_symbols_pair.clone();
-                updated_symbols_pair.anchor = selected_symbol;
+                updated_symbols_pair.traded = selected_symbol;
                 Some(updated_symbols_pair)
             }
             _ => None,

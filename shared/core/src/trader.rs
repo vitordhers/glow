@@ -1,70 +1,91 @@
 use common::{
     enums::{
-        balance::Balance, modifiers::price_level::PriceLevel, order_action::OrderAction,
-        order_status::OrderStatus, side::Side, signal_category::SignalCategory,
+        balance::Balance, order_action::OrderAction, side::Side, signal_category::SignalCategory,
         trade_status::TradeStatus, trading_data_update::TradingDataUpdate,
     },
     functions::{
-        check_last_index_for_signal, current_datetime, current_timestamp_ms, get_price_columns,
-        get_signal_col_values, get_trading_columns_values,
+        check_last_index_for_signal, current_datetime, current_timestamp_ms,
+        get_trading_columns_values,
     },
-    structs::{BehaviorSubject, Execution, Order, Trade},
-    traits::exchange::{BenchmarkExchange, TraderExchange, TraderHelper},
+    structs::{BehaviorSubject, Execution, Order, Trade, TradingSettings},
+    traits::exchange::{TraderExchange, TraderHelper},
 };
 use exchanges::enums::TraderExchangeWrapper;
 use glow_error::GlowError;
 use polars::prelude::*;
-use std::{
-    sync::{Arc, Mutex, RwLock},
-    time::Instant,
-};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::{spawn, task::JoinHandle};
 use tokio_stream::StreamExt;
+
+use crate::benchmark::functions::compute_benchmark_positions;
 
 #[derive(Clone)]
 pub struct Trader {
     current_balance_listener: BehaviorSubject<Balance>,
     current_trade_listener: BehaviorSubject<Option<Trade>>,
-    exchange_listener: BehaviorSubject<TraderExchangeWrapper>,
-    performance_data_emitter: BehaviorSubject<TradingDataUpdate>,
+    executions_update_listener: BehaviorSubject<Vec<Execution>>,
+    order_update_listener: BehaviorSubject<OrderAction>,
+    pub performance_data_emitter: BehaviorSubject<TradingDataUpdate>,
     signal_listener: BehaviorSubject<SignalCategory>,
     strategy_data_listener: BehaviorSubject<TradingDataUpdate>,
     temp_executions: Arc<Mutex<Vec<Execution>>>,
+    pub trader_exchange: TraderExchangeWrapper,
     trading_data: Arc<Mutex<DataFrame>>,
     trading_data_klines_limit: Arc<RwLock<u32>>,
-    update_balance_listener: BehaviorSubject<Option<Balance>>,
-    update_order_listener: BehaviorSubject<Option<OrderAction>>,
-    update_executions_listener: BehaviorSubject<Vec<Execution>>,
 }
 
 impl Trader {
+    fn get_listeners(
+        trader_exchange: &TraderExchangeWrapper,
+    ) -> (
+        &BehaviorSubject<Balance>,
+        &BehaviorSubject<Vec<Execution>>,
+        &BehaviorSubject<OrderAction>,
+        &BehaviorSubject<Option<Trade>>,
+    ) {
+        let current_balance_listener = trader_exchange.get_balance_update_emitter();
+        let executions_update_listener = trader_exchange.get_executions_update_emitter();
+        let order_update_listener = trader_exchange.get_order_update_emitter();
+        let current_trade_listener = trader_exchange.get_trade_update_emitter();
+
+        (
+            current_balance_listener,
+            executions_update_listener,
+            order_update_listener,
+            current_trade_listener,
+        )
+    }
+
     pub fn new(
-        current_balance_listener: &BehaviorSubject<Balance>,
-        current_trade_listener: &BehaviorSubject<Option<Trade>>,
-        exchange_listener: &BehaviorSubject<TraderExchangeWrapper>,
-        performance_data_emitter: &BehaviorSubject<TradingDataUpdate>,
-        signal_listener: &BehaviorSubject<SignalCategory>,
         strategy_data_listener: &BehaviorSubject<TradingDataUpdate>,
+        trader_exchange: TraderExchangeWrapper,
         trading_data: &Arc<Mutex<DataFrame>>,
         trading_data_klines_limit: &Arc<RwLock<u32>>,
-        update_balance_listener: &BehaviorSubject<Option<Balance>>,
-        update_order_listener: &BehaviorSubject<Option<OrderAction>>,
-        update_executions_listener: &BehaviorSubject<Vec<Execution>>,
     ) -> Trader {
+        let performance_data_emitter = BehaviorSubject::new(TradingDataUpdate::default());
+        let (
+            current_balance_listener,
+            executions_update_listener,
+            order_update_listener,
+            current_trade_listener,
+        ) = Self::get_listeners(&trader_exchange);
         Trader {
-            performance_data_emitter: performance_data_emitter.clone(),
             current_balance_listener: current_balance_listener.clone(),
             current_trade_listener: current_trade_listener.clone(),
-            exchange_listener: exchange_listener.clone(),
-            signal_listener: signal_listener.clone(),
+            executions_update_listener: executions_update_listener.clone(),
+            order_update_listener: order_update_listener.clone(),
+            performance_data_emitter: performance_data_emitter.clone(),
+            signal_listener: BehaviorSubject::new(SignalCategory::default()),
             temp_executions: Arc::new(Mutex::new(Vec::new())),
             strategy_data_listener: strategy_data_listener.clone(),
+            trader_exchange,
             trading_data: trading_data.clone(),
             trading_data_klines_limit: trading_data_klines_limit.clone(),
-            update_balance_listener: update_balance_listener.clone(),
-            update_order_listener: update_order_listener.clone(),
-            update_executions_listener: update_executions_listener.clone(),
         }
+    }
+
+    pub fn patch_settings(&mut self, trading_settings: &TradingSettings) {
+        self.trader_exchange.patch_settings(trading_settings);
     }
 
     fn get_trading_data(&self) -> Result<DataFrame, GlowError> {
@@ -114,8 +135,7 @@ impl Trader {
 
     async fn process_last_signal(&self, signal: SignalCategory) -> Result<(), GlowError> {
         let current_trade = self.current_trade_listener.value();
-        let exchange = self.exchange_listener.value();
-        let traded_symbol = exchange.get_traded_symbol();
+        let traded_symbol = self.trader_exchange.get_traded_symbol();
         let close_col = traded_symbol.get_close_col();
         let trading_data = self.get_trading_data()?;
         // TODO: check if this can be received via param
@@ -128,9 +148,13 @@ impl Trader {
 
         if current_trade.is_none() {
             let available_to_withdraw = self.current_balance_listener.value().available_to_withdraw;
-            return Ok(
-                open_order(exchange, signal.into(), available_to_withdraw, last_price).await?,
-            );
+            return Ok(open_order(
+                &self.trader_exchange,
+                signal.into(),
+                available_to_withdraw,
+                last_price,
+            )
+            .await?);
         }
         let mut current_trade = current_trade.unwrap();
         let current_trade_status = &current_trade.status();
@@ -142,7 +166,7 @@ impl Trader {
             (TradeStatus::New, SignalCategory::GoLong, Side::Sell) | // non-executed order received opposite signal
             (TradeStatus::New, SignalCategory::GoShort, Side::Buy) // non-executed order received opposite signal
              => {
-                match exchange
+                match self.trader_exchange
                         .cancel_order(current_trade.open_order.id.clone())
                         .await
                     {
@@ -167,7 +191,7 @@ impl Trader {
                                 let wallet_balance = self.current_balance_listener.value().wallet_balance;
 
                                 match open_order(
-                                    exchange,
+                                    &self.trader_exchange,
                                     signal.into(),
                                     wallet_balance,
                                     last_price,
@@ -212,7 +236,7 @@ impl Trader {
                     let updated_price = None;
                     let updated_stop_loss_price = None;
                     let updated_take_profit_price = None;
-                    let amend_result = exchange
+                    let amend_result = self.trader_exchange
                         .amend_order(
                             current_trade.open_order.id.clone(),
                             updated_units,
@@ -245,7 +269,7 @@ impl Trader {
                     }
                 }
 
-                match exchange
+                match self.trader_exchange
                     .try_close_position(
                         &current_trade,
                         last_price,
@@ -290,18 +314,17 @@ impl Trader {
         })
     }
 
-    // TODO: check if it makes sense to have two behavior subjects for apparently the same data
-    fn init_balance_update_handler(&self) -> JoinHandle<()> {
-        let trader = self.clone();
-        spawn(async move {
-            let mut subscription = trader.update_balance_listener.subscribe();
-            while let Some(balance_update) = subscription.next().await {
-                if let Some(balance) = balance_update {
-                    trader.current_balance_listener.next(balance)
-                }
-            }
-        })
-    }
+    // fn init_balance_update_handler(&self) -> JoinHandle<()> {
+    //     let trader = self.clone();
+    //     spawn(async move {
+    //         let mut subscription = trader.update_balance_listener.subscribe();
+    //         while let Some(balance_update) = subscription.next().await {
+    //             if let Some(balance) = balance_update {
+    //                 trader.current_balance_listener.next(balance)
+    //             }
+    //         }
+    //     })
+    // }
 
     fn add_executions_to_order_and_remove_from_temp(&self, order: Order) -> Order {
         // let mut updated_order = order.clone();
@@ -343,12 +366,8 @@ impl Trader {
     fn init_order_update_handler(&self) -> JoinHandle<()> {
         let trader = self.clone();
         spawn(async move {
-            let mut subscription = trader.update_order_listener.subscribe();
-            while let Some(order_update) = subscription.next().await {
-                if order_update.is_none() {
-                    continue;
-                }
-                let order_action = order_update.unwrap();
+            let mut subscription = trader.order_update_listener.subscribe();
+            while let Some(order_action) = subscription.next().await {
                 let current_trade = trader.current_trade_listener.value();
                 match order_action.clone() {
                     OrderAction::Update(mut updated_order)
@@ -423,6 +442,7 @@ impl Trader {
 
                         trader.current_trade_listener.next(Some(updated_trade));
                     }
+                    _ => {}
                 }
             }
         })
@@ -431,7 +451,7 @@ impl Trader {
     fn init_executions_update_handler(&self) -> JoinHandle<()> {
         let trader = self.clone();
         spawn(async move {
-            let mut subscription = trader.update_executions_listener.subscribe();
+            let mut subscription = trader.executions_update_listener.subscribe();
             while let Some(latest_executions) = subscription.next().await {
                 if latest_executions.len() <= 0 {
                     continue;
@@ -564,318 +584,7 @@ impl Trader {
         &self,
         initial_strategy_df: DataFrame,
     ) -> Result<DataFrame, GlowError> {
-        // let data = data.to_owned();
-        // TODO: TRY TO IMPLEMENT THIS USING LAZYFRAMES
-        let perf_start = Instant::now();
-
-        let mut df = initial_strategy_df;
-        let df_height = df.height();
-
-        let start_timestamps = df
-            .column("start_time")
-            .unwrap()
-            .datetime()
-            .unwrap()
-            .into_no_null_iter()
-            .collect::<Vec<i64>>();
-
-        let end_timestamps = start_timestamps
-            .clone()
-            .into_iter()
-            .map(|start_timestamp| start_timestamp - 1)
-            .collect::<Vec<i64>>();
-
-        let exchange = self.exchange_listener.value();
-        let traded_symbol = exchange.get_traded_symbol();
-        let (opens, highs, lows, closes) = get_price_columns(&df, &traded_symbol)?;
-        let shorts = get_signal_col_values(&df, SignalCategory::GoShort)?;
-        let longs = get_signal_col_values(&df, SignalCategory::GoShort)?;
-        let close_shorts = get_signal_col_values(&df, SignalCategory::CloseShort)?;
-        let close_longs = get_signal_col_values(&df, SignalCategory::CloseLong)?;
-
-        let mut trade_fees = vec![0.0];
-        let mut units = vec![0.0];
-        let mut profit_and_loss = vec![0.0];
-        let mut returns = vec![0.0];
-        let mut balances = vec![100.0];
-        let mut positions = vec![0];
-        let mut actions = vec![SignalCategory::KeepPosition.get_column().to_owned()];
-
-        let trading_settings = exchange.get_trading_settings();
-
-        let leverage_factor = exchange.get_leverage_factor();
-        let has_leverage = leverage_factor > 1.0;
-
-        let price_level_modifier_map_binding = trading_settings.price_level_modifier_map.clone();
-        let stop_loss: Option<&PriceLevel> = price_level_modifier_map_binding.get("sl");
-        let take_profit = price_level_modifier_map_binding.get("tp");
-        let trailing_stop_loss = price_level_modifier_map_binding.get("tsl");
-        let should_check_price_modifiers = has_leverage
-            || stop_loss.is_some()
-            || take_profit.is_some()
-            || trailing_stop_loss.is_some();
-
-        let mut current_trade: Option<Trade> = None;
-        // let mut current_peak_returns = 0.0;
-        let mut current_min_price_threshold = None;
-        let mut current_max_price_threshold = None;
-
-        // need to be updated
-        // trade_fees, units, profit_and_loss, returns, balances, positions, actions
-
-        for index in 0..df_height {
-            if index == 0 {
-                continue;
-            }
-
-            let current_position = positions[index - 1];
-            let current_units = units[index - 1];
-            let current_balance = balances[index - 1];
-
-            let default_results = (
-                0.0,
-                current_units,
-                0.0,
-                0.0,
-                current_balance,
-                current_position,
-                SignalCategory::KeepPosition.get_column().to_owned(),
-            );
-
-            let (fee, unit, pnl, trade_returns, balance, position, action) = if current_position
-                == 0
-            {
-                let should_short = shorts[index - 1] == 1;
-                let should_long = longs[index - 1] == 1;
-                if should_short || should_long {
-                    let start_timestamp = start_timestamps[index];
-                    let end_timestamp = end_timestamps[index];
-                    let open_price = opens[index];
-                    let close_price = closes[index];
-
-                    match exchange.new_benchmark_open_order(
-                        start_timestamp,
-                        if should_short { Side::Sell } else { Side::Buy },
-                        current_balance,
-                        open_price,
-                    ) {
-                        Ok(open_order) => {
-                            let open_trade: Trade = open_order.clone().into();
-                            let fees = open_trade.get_executed_fees();
-                            let (pnl, trade_returns) = open_trade
-                                .calculate_current_pnl_and_returns(end_timestamp, close_price);
-                            let open_order_cost =
-                                open_order.get_order_cost().expect("order to have cost");
-                            (current_min_price_threshold, current_max_price_threshold) =
-                                open_trade.get_threshold_prices();
-                            current_trade = Some(open_trade);
-                            (
-                                fees,
-                                open_order.units,
-                                pnl,
-                                trade_returns,
-                                f64::max(0.0, current_balance - open_order_cost),
-                                open_order.side.into(),
-                                (if should_short {
-                                    SignalCategory::GoShort
-                                } else {
-                                    SignalCategory::GoLong
-                                })
-                                .get_column()
-                                .to_owned(),
-                            )
-                        }
-                        Err(error) => {
-                            println!("create_new_benchmark_open_order error {:?}", error);
-                            default_results
-                        }
-                    }
-                } else {
-                    default_results
-                }
-            } else {
-                let trade = current_trade.clone().unwrap();
-                let current_side = trade.open_order.side;
-                let stopped_result = if should_check_price_modifiers {
-                    let min_price = lows[index];
-                    let max_price = highs[index];
-                    let binds_on_min_price =
-                        min_price <= current_min_price_threshold.unwrap_or_default();
-                    let binds_on_max_price =
-                        max_price >= current_max_price_threshold.unwrap_or_default();
-                    if binds_on_min_price || binds_on_max_price {
-                        // let prev_close_price = closes[index - 1];
-                        let prev_end_timestamp = end_timestamps[index - 1];
-                        match exchange.close_benchmark_trade_on_binding_price(
-                            &trade,
-                            prev_end_timestamp,
-                            if binds_on_min_price {
-                                current_min_price_threshold.unwrap()
-                            } else {
-                                current_max_price_threshold.unwrap()
-                            },
-                        ) {
-                            Ok(closed_trade) => {
-                                let close_order = closed_trade.clone().close_order.unwrap();
-                                let (pnl, trade_returns) = closed_trade.calculate_pnl_and_returns();
-                                let order_cost = closed_trade.open_order.get_order_cost().unwrap();
-                                let action = match close_order.status {
-                                    OrderStatus::StoppedBR => SignalCategory::LeverageBankrupcty,
-                                    OrderStatus::StoppedSL => SignalCategory::StopLoss,
-                                    OrderStatus::StoppedTP => SignalCategory::TakeProfit,
-                                    // OrderStatus::StoppedTSL => {
-                                    //     SignalCategory::TrailingStopLoss
-                                    // }
-                                    _ => SignalCategory::KeepPosition,
-                                };
-                                (current_min_price_threshold, current_max_price_threshold) =
-                                    (None, None);
-                                current_trade = None;
-                                Some((
-                                    close_order.get_executed_order_fee(),
-                                    0.0,
-                                    pnl,
-                                    trade_returns,
-                                    current_balance + order_cost + pnl,
-                                    0,
-                                    action.get_column().to_owned(),
-                                ))
-                            }
-                            Err(error) => {
-                                println!(
-                                    "close_benchmark_trade_on_binding_price error {:?}",
-                                    error
-                                );
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(stopped_result) = stopped_result {
-                    stopped_result
-                } else {
-                    // position wasn't stopped
-                    let was_short_closed =
-                        close_shorts[index - 1] == 1 && current_side == Side::Sell;
-                    let was_long_closed = close_longs[index - 1] == 1 && current_side == Side::Buy;
-
-                    if was_short_closed || was_long_closed {
-                        let current_timestamp = start_timestamps[index];
-                        let open_price = opens[index];
-
-                        match exchange.new_benchmark_close_order(
-                            current_timestamp,
-                            &trade.id,
-                            open_price,
-                            trade.open_order.clone(),
-                            OrderStatus::Closed,
-                        ) {
-                            Ok(close_order) => {
-                                let updated_trade = trade.update_trade(close_order.clone())?;
-                                let (pnl, trade_returns) =
-                                    updated_trade.calculate_pnl_and_returns();
-                                let order_cost = trade.open_order.get_order_cost().unwrap();
-
-                                current_trade = None;
-                                (
-                                    close_order.get_executed_order_fee(),
-                                    0.0,
-                                    pnl,
-                                    trade_returns,
-                                    current_balance + order_cost + pnl,
-                                    0,
-                                    (if was_short_closed {
-                                        SignalCategory::CloseShort
-                                    } else {
-                                        SignalCategory::CloseLong
-                                    })
-                                    .get_column()
-                                    .to_owned(),
-                                )
-                            }
-                            Err(error) => {
-                                println!("create_benchmark_close_order WARNING: {:?}", error);
-                                default_results
-                            }
-                        }
-                    } else {
-                        default_results
-                    }
-                }
-            };
-
-            trade_fees.push(fee);
-            units.push(unit);
-            profit_and_loss.push(pnl);
-            returns.push(trade_returns);
-            balances.push(balance);
-            positions.push(position);
-            actions.push(action);
-        }
-        // if last position was taken
-        if positions.last().unwrap() != &0 {
-            if let Some((before_last_order_index, _)) =
-                positions // over positions vector
-                    .iter() // iterate over
-                    .enumerate() // an enumeration
-                    .rev() // of reversed positions
-                    .find(|(_, value)| value == &&0)
-            // until it finds where value is 0
-            {
-                // splices results vectors to values before opening the order
-                // note that even though the vector was reversed, before_last_order_index keeps being the original vector index. Thanks, Rust <3
-                let range = before_last_order_index..df_height;
-                let zeroed_float_patch: Vec<f64> = range.clone().map(|_| 0.0 as f64).collect();
-                let zeroed_integer_patch: Vec<i32> = range.clone().map(|_| 0 as i32).collect();
-                let keep_position_action_patch: Vec<String> = range
-                    .clone()
-                    .map(|_| SignalCategory::KeepPosition.get_column().to_owned())
-                    .collect();
-
-                trade_fees.splice(range.clone(), zeroed_float_patch.clone());
-                units.splice(range.clone(), zeroed_float_patch.clone());
-                profit_and_loss.splice(range.clone(), zeroed_float_patch.clone());
-
-                positions.splice(range.clone(), zeroed_integer_patch);
-                actions.splice(range.clone(), keep_position_action_patch);
-
-                let previous_balance = balances[before_last_order_index];
-                let patch_balances: Vec<f64> =
-                    range.clone().map(|_| previous_balance as f64).collect();
-                balances.splice(range.clone(), patch_balances);
-                returns.splice(range.clone(), zeroed_float_patch);
-            }
-        }
-
-        let trade_fee_series = Series::new("trade_fees", trade_fees);
-        let units_series = Series::new("units", units);
-        let profit_and_loss_series = Series::new("profit_and_loss", profit_and_loss);
-        let returns_series = Series::new("returns", returns);
-        let balance_series = Series::new("balance", balances);
-        let position_series = Series::new("position", positions);
-        let action_series = Series::new("action", actions);
-
-        let df = df.with_column(trade_fee_series)?;
-        let df = df.with_column(units_series)?;
-        let df = df.with_column(profit_and_loss_series)?;
-        let df = df.with_column(returns_series)?;
-        let df = df.with_column(balance_series)?;
-        let df = df.with_column(position_series)?;
-        let df = df.with_column(action_series)?;
-
-        let elapsed_time = perf_start.elapsed();
-        let elapsed_millis = elapsed_time.as_nanos();
-        println!(
-            "compute_benchmark_positions => Elapsed time in nanos: {}",
-            elapsed_millis
-        );
-
-        Ok(df.clone())
+        compute_benchmark_positions(&self, initial_strategy_df)
     }
 
     fn handle_initial_strategy_data(
@@ -920,8 +629,7 @@ impl Trader {
         let signal = self.signal_listener.value();
         actions[index] = Some(signal.get_column());
 
-        let exchange_binding = self.exchange_listener.value();
-        let traded_symbol = &exchange_binding.get_traded_contract().symbol;
+        let traded_symbol = self.trader_exchange.get_traded_contract().symbol;
         let close_col = traded_symbol.get_close_col();
 
         trades_fees[index] = Some(0.0);
@@ -1103,7 +811,7 @@ impl Trader {
         })
     }
 
-    pub async fn init(&self) {
+    pub fn init(&self) {
         // let leverage_listener = self.leverage_listener.clone();
 
         // TODO: This query should be run at trader exchange level, same as balance
@@ -1128,7 +836,7 @@ impl Trader {
         //     }
         // });
         self.init_strategy_data_handler();
-        self.init_balance_update_handler();
+        // self.init_balance_update_handler();
         self.init_executions_update_handler();
         self.init_order_update_handler();
         self.init_signal_handler();
@@ -1138,7 +846,7 @@ impl Trader {
 }
 
 async fn open_order(
-    exchange: TraderExchangeWrapper,
+    exchange: &TraderExchangeWrapper,
     side: Side,
     available_to_withdraw: f64,
     last_price: f64,

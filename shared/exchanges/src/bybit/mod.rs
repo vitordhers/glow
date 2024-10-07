@@ -66,29 +66,23 @@ use url::Url;
 
 #[derive(Clone)]
 pub struct BybitTraderExchange {
+    balance_update_emitter: BehaviorSubject<Balance>,
     pub contracts: &'static HashMap<SymbolId, Contract>,
     credentials: ApiCredentials,
-    current_trade_listener: BehaviorSubject<Option<Trade>>,
     endpoints: ApiEndpoints,
+    executions_update_emitter: BehaviorSubject<Vec<Execution>>,
     pub fee_rates: (f64, f64),
     http: Client,
     last_ws_error_ts: Arc<Mutex<Option<i64>>>,
+    minimum_notional_value: Option<f64>,
     pub name: &'static str,
     pub trading_settings: TradingSettings,
-    update_balance_listener: BehaviorSubject<Option<Balance>>,
-    update_executions_listener: BehaviorSubject<Vec<Execution>>,
-    update_order_listener: BehaviorSubject<Option<OrderAction>>,
+    order_update_emitter: BehaviorSubject<OrderAction>,
+    trade_update_emitter: BehaviorSubject<Option<Trade>>,
 }
 
 impl BybitTraderExchange {
-    pub fn new(
-        current_trade_listener: &BehaviorSubject<Option<Trade>>,
-        last_ws_error_ts: &Arc<Mutex<Option<i64>>>,
-        trading_settings: &TradingSettings,
-        update_balance_listener: &BehaviorSubject<Option<Balance>>,
-        update_executions_listener: &BehaviorSubject<Vec<Execution>>,
-        update_order_listener: &BehaviorSubject<Option<OrderAction>>,
-    ) -> Self {
+    pub fn new(trading_settings: &TradingSettings) -> Self {
         let config = TRADER_EXCHANGES_CONFIG_MAP
             .get(&TraderExchangeId::Bybit)
             .expect("Bybit to has Exchange Config");
@@ -109,23 +103,33 @@ impl BybitTraderExchange {
         );
         headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
 
+        let balance_update_emitter = BehaviorSubject::new(Balance::default());
+        let executions_update_emitter = BehaviorSubject::new(vec![]);
+        let order_update_emitter = BehaviorSubject::new(OrderAction::default());
+        let trade_update_emitter = BehaviorSubject::new(None);
+
         Self {
+            balance_update_emitter,
             contracts: &context.contracts,
             credentials: config.credentials,
-            current_trade_listener: current_trade_listener.clone(),
+            executions_update_emitter,
             endpoints: config.endpoints,
             fee_rates: (context.maker_fee, context.taker_fee),
             http: Client::builder()
                 .default_headers(headers)
                 .build()
                 .expect("Reqwest client to build"),
-            last_ws_error_ts: last_ws_error_ts.clone(),
+            last_ws_error_ts: Arc::new(Mutex::new(None)),
+            minimum_notional_value: Some(5.0),
             name: "Bybit",
+            order_update_emitter,
+            trade_update_emitter,
             trading_settings: trading_settings.clone(),
-            update_balance_listener: update_balance_listener.clone(),
-            update_executions_listener: update_executions_listener.clone(),
-            update_order_listener: update_order_listener.clone(),
         }
+    }
+
+    pub fn patch_settings(&mut self, trading_settings: &TradingSettings) {
+        self.trading_settings = trading_settings.clone();
     }
 
     async fn try_parse_response<T: DeserializeOwned>(
@@ -224,7 +228,6 @@ impl TraderHelper for BybitTraderExchange {
         let trading_settings = self.get_trading_settings();
         let leverage_factor = trading_settings.leverage.get_factor();
         // TODO: check if open order type is relevant to this calculation
-        let open_order_type = trading_settings.get_open_order_type();
         // Order Cost = Initial Margin + Fee to Open Position + Fee to Close Position
         // Initial Margin = (Order Price × Order Quantity) / Leverage
         // Fee to Open Position = Order Quantity × Order Price × Taker Fee Rate
@@ -234,6 +237,7 @@ impl TraderHelper for BybitTraderExchange {
         // _balance / ((price / leverage_factor) + (price * fee_rate) + (default_price * fee_rate))
         let contract = self.get_traded_contract();
         let taker_fee_rate = self.get_taker_fee();
+        let maximum_order_sizes = contract.maximum_order_sizes;
 
         // let (fee_rate, is_maker) = self.get_order_fee_rate(open_order_type);
 
@@ -259,10 +263,12 @@ impl TraderHelper for BybitTraderExchange {
         let size_decimals = count_decimal_places(contract.minimum_order_size);
 
         units = round_down_nth_decimal(units - fract_units, size_decimals);
+        let open_order_type = trading_settings.order_types.0;
+        let maximum_order_size = if open_order_type == OrderType::Market {maximum_order_sizes.0} else {maximum_order_sizes.1};
 
         if units == 0.0
             || units < contract.minimum_order_size
-            || units > contract.maximum_order_size
+            || units > maximum_order_size
             || leverage_factor > contract.max_leverage
         {
             println!("Some contract constraints stopped the order from being placed");
@@ -276,12 +282,12 @@ impl TraderHelper for BybitTraderExchange {
                     units,
                     contract.minimum_order_size
                 );
-            } else if units > contract.maximum_order_size {
+            } else if units > maximum_order_size {
                 error = format!(
                     "units > contract.maximum_order_size -> {} | units = {}, maximum order size = {}",
-                    units > contract.maximum_order_size,
+                    units > maximum_order_size,
                     units,
-                    contract.maximum_order_size
+                    maximum_order_size
                 );
             } else if leverage_factor > contract.max_leverage {
                 error = format!(
@@ -546,7 +552,7 @@ impl TraderExchange for BybitTraderExchange {
                         )
                     })
                     .collect();
-                self.update_executions_listener.next(executions);
+                self.executions_update_emitter.next(executions);
                 Ok(())
             }
             BybitWsMessage::Order(message) => {
@@ -569,7 +575,7 @@ impl TraderExchange for BybitTraderExchange {
                         self.get_taker_fee(),
                     );
                     let cancel_order_action = OrderAction::Cancel(cancelled_order);
-                    self.update_order_listener.next(Some(cancel_order_action));
+                    self.order_update_emitter.next(cancel_order_action);
                     return Ok(());
                 }
                 let updated_order: Order = order_response
@@ -577,12 +583,12 @@ impl TraderExchange for BybitTraderExchange {
 
                 if updated_order.is_stop {
                     let stop_order_action = OrderAction::Stop(updated_order);
-                    self.update_order_listener.next(Some(stop_order_action));
+                    self.order_update_emitter.next(stop_order_action);
                     return Ok(());
                 }
 
-                let order_action = OrderAction::Update(updated_order);
-                self.update_order_listener.next(Some(order_action));
+                let update_order_action = OrderAction::Update(updated_order);
+                self.order_update_emitter.next(update_order_action);
                 Ok(())
             }
             BybitWsMessage::Wallet(message) => {
@@ -609,7 +615,7 @@ impl TraderExchange for BybitTraderExchange {
                     available_to_withdraw: usdt_data.available_to_withdraw,
                     wallet_balance: usdt_data.wallet_balance,
                 };
-                self.update_balance_listener.next(Some(balance));
+                self.balance_update_emitter.next(balance);
                 Ok(())
             }
         }
@@ -1369,25 +1375,25 @@ impl TraderExchange for BybitTraderExchange {
         };
 
         let order = Order::new(
-            "".to_string(),
+            avg_price,
+            balance_remainder,
+            timestamp,
+            vec![],
             id,
-            contract.symbol.name.to_string(),
-            OrderStatus::StandBy,
+            false,
+            false,
+            leverage_factor,
             open_order_type.clone(),
             side,
+            OrderStatus::StandBy,
+            stop_loss_price,
+            contract.symbol.name.to_string(),
+            take_profit_price,
+            self.get_taker_fee(),
             time_in_force,
             units,
-            leverage_factor,
-            stop_loss_price,
-            take_profit_price,
-            avg_price,
-            vec![],
-            self.get_taker_fee(),
-            balance_remainder,
-            false,
-            false,
             timestamp,
-            timestamp,
+            "".to_string(),
         );
         Ok(order)
     }
@@ -1412,7 +1418,7 @@ impl TraderExchange for BybitTraderExchange {
             .await
             .expect("set_current_balance_handle -> get_current_usdt_balance error");
         // let update_action = UpdateAction::Balance(balance);
-        self.update_balance_listener.next(Some(balance));
+        self.balance_update_emitter.next(balance);
 
         let mut last_error_ts = None;
         {
@@ -1422,7 +1428,7 @@ impl TraderExchange for BybitTraderExchange {
             }
         }
 
-        let current_trade = self.current_trade_listener.value();
+        let current_trade = self.trade_update_emitter.value();
         // check for last_error_ts
         if let None = last_error_ts {
             // get open trade and set if any is open
@@ -1434,7 +1440,7 @@ impl TraderExchange for BybitTraderExchange {
                     trade.clone().unwrap()
                 );
             }
-            self.current_trade_listener.next(trade);
+            self.trade_update_emitter.next(trade);
             return Ok(());
         }
         let last_error_ts = last_error_ts.unwrap();
@@ -1478,7 +1484,7 @@ impl TraderExchange for BybitTraderExchange {
                         // if executions were updated, we emit new executions action
                         if interim_executions.len() > 0 {
                             // let update_action = UpdateAction::Executions(interim_executions);
-                            self.update_executions_listener.next(interim_executions);
+                            self.executions_update_emitter.next(interim_executions);
                         }
                         let current_order_id = current_trade.get_active_order_id()
                                 .expect(&format!("update_position_data_on_faulty_exchange_ws -> missing current order id. trade = {:?}", &current_trade));
@@ -1495,7 +1501,7 @@ impl TraderExchange for BybitTraderExchange {
                                     OrderAction::Update(updated_order)
                                 };
                                 // let update_action = UpdateAction::Order(Some(order_action));
-                                self.update_order_listener.next(Some(order_action));
+                                self.order_update_emitter.next(order_action);
                             }
                             Err(error) => {
                                 println!("handle_exchange_websocket -> fetch_opened_order failed {:?}. Error = {:?}", current_trade_status, error);
@@ -1605,6 +1611,26 @@ impl TraderExchange for BybitTraderExchange {
             }
         }
     }
+
+    #[inline]
+    fn get_balance_update_emitter(&self) -> &BehaviorSubject<Balance> {
+        &self.balance_update_emitter
+    }
+
+    #[inline]
+    fn get_executions_update_emitter(&self) -> &BehaviorSubject<Vec<Execution>> {
+        &self.executions_update_emitter
+    }
+
+    #[inline]
+    fn get_order_update_emitter(&self) -> &BehaviorSubject<OrderAction> {
+        &self.order_update_emitter
+    }
+
+    #[inline]
+    fn get_trade_update_emitter(&self) -> &BehaviorSubject<Option<Trade>> {
+        &self.trade_update_emitter
+    }
 }
 
 impl BenchmarkExchange for BybitTraderExchange {
@@ -1655,25 +1681,25 @@ impl BenchmarkExchange for BybitTraderExchange {
         );
 
         let order = Order::new(
-            order_uuid,
+            avg_price,
+            balance_remainder,
+            timestamp,
+            vec![benchmark_execution],
             id,
-            contract.symbol.name.to_string(),
-            OrderStatus::Filled,
+            false,
+            false,
+            leverage_factor,
             open_order_type,
             side,
+            OrderStatus::Filled,
+            stop_loss_price,
+            contract.symbol.name.to_string(),
+            take_profit_price,
+            self.get_taker_fee(),
             time_in_force,
             units,
-            leverage_factor,
-            stop_loss_price,
-            take_profit_price,
-            avg_price,
-            vec![benchmark_execution],
-            self.get_taker_fee(),
-            balance_remainder,
-            false,
-            false,
             timestamp,
-            timestamp,
+            order_uuid,
         );
         Ok(order)
     }
@@ -1729,25 +1755,25 @@ impl BenchmarkExchange for BybitTraderExchange {
             || final_status == OrderStatus::StoppedTP;
 
         let order = Order::new(
-            order_uuid,
-            id,
-            open_order.symbol.clone(),
-            final_status,
-            close_order_type,
-            close_side,
-            time_in_force,
-            open_order.units,
-            open_order.leverage_factor,
-            None,
-            None,
             avg_price,
+            0.0,
+            timestamp,
             executions,
-            0.0,
-            0.0,
+            id,
             true,
             is_stop,
+            open_order.leverage_factor,
+            close_order_type,
+            close_side,
+            final_status,
+            None,
+            open_order.symbol.clone(),
+            None,
+            0.0,
+            time_in_force,
+            open_order.units,
             timestamp,
-            timestamp,
+            order_uuid,
         );
 
         Ok(order)
@@ -1788,6 +1814,10 @@ impl BenchmarkExchange for BybitTraderExchange {
 
         let closed_trade = trade.update_trade(close_order)?;
         Ok(closed_trade)
+    }
+
+    fn get_minimum_notional_value(&self) -> Option<f64> {
+        self.minimum_notional_value
     }
 }
 

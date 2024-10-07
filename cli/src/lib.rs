@@ -7,7 +7,7 @@ pub use functions::select_from_list;
 mod symbols;
 pub use symbols::*;
 
-fn select_data_provider_exchange() -> Option<String> {
+fn _select_data_provider_exchange() -> Option<String> {
     let mut data_provider_options = DataProviderExchangeWrapper::get_selection_list();
     data_provider_options.extend(vec![String::from("Go back")]);
     let back_index = data_provider_options.len() - 1;
@@ -25,10 +25,10 @@ fn select_data_provider_exchange() -> Option<String> {
     }
 }
 
-fn select_trader_exchange() -> Option<String> {
+fn _select_trader_exchange() -> Option<String> {
     let mut trader_options = TraderExchangeWrapper::get_selection_list();
     trader_options.extend(vec![String::from("Go back")]);
-    let back_index = trader_options.len() - 1;
+    let _back_index = trader_options.len() - 1;
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Select a trader Exchange")
@@ -38,7 +38,7 @@ fn select_trader_exchange() -> Option<String> {
         .expect("Failed to read input");
 
     match selection {
-        go_back_index_ => {
+        _go_back_index_ => {
             println!("going back");
             return None;
         } // selection => Some(trader_options[selection]),

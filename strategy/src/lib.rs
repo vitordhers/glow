@@ -3,13 +3,14 @@ use glow_error::GlowError;
 use params::{Param, ParamId};
 use polars::prelude::{DataFrame, DataType, LazyFrame};
 use schemas::{Schema, StrategySchema};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 pub mod functions;
 pub mod params;
 pub mod schemas;
 pub mod r#static;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StrategyId {
     #[default]
     SimpleTrend,

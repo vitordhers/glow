@@ -1,17 +1,12 @@
-use chrono::NaiveDate;
-use chrono::NaiveDateTime;
-use glow_error::assert_or_error;
-use glow_error::GlowError;
+use crate::{functions::get_days_between, structs::Symbol};
+use chrono::{NaiveDate, NaiveDateTime};
+use glow_error::{assert_or_error, GlowError};
 use polars::prelude::*;
-use std::env;
-use std::fs;
-use std::fs::{create_dir, metadata, File};
-use std::path::Path;
-use std::path::PathBuf;
-
-use crate::functions::get_days_between;
-use crate::structs::Symbol;
-use crate::structs::TickData;
+use std::{
+    env,
+    fs::{create_dir, create_dir_all, metadata, File},
+    path::{Path, PathBuf},
+};
 
 pub fn save_csv(
     path: String,
@@ -20,7 +15,7 @@ pub fn save_csv(
     overwrite: bool,
 ) -> Result<(), GlowError> {
     let current_dir = env::current_dir().expect("Failed to get current directory");
-    let _ = create_directories(&path);
+    let _ = create_file_directories(&path);
 
     let file_path = format!("{}/{}/{}", current_dir.display(), &path, &file_name);
 
@@ -81,12 +76,39 @@ pub fn save_kline_df_to_csv(
     data_provider_exchange_name: &str,
     symbol_name: &str,
 ) -> Result<(), GlowError> {
-    let path = get_tick_data_csv_path(date, data_provider_exchange_name, symbol_name);
-    let _ = create_directories(path.to_str().unwrap());
+    let file_path = get_tick_data_csv_path(date, data_provider_exchange_name, symbol_name);
+    let mut folder_path = file_path.clone();
+    folder_path.pop();
+
+    let file_exists = match metadata(folder_path) {
+        Ok(path_metadata) => {
+            if !path_metadata.is_dir() {
+                panic!("Path exists, but it is not a directory");
+            }
+            let file_path_metadata_result = metadata(&file_path);
+            let result = match file_path_metadata_result {
+                Ok(file_path_metadata) => file_path_metadata.is_file(),
+                Err(_) => {
+                    println!("File {:?} doesn't exist, creating it ...", file_path);
+                    false
+                }
+            };
+            result
+        }
+        Err(_) => {
+            match create_file_directories(file_path.to_str().unwrap()) {
+                Ok(_) => {}
+                Err(error) => panic!("Failed to create directory: {}", error),
+            }
+            false
+        }
+    };
+    if file_exists {
+        return Ok(());
+    }
 
     let mut df = df.clone();
-
-    match File::create(path) {
+    match File::create(file_path) {
         Ok(output_file) => {
             CsvWriter::new(output_file)
                 .has_header(true)
@@ -95,7 +117,10 @@ pub fn save_kline_df_to_csv(
 
             Ok(())
         }
-        Err(error) => Err(error.into()),
+        Err(error) => {
+            println!("save_kline_df_to_csv error {:?}", error);
+            Err(error.into())
+        }
     }
 }
 
@@ -104,13 +129,12 @@ pub fn get_tick_data_csv_path(
     data_provider_exchange_name: &str,
     symbol_name: &str,
 ) -> PathBuf {
-    let mut path_buf = PathBuf::from("/data/ticks");
+    let mut path_buf = PathBuf::from("data/ticks");
     path_buf.push(data_provider_exchange_name);
     path_buf.push(symbol_name);
     path_buf.push(date.format("%Y").to_string());
     path_buf.push(date.format("%m").to_string());
-    path_buf.push(date.format("%d").to_string());
-    path_buf.push(".csv");
+    path_buf.push(format!("{}{}", date.format("%d").to_string(), ".csv"));
     path_buf
 }
 
@@ -120,14 +144,16 @@ pub fn load_interval_tick_dataframe(
     end_datetime: NaiveDateTime,
     symbol: &Symbol,
     data_provider_exchange_name: &str,
-) -> Result<(DataFrame, Vec<NaiveDate>), GlowError> {
+) -> Result<(Option<DataFrame>, Vec<NaiveDate>), GlowError> {
     assert_or_error!(start_datetime <= end_datetime);
     let days_between = get_days_between(start_datetime, end_datetime)?;
     let mut dataframe = None;
     let mut not_loaded_dates = vec![];
+    let symbol_tick_data_schema = symbol.derive_symbol_tick_data_schema();
+
     for date in days_between {
         let path = get_tick_data_csv_path(date, data_provider_exchange_name, &symbol.name);
-        match load_csv(path) {
+        match load_csv(path, &symbol_tick_data_schema) {
             Ok(df) => {
                 if dataframe.is_none() {
                     dataframe = Some(df);
@@ -135,23 +161,29 @@ pub fn load_interval_tick_dataframe(
                     dataframe = Some(dataframe.unwrap().vstack(&df)?);
                 }
             }
-            Err(_) => {
+            Err(error) => {
+                println!("LOAD CSV ERROR {:?}", error);
                 not_loaded_dates.push(date);
             }
         }
     }
-    let df = dataframe.unwrap();
 
-    Ok((df, not_loaded_dates))
+    Ok((dataframe, not_loaded_dates))
 }
 
-pub fn load_csv<P: Into<PathBuf>>(path: P) -> Result<DataFrame, PolarsError> {
-    CsvReader::from_path(path)?.has_header(true).finish()
+pub fn load_csv<P: Into<PathBuf>>(path: P, schema: &Schema) -> Result<DataFrame, PolarsError> {
+    CsvReader::from_path(path)?
+        .has_header(true)
+        .with_schema(Some(Arc::new(schema.clone())))
+        .finish()
 }
 
-fn create_directories(path: &str) -> std::io::Result<()> {
+fn create_file_directories(file_path: &str) -> Result<(), GlowError> {
     let mut cumulative_path = String::new();
-    for segment in path.split('/') {
+    for segment in file_path.split('/') {
+        if segment.contains(".") {
+            break;
+        }
         if !cumulative_path.is_empty() {
             cumulative_path.push('/');
         }
@@ -159,7 +191,7 @@ fn create_directories(path: &str) -> std::io::Result<()> {
 
         let path_obj = Path::new(&cumulative_path);
         if !path_obj.exists() {
-            fs::create_dir_all(&path_obj)?;
+            create_dir_all(&path_obj)?;
         }
     }
     Ok(())
