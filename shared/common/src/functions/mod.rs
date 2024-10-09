@@ -176,6 +176,8 @@ pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
         parallel: true,
         rechunk: true,
         to_supertypes: false,
+        diagonal: true,
+        from_partitioned_ds: false,
     };
     let result_lf = concat(lfs, args)?;
 
@@ -184,7 +186,7 @@ pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
             .dt()
             .datetime()
             .cast(DataType::Datetime(TimeUnit::Milliseconds, None))
-            .gt(filter_datetime.timestamp() * 1000),
+            .gt(filter_datetime.and_utc().timestamp() * 1000),
     );
 
     Ok(result_lf)
@@ -236,10 +238,12 @@ pub fn map_ticks_data_to_df(ticks_data: &Vec<TickData>) -> Result<DataFrame, Glo
     }
 
     let timestamp_series = Series::new(
-        "start_time",
+        "start_time".into(),
         timestamps.into_iter().collect::<Vec<NaiveDateTime>>(),
     );
-    let mut timestamp_series = timestamp_series.sort(false);
+    let sort_options = SortOptions::default();
+    let sort_options = sort_options.with_order_descending(false);
+    let mut timestamp_series = timestamp_series.sort(sort_options)?;
     timestamp_series.set_sorted_flag(IsSorted::Ascending);
 
     let series_init = vec![timestamp_series];
@@ -247,11 +251,14 @@ pub fn map_ticks_data_to_df(ticks_data: &Vec<TickData>) -> Result<DataFrame, Glo
     let df = DataFrame::new(data.into_iter().fold(
         series_init,
         |mut series, (col_name, col_data)| {
-            series.push(Series::new(&col_name, col_data));
+            series.push(Series::new(col_name.into(), col_data));
             series
         },
     ))?;
-    let df = df.sort(["start_time"], false, false)?;
+    let sort_options = SortMultipleOptions::default();
+    let sort_options = sort_options.with_order_descending(false);
+    let sort_options = sort_options.with_maintain_order(false);
+    let df = df.sort(["start_time"], sort_options)?;
 
     Ok(df)
 }
@@ -271,7 +278,7 @@ pub fn coerce_df_to_schema(df: DataFrame, schema: &Schema) -> Result<DataFrame, 
             series.push(column_series);
             continue;
         }
-        let null_series = Series::full_null(&col, data_size, &dtype);
+        let null_series = Series::full_null(col.into(), data_size, &dtype);
         series.push(null_series);
         // let _ = result_df.replace(&col, null_series);
     }
@@ -318,10 +325,10 @@ pub fn downsample_tick_lf_to_kline_duration(
             tick_data_cols.insert(c);
         }
         // TODO: check if we can use keep_name() instead of alias
-        let first_open = col(o).drop_nulls().first().alias(&o);
-        let max_high = col(h).max().alias(&h);
-        let min_low = col(l).min().alias(&l);
-        let last_close = col(c).drop_nulls().last().alias(&c);
+        let first_open = col(o).drop_nulls().first().alias(o);
+        let max_high = col(h).max().alias(h);
+        let min_low = col(l).min().alias(l);
+        let last_close = col(c).drop_nulls().last().alias(c);
         agg_expressions.push(first_open);
         agg_expressions.push(max_high);
         agg_expressions.push(min_low);
@@ -335,10 +342,17 @@ pub fn downsample_tick_lf_to_kline_duration(
             }
             // TODO: adjust downsample/upsample method
             // TODO: check if this can be replaced by NULL
-            agg_expressions.push(col(&col_name).last().keep_name())
+            agg_expressions.push(
+                col(col_name.clone())
+                    .last()
+                    .alias(col_name.clone())
+                    .name()
+                    .keep(),
+            )
         })
     }
 
+    let duration_string = format!("{}s", duration_in_secs);
     let resampled_data = tick_lf
         .group_by_dynamic(
             col("start_time"),
@@ -346,13 +360,12 @@ pub fn downsample_tick_lf_to_kline_duration(
             DynamicGroupOptions {
                 start_by: StartBy::DataPoint,
                 index_column: "start_time".into(),
-                every: PolarsDuration::new(NANOS_IN_SECOND * duration_in_secs),
-                period: PolarsDuration::new(NANOS_IN_SECOND * duration_in_secs),
-                offset: PolarsDuration::new(0),
-                truncate: true,
+                label: Label::Left,
+                every: PolarsDuration::parse(duration_string.as_str()),
+                period: PolarsDuration::parse(duration_string.as_str()),
+                offset: PolarsDuration::parse("0s"),
                 include_boundaries: false,
                 closed_window,
-                check_sorted: false,
             },
         )
         .agg(agg_expressions);
@@ -389,12 +402,12 @@ pub fn get_date_start_and_end_timestamps(date: NaiveDate) -> [(i64, i64); 2] {
 
     [
         (
-            first_start_datetime.timestamp_millis(),
-            first_end_datetime.timestamp_millis(),
+            first_start_datetime.and_utc().timestamp_millis(),
+            first_end_datetime.and_utc().timestamp_millis(),
         ),
         (
-            second_start_datetime.timestamp_millis(),
-            second_end_datetime.timestamp_millis(),
+            second_start_datetime.and_utc().timestamp_millis(),
+            second_end_datetime.and_utc().timestamp_millis(),
         ),
     ]
 }
@@ -536,7 +549,7 @@ pub fn get_trading_columns_values(
     let returns: Vec<Option<f64>> = series.next().unwrap().f64()?.into_iter().collect();
     let balances: Vec<Option<f64>> = series.next().unwrap().f64()?.into_iter().collect();
     let positions: Vec<Option<i32>> = series.next().unwrap().i32()?.into_iter().collect();
-    let actions: Vec<Option<&str>> = series.next().unwrap().utf8()?.into_iter().collect();
+    let actions: Vec<Option<&str>> = series.next().unwrap().str()?.into_iter().collect();
     Ok((
         start_times,
         trades_fees,

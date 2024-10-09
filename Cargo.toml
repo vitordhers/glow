@@ -10,16 +10,16 @@ edition = "2021"
 license = "GPL"
 
 [workspace.dependencies]
-async-trait = "0.1.68"
-chrono = "0.4.31"
+async-trait = "0.1.83"
+chrono = "0.4.38"
 crossterm = "0.28.1"
 dotenv = "0.15.0"
 enum_dispatch = "0.3.13"
-env_logger = "0.10.0"
-futures-util = "0.3.28"
+env_logger = "0.11.5"
+futures-util = "0.3.31"
 log = "0.4.17"
 phf = { version = "0.11.2", features = ["macros"] }
-polars = { version = "0.33.2", features = [
+polars = { version = "0.43.1", features = [
     "lazy",
     "dtype-datetime",
     "diagonal_concat",
@@ -36,21 +36,20 @@ polars = { version = "0.33.2", features = [
     "cum_agg",
     "is_in",
 ] }
-polars-lazy = { version = "0.33.2", features = ["rolling_window"] }
-reqwest = { version = "0.11.16", features = ["json", "gzip"] }
-serde = { version = "1.0.160", features = ["derive"] }
-serde_json = "1.0.96"
-strum = "0.25.0"
-strum_macros = "0.25.2"
-tokio = { version = "1.27.0", features = ['full'] }
-tokio-stream = { version = "0.1.14", features = ['sync'] }
-tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
+polars-lazy = { version = "0.43.1", features = ["rolling_window"] }
+reqwest = { version = "0.12.8", features = ["json", "gzip"] }
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = "1.0.128"
+tokio = { version = "1.40.0", features = ['full'] }
+tokio-stream = { version = "0.1.16", features = ['sync'] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tungstenite = { version = "0.24" }
 url = "2.3.1"
 hmac = "0.12.1"
 sha2 = "0.10.7"
 serde_urlencoded = "0.7.1"
-itertools = "0.11.0"
-regex = "1.4"
+itertools = "0.13.0"
+regex = "1.11.0"
 dialoguer = "0.11.0"
 
 [workspace.dependencies.cli]

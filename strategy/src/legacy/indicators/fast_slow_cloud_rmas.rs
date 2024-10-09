@@ -304,7 +304,7 @@ impl Indicator for FastSlowCloudRMAs {
         // );
 
         let rolling_opts = RollingOptions {
-            window_size: Duration::parse(&format!("{}i", self.momentum_diff_span)),
+            window_size: Duration::parse(&format!("{}m", self.momentum_diff_span)),
             min_periods: self.momentum_diff_span as usize,
             weights: None,
             center: false,
@@ -441,7 +441,7 @@ impl Indicator for FastSlowCloudRMAs {
             );
 
         let cloud_rolling_ops = RollingOptions {
-            window_size: Duration::parse(&format!("{}i", self.cloud_length)),
+            window_size: Duration::parse(&format!("{}m", self.cloud_length)),
             min_periods: self.cloud_length as usize,
             weights: None,
             center: false,

@@ -24,7 +24,7 @@ use futures_util::SinkExt;
 use glow_error::{assert_or_error, GlowError};
 use polars::{
     frame::DataFrame,
-    prelude::{IntoLazy, Schema},
+    prelude::{IntoLazy, Schema, SortMultipleOptions},
     time::ClosedWindow,
 };
 use reqwest::Client;
@@ -43,6 +43,7 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tungstenite::client::IntoClientRequest;
 use url::Url;
 
 #[derive(Clone)]
@@ -97,13 +98,13 @@ impl BinanceDataProvider {
         end_datetime: NaiveDateTime,
         tick_duration: Duration,
     ) -> Result<DataFrame, GlowError> {
-        let mut kline_df = DataFrame::from(trading_data_schema);
+        let mut kline_df = DataFrame::empty_with_schema(trading_data_schema);
         for symbol in &self.symbols.get_unique_symbols() {
             let (loaded_data_df, not_loaded_dates) =
                 load_interval_tick_dataframe(start_datetime, end_datetime, &symbol, "binance")?;
 
             let mut result_df =
-                loaded_data_df.unwrap_or_else(|| DataFrame::from(trading_data_schema));
+                loaded_data_df.unwrap_or_else(|| DataFrame::empty_with_schema(trading_data_schema));
 
             if result_df.schema().len() != trading_data_schema.len() {
                 result_df = coerce_df_to_schema(result_df, trading_data_schema)?;
@@ -133,7 +134,10 @@ impl BinanceDataProvider {
                 let fetched_data_df = coerce_df_to_schema(fetched_data_df, &trading_data_schema)?;
                 match &result_df.vstack(&fetched_data_df) {
                     Ok(stacked_df) => {
-                        result_df = stacked_df.sort(["start_time"], false, false)?;
+                        let sort_options = SortMultipleOptions::default();
+                        let sort_options = sort_options.with_order_descending(false);
+                        let sort_options = sort_options.with_maintain_order(false);
+                        result_df = stacked_df.sort(["start_time"], sort_options)?;
                     }
                     Err(error) => {
                         println!("STACK ERROR 1 {:?}", error);
@@ -152,9 +156,10 @@ impl BinanceDataProvider {
                 }
             };
         }
-
-        let mut kline_df = kline_df.sort(["start_time"], false, false)?;
-
+        let sort_options = SortMultipleOptions::default();
+        let sort_options = sort_options.with_order_descending(false);
+        let sort_options = sort_options.with_maintain_order(false);
+        let mut kline_df = kline_df.sort(["start_time"], sort_options)?;
         kline_df.align_chunks();
         let kline_lf = filter_df_timestamps_to_lf(kline_df, start_datetime, end_datetime)?;
         let kline_lf = downsample_tick_lf_to_kline_duration(
@@ -271,14 +276,15 @@ impl BinanceDataProvider {
         }
 
         let current_timestamp = current_timestamp();
-        let seconds_until_pending_kline_available = benchmark_end.timestamp() - current_timestamp;
+        let seconds_until_pending_kline_available =
+            benchmark_end.and_utc().timestamp() - current_timestamp;
         let duration_until_pending_kline_available =
             StdDuration::from_secs(seconds_until_pending_kline_available as u64);
         let pending_kline_available_at = Instant::now() + duration_until_pending_kline_available;
 
         let remaining_seconds_from_current_ts = current_timestamp % 60;
         let start_ms = (current_timestamp - remaining_seconds_from_current_ts) * 1000;
-        let end_ms = benchmark_end.timestamp_millis();
+        let end_ms = benchmark_end.and_utc().timestamp_millis();
 
         let pending_kline_df = self
             .fetch_data_after_waiting(
@@ -424,7 +430,8 @@ impl DataProviderExchange for BinanceDataProvider {
         let url = Url::parse(&format!("{}/ws/bookTicker", binance_ws_base_url))?; // ws url
 
         loop {
-            match connect_async(url.clone()).await {
+            let request = url.as_str().into_client_request()?;
+            match connect_async(request).await {
                 Ok((wss, resp)) => {
                     eprintln!(
                         "Data provider connection stablished. \n Response: {:?}",

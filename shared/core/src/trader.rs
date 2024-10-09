@@ -523,13 +523,16 @@ impl Trader {
         actions[index] = Some(signal.get_column());
 
         let mut trading_data = trading_data.clone();
-        trading_data.replace("trade_fees", Series::new("trade_fees", fees_col))?;
-        trading_data.replace("units", Series::new("units", units))?;
-        trading_data.replace("profit_and_loss", Series::new("profit_and_loss", pnl_col))?;
-        trading_data.replace("returns", Series::new("returns", returns_col))?;
-        trading_data.replace("balance", Series::new("balance", balances))?;
-        trading_data.replace("position", Series::new("position", positions))?;
-        trading_data.replace("action", Series::new("action", actions))?;
+        trading_data.replace("trade_fees", Series::new("trade_fees".into(), fees_col))?;
+        trading_data.replace("units", Series::new("units".into(), units))?;
+        trading_data.replace(
+            "profit_and_loss",
+            Series::new("profit_and_loss".into(), pnl_col),
+        )?;
+        trading_data.replace("returns", Series::new("returns".into(), returns_col))?;
+        trading_data.replace("balance", Series::new("balance".into(), balances))?;
+        trading_data.replace("position", Series::new("position".into(), positions))?;
+        trading_data.replace("action", Series::new("action".into(), actions))?;
 
         self.update_trading_data(trading_data)?;
 
@@ -675,13 +678,16 @@ impl Trader {
         }
 
         let mut updated_strategy_df = updated_strategy_df.clone();
-        updated_strategy_df.replace("trade_fees", Series::new("trade_fees", trades_fees))?;
-        updated_strategy_df.replace("units", Series::new("units", units))?;
-        updated_strategy_df.replace("profit_and_loss", Series::new("profit_and_loss", pnl))?;
-        updated_strategy_df.replace("returns", Series::new("returns", returns))?;
-        updated_strategy_df.replace("balance", Series::new("balance", balances))?;
-        updated_strategy_df.replace("position", Series::new("position", positions))?;
-        updated_strategy_df.replace("action", Series::new("action", actions))?;
+        updated_strategy_df.replace("trade_fees", Series::new("trade_fees".into(), trades_fees))?;
+        updated_strategy_df.replace("units", Series::new("units".into(), units))?;
+        updated_strategy_df.replace(
+            "profit_and_loss",
+            Series::new("profit_and_loss".into(), pnl),
+        )?;
+        updated_strategy_df.replace("returns", Series::new("returns".into(), returns))?;
+        updated_strategy_df.replace("balance", Series::new("balance".into(), balances))?;
+        updated_strategy_df.replace("position", Series::new("position".into(), positions))?;
+        updated_strategy_df.replace("action", Series::new("action".into(), actions))?;
 
         Ok(updated_strategy_df)
     }

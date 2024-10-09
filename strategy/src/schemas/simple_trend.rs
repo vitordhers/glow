@@ -6,6 +6,7 @@ use crate::{
 };
 use common::{enums::signal_category::SignalCategory, structs::SymbolsPair};
 use glow_error::GlowError;
+use polars::prelude::Expr::Nth;
 use polars::prelude::*;
 use std::collections::HashMap;
 
@@ -79,7 +80,7 @@ impl Schema for SimpleTrendStrategySchema {
                             .then(true)
                             .otherwise(false),
                     )
-                    .alias(&TREND_COL),
+                    .alias(TREND_COL),
             );
 
         Ok(lf)
@@ -123,20 +124,30 @@ impl Schema for SimpleTrendStrategySchema {
         let fast_ema_lesser_than_slow_ema = col(&fast_ema_col).lt(col(&slow_ema_col));
         let fast_ema_greater_than_slow_ema = col(&fast_ema_col).gt(col(&slow_ema_col));
 
-        let prev_fast_ema_lesser_than_prev_slow_ema =
-            col(&fast_ema_col).shift(1).lt(col(&slow_ema_col).shift(1));
-        let prev_fast_ema_greater_than_prev_slow_ema =
-            col(&fast_ema_col).shift(1).gt(col(&slow_ema_col).shift(1));
+        let prev_fast_ema_lesser_than_prev_slow_ema = col(&fast_ema_col)
+            .shift_and_fill(lit(1), lit(NULL))
+            .lt(col(&slow_ema_col).shift_and_fill(lit(1), lit(NULL)));
+        let prev_fast_ema_greater_than_prev_slow_ema = col(&fast_ema_col)
+            .shift_and_fill(lit(1), lit(NULL))
+            .gt(col(&slow_ema_col).shift_and_fill(lit(1), lit(NULL)));
 
         let signal_lf = lf.clone().with_columns([
-            when(fast_ema_lesser_than_slow_ema.clone().and(prev_fast_ema_greater_than_prev_slow_ema.clone()))
-                .then(lit(1))
-                .otherwise(lit(0))
-                .alias(short_col),
-            when(fast_ema_greater_than_slow_ema.clone().and(prev_fast_ema_lesser_than_prev_slow_ema.clone()))
-                .then(lit(1))
-                .otherwise(lit(0))
-                .alias(long_col),
+            when(
+                fast_ema_lesser_than_slow_ema
+                    .clone()
+                    .and(prev_fast_ema_greater_than_prev_slow_ema.clone()),
+            )
+            .then(lit(1))
+            .otherwise(lit(0))
+            .alias(short_col),
+            when(
+                fast_ema_greater_than_slow_ema
+                    .clone()
+                    .and(prev_fast_ema_lesser_than_prev_slow_ema.clone()),
+            )
+            .then(lit(1))
+            .otherwise(lit(0))
+            .alias(long_col),
             when(fast_ema_greater_than_slow_ema.and(prev_fast_ema_lesser_than_prev_slow_ema))
                 .then(lit(1))
                 .otherwise(lit(0))

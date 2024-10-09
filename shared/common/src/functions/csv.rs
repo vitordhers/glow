@@ -60,7 +60,7 @@ pub fn save_csv(
     match File::create(file_path) {
         Ok(output_file) => {
             CsvWriter::new(output_file)
-                .has_header(true)
+                .include_header(true)
                 .with_float_precision(Some(6))
                 .finish(&mut df)?;
 
@@ -111,7 +111,7 @@ pub fn save_kline_df_to_csv(
     match File::create(file_path) {
         Ok(output_file) => {
             CsvWriter::new(output_file)
-                .has_header(true)
+                .include_header(true)
                 .with_float_precision(Some(6))
                 .finish(&mut df)?;
 
@@ -172,9 +172,10 @@ pub fn load_interval_tick_dataframe(
 }
 
 pub fn load_csv<P: Into<PathBuf>>(path: P, schema: &Schema) -> Result<DataFrame, PolarsError> {
-    CsvReader::from_path(path)?
-        .has_header(true)
+    CsvReadOptions::default()
+        .with_has_header(true)
         .with_schema(Some(Arc::new(schema.clone())))
+        .try_into_reader_with_file_path(Some(path.into()))?
         .finish()
 }
 
