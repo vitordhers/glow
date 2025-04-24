@@ -3,7 +3,7 @@ use chrono::Duration;
 use glow_error::GlowError;
 use polars::prelude::*;
 
-pub fn calculate_success_rate(returns_series: &Series) -> Result<f64, GlowError> {
+pub fn calculate_success_rate(returns_series: &Column) -> Result<f64, GlowError> {
     let ca = returns_series.f64()?;
     let positive_count = ca.into_no_null_iter().filter(|&x| x > 0.0).count();
     let total_count = ca.into_no_null_iter().len();
@@ -17,8 +17,8 @@ pub fn calculate_success_rate(returns_series: &Series) -> Result<f64, GlowError>
 }
 
 pub fn calculate_risk_adjusted_returns(
-    returns_series: &Series,
-    risk_series: &Series,
+    returns_series: &Column,
+    risk_series: &Column,
 ) -> Result<f64, GlowError> {
     let returns_ca = returns_series.f64()?;
     let risk_ca = risk_series.f64()?;
@@ -35,8 +35,8 @@ pub fn calculate_risk_adjusted_returns(
 }
 
 pub fn calculate_sharpe_ratio(
-    returns_series: &Series,
-    risk_series: &Series,
+    returns_series: &Column,
+    risk_series: &Column,
     risk_free_returns: f64,
 ) -> Result<f64, GlowError> {
     let returns_ca = returns_series.f64()?;
@@ -53,8 +53,8 @@ pub fn calculate_sharpe_ratio(
 }
 
 pub fn calculate_sortino_ratio(
-    returns_series: &Series,
-    downside_risk_series: &Series,
+    returns_series: &Column,
+    downside_risk_series: &Column,
     risk_free_returns: f64,
 ) -> Result<f64, GlowError> {
     let returns_ca = returns_series.f64()?;
@@ -71,7 +71,7 @@ pub fn calculate_sortino_ratio(
 }
 
 pub fn calculate_calmar_ratio(
-    balance_series: &Series,
+    balance_series: &Column,
     max_drawdown: f64,
 ) -> Result<f64, GlowError> {
     if max_drawdown == 0.0 {
@@ -85,9 +85,9 @@ pub fn calculate_calmar_ratio(
 }
 
 pub fn calculate_max_drawdown_and_duration(
-    start_series: &Series,
-    end_series: &Series,
-    drawdown_series: &Series,
+    start_series: &Column,
+    end_series: &Column,
+    drawdown_series: &Column,
 ) -> Result<(f64, Duration), GlowError> {
     let start_vec = start_series
         .datetime()?

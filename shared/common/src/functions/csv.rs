@@ -1,5 +1,5 @@
 use crate::{functions::get_days_between, structs::Symbol};
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use glow_error::{assert_or_error, GlowError};
 use polars::prelude::*;
 use std::{
@@ -140,8 +140,8 @@ pub fn get_tick_data_csv_path(
 
 /// Tries to load ticks data between an interval. If a file is absent, push the NaiveDates of absent dates
 pub fn load_interval_tick_dataframe(
-    start_datetime: NaiveDateTime,
-    end_datetime: NaiveDateTime,
+    start_datetime: DateTime<Utc>,
+    end_datetime: DateTime<Utc>,
     symbol: &Symbol,
     data_provider_exchange_name: &str,
 ) -> Result<(Option<DataFrame>, Vec<NaiveDate>), GlowError> {

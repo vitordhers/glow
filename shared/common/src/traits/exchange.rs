@@ -6,7 +6,7 @@ use crate::{
     },
     structs::{BehaviorSubject, Contract, Execution, Order, Symbol, Trade, TradingSettings},
 };
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use glow_error::GlowError;
 use polars::prelude::Schema;
 use reqwest::Client;
@@ -212,16 +212,16 @@ pub trait DataProviderExchange: Clone {
 
     fn handle_committed_ticks_data(
         &self,
-        discard_ticks_before: NaiveDateTime,
+        discard_ticks_before: DateTime<Utc>,
         trading_data_schema: &Schema,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
 
-    fn handle_ws_error(&self, trading_data_schema: &Schema) -> Option<NaiveDateTime>;
+    fn handle_ws_error(&self, trading_data_schema: &Schema) -> Option<DateTime<Utc>>;
 
     fn init(
         &mut self,
-        benchmark_start: Option<NaiveDateTime>,
-        benchmark_end: Option<NaiveDateTime>,
+        benchmark_start: Option<DateTime<Utc>>,
+        benchmark_end: Option<DateTime<Utc>>,
         run_benchmark_only: bool,
         trading_data_schema: Schema,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
@@ -229,7 +229,7 @@ pub trait DataProviderExchange: Clone {
     fn listen_ticks(
         &mut self,
         wss: WebSocketStream<MaybeTlsStream<TcpStream>>,
-        discard_ticks_before: NaiveDateTime,
+        discard_ticks_before: DateTime<Utc>,
     ) -> impl Future<Output = Result<(), GlowError>> + Send;
 
     fn subscribe_to_tick_stream(

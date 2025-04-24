@@ -1,4 +1,4 @@
-use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use glow_error::{assert_or_error, GlowError};
 use hmac::{Hmac, Mac};
 use polars::{
@@ -16,20 +16,18 @@ pub mod csv;
 pub mod performance;
 
 use crate::{
-    constants::{NANOS_IN_SECOND, SECONDS_IN_MIN},
+    constants::SECONDS_IN_MIN,
     enums::signal_category::SignalCategory,
-    r#static::SYMBOLS_MAP,
     structs::{Symbol, TickData},
 };
 
 /// gives result with full seconds
-pub fn current_datetime() -> NaiveDateTime {
-    Utc::now().naive_utc().with_nanosecond(0).unwrap()
+pub fn current_datetime() -> DateTime<Utc> {
+    Utc::now().with_nanosecond(0).unwrap()
 }
 
-pub fn current_datetime_minute_start() -> NaiveDateTime {
+pub fn current_datetime_minute_start() -> DateTime<Utc> {
     Utc::now()
-        .naive_utc()
         .with_second(0)
         .unwrap()
         .with_nanosecond(0)
@@ -56,17 +54,17 @@ pub fn timestamp_minute_start(use_milliseconds: bool, timestamp: Option<i64>) ->
     let mut timestamp = match timestamp {
         Some(timestamp) => {
             if use_milliseconds {
-                NaiveDateTime::from_timestamp_millis(timestamp)
+                DateTime::from_timestamp_millis(timestamp)
                     .unwrap()
                     .timestamp()
             } else {
-                NaiveDateTime::from_timestamp_millis(timestamp * 1_000)
+                DateTime::from_timestamp_millis(timestamp * 1_000)
                     .unwrap()
                     .timestamp()
             }
         }
         None => {
-            let timestamp = Utc::now().naive_utc().timestamp();
+            let timestamp = Utc::now().timestamp();
             if use_milliseconds {
                 timestamp * 1_000
             } else {
@@ -99,9 +97,11 @@ pub fn timestamp_minute_end(use_milliseconds: bool, timestamp: Option<i64>) -> i
     timestamp
 }
 
-fn current_minute_start() {
-    let current_timestamp = current_timestamp_ms();
-}
+// fn current_minute_start() {
+//     let current_timestamp = current_timestamp_ms();
+// }
+
+type GetSymbolOpenColFn = fn(symbol: &str) -> &'static str;
 
 /// Gets Open, High, Low and Close labels for symbol.
 ///
@@ -122,40 +122,6 @@ fn current_minute_start() {
 /// * `High symbol` - High symbol column.
 /// * `Low symbol` - Low symbol column.
 /// * `Close symbol` - Close symbol column.
-///
-
-// TODO: DEPRECATE THIS
-// pub fn get_symbol_ohlc_cols(
-//     symbol: &str,
-// ) -> (&'static str, &'static str, &'static str, &'static str) {
-//     let Symbol {
-//         name: _,
-//         open,
-//         high,
-//         low,
-//         close,
-//     } = SYMBOLS_MAP
-//         .get(symbol)
-//         .expect(&format!("symbol {} to exist", symbol));
-//     return (open, high, low, close);
-// }
-
-// TODO: deprecate this
-pub fn get_symbol_open_col(symbol: &str) -> &'static str {
-    let symbol = SYMBOLS_MAP
-        .get(symbol)
-        .expect(&format!("symbol {} to exist", symbol));
-    symbol.open
-}
-
-// TODO: deprecate this
-pub fn get_symbol_close_col(symbol: &str) -> &'static str {
-    let symbol = SYMBOLS_MAP
-        .get(symbol)
-        .expect(&format!("symbol {} to exist", symbol));
-    symbol.close
-}
-
 /// returns open, high, low and close windowed columns names
 pub fn get_symbol_window_ohlc_cols(
     symbol: &String,
@@ -165,15 +131,16 @@ pub fn get_symbol_window_ohlc_cols(
     let high_col = format!("{}_{}_high", symbol, window);
     let low_col = format!("{}_{}_low", symbol, window);
     let close_col = format!("{}_{}_close", symbol, window);
-    return (open_col, high_col, low_col, close_col);
+    (open_col, high_col, low_col, close_col)
 }
 
 pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
     lfs: L,
-    filter_datetime: NaiveDateTime,
+    filter_datetime: DateTime<Utc>,
 ) -> Result<LazyFrame, GlowError> {
     let args = UnionArgs {
         parallel: true,
+        maintain_order: true,
         rechunk: true,
         to_supertypes: false,
         diagonal: true,
@@ -186,25 +153,28 @@ pub fn concat_and_clean_lazyframes<L: AsRef<[LazyFrame]>>(
             .dt()
             .datetime()
             .cast(DataType::Datetime(TimeUnit::Milliseconds, None))
-            .gt(filter_datetime.and_utc().timestamp() * 1000),
+            .gt(filter_datetime.timestamp() * 1000),
     );
 
     Ok(result_lf)
 }
 
 pub fn map_df_to_kline_data(df: &DataFrame, symbol: &Symbol) -> Result<Vec<TickData>, GlowError> {
-    let timestamps = &df.column("start_time")?.timestamp(TimeUnit::Milliseconds)?;
-    let opens = &df.column(&symbol.open)?.f64()?;
-    let highs = &df.column(&symbol.high)?.f64()?;
-    let lows = &df.column(&symbol.low)?.f64()?;
-    let closes = &df.column(&symbol.close)?.f64()?;
+    let binding = df
+        .column("start_time")?
+        .cast(&DataType::Datetime(TimeUnit::Milliseconds, None))?;
+    let timestamps = binding.i64()?;
+    let opens = df.column(symbol.open)?.f64()?;
+    let highs = df.column(symbol.high)?.f64()?;
+    let lows = df.column(symbol.low)?.f64()?;
+    let closes = df.column(symbol.close)?.f64()?;
 
     let mut ticks_data = vec![];
 
     for (i, ts) in timestamps.into_iter().enumerate() {
         let tick_data = TickData::new_from_string(
-            &symbol.name,
-            NaiveDateTime::from_timestamp_millis(ts.unwrap()).unwrap(),
+            symbol.name,
+            DateTime::from_timestamp_millis(ts.unwrap()).unwrap(),
             opens.get(i).unwrap(),
             highs.get(i).unwrap(),
             closes.get(i).unwrap(),
@@ -237,10 +207,9 @@ pub fn map_ticks_data_to_df(ticks_data: &Vec<TickData>) -> Result<DataFrame, Glo
             .push(tick.close);
     }
 
-    let timestamp_series = Series::new(
-        "start_time".into(),
-        timestamps.into_iter().collect::<Vec<NaiveDateTime>>(),
-    );
+    let timestamp_values: Vec<i64> = timestamps.iter().map(|dt| dt.timestamp_millis()).collect();
+    let timestamp_series = Column::new("start_time".into(), timestamp_values)
+        .cast(&DataType::Datetime(TimeUnit::Milliseconds, None))?;
     let sort_options = SortOptions::default();
     let sort_options = sort_options.with_order_descending(false);
     let mut timestamp_series = timestamp_series.sort(sort_options)?;
@@ -251,7 +220,7 @@ pub fn map_ticks_data_to_df(ticks_data: &Vec<TickData>) -> Result<DataFrame, Glo
     let df = DataFrame::new(data.into_iter().fold(
         series_init,
         |mut series, (col_name, col_data)| {
-            series.push(Series::new(col_name.into(), col_data));
+            series.push(Column::new(col_name.into(), col_data));
             series
         },
     ))?;
@@ -278,7 +247,7 @@ pub fn coerce_df_to_schema(df: DataFrame, schema: &Schema) -> Result<DataFrame, 
             series.push(column_series);
             continue;
         }
-        let null_series = Series::full_null(col.into(), data_size, &dtype);
+        let null_series = Column::full_null(col.into(), data_size, &dtype);
         series.push(null_series);
         // let _ = result_df.replace(&col, null_series);
     }
@@ -289,8 +258,8 @@ pub fn coerce_df_to_schema(df: DataFrame, schema: &Schema) -> Result<DataFrame, 
 
 pub fn filter_df_timestamps_to_lf(
     df: DataFrame,
-    start_datetime: NaiveDateTime,
-    end_datetime: NaiveDateTime,
+    start_datetime: DateTime<Utc>,
+    end_datetime: DateTime<Utc>,
 ) -> Result<LazyFrame, GlowError> {
     let lf = df.lazy();
     let lf = lf.filter(
@@ -374,14 +343,14 @@ pub fn downsample_tick_lf_to_kline_duration(
 }
 
 pub fn get_days_between(
-    start_datetime: NaiveDateTime,
-    end_datetime: NaiveDateTime,
+    start_datetime: DateTime<Utc>,
+    end_datetime: DateTime<Utc>,
 ) -> Result<Vec<NaiveDate>, GlowError> {
     assert_or_error!(start_datetime <= end_datetime);
 
     let num_days = (end_datetime - start_datetime).num_days();
     let days = (0..=num_days)
-        .map(|i| start_datetime.date() + Duration::days(i))
+        .map(|i| start_datetime.date_naive() + Duration::days(i))
         .collect::<Vec<NaiveDate>>();
     Ok(days)
 }
@@ -579,8 +548,7 @@ pub fn check_last_index_for_signal(
         .unwrap()
         .into_no_null_iter()
         .collect::<Vec<i32>>();
-    let value = column.get(last_index).unwrap();
-    return Ok(value == &1);
+    Ok(column.get(last_index).unwrap() == &1)
 }
 
 pub fn get_signal_col_values(
@@ -608,35 +576,10 @@ pub fn get_price_columns(
     symbol: &Symbol,
 ) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>), GlowError> {
     let (open_col, high_col, low_col, close_col) = symbol.get_ohlc_cols();
-    let opens = df
-        .column(&open_col)
-        .unwrap()
-        .f64()
-        .unwrap()
-        .into_no_null_iter()
-        .collect::<Vec<f64>>();
-    let highs = df
-        .column(&high_col)
-        .unwrap()
-        .f64()
-        .unwrap()
-        .into_no_null_iter()
-        .collect::<Vec<f64>>();
-    let lows = df
-        .column(&low_col)
-        .unwrap()
-        .f64()
-        .unwrap()
-        .into_no_null_iter()
-        .collect::<Vec<f64>>();
-    let closes = df
-        .column(&close_col)
-        .unwrap()
-        .f64()
-        .unwrap()
-        .into_no_null_iter()
-        .collect::<Vec<f64>>();
-
+    let opens: Vec<f64> = df.column(open_col)?.f64()?.into_no_null_iter().collect();
+    let highs: Vec<f64> = df.column(high_col)?.f64()?.into_no_null_iter().collect();
+    let lows: Vec<f64> = df.column(low_col)?.f64()?.into_no_null_iter().collect();
+    let closes: Vec<f64> = df.column(close_col)?.f64()?.into_no_null_iter().collect();
     Ok((opens, highs, lows, closes))
 }
 
@@ -645,38 +588,30 @@ pub fn get_price_columns_f32(
     symbol: &Symbol,
 ) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>), GlowError> {
     let (open_col, high_col, low_col, close_col) = symbol.get_ohlc_cols();
-    let opens = df
-        .column(&open_col)
-        .unwrap()
-        .f64()
-        .unwrap()
+    let opens: Vec<f32> = df
+        .column(open_col)?
+        .f64()?
         .into_no_null_iter()
         .map(|o| o as f32)
-        .collect::<Vec<f32>>();
-    let highs = df
-        .column(&high_col)
-        .unwrap()
-        .f64()
-        .unwrap()
+        .collect();
+    let highs: Vec<f32> = df
+        .column(high_col)?
+        .f64()?
         .into_no_null_iter()
         .map(|h| h as f32)
-        .collect::<Vec<f32>>();
-    let lows = df
-        .column(&low_col)
-        .unwrap()
-        .f64()
-        .unwrap()
+        .collect();
+    let lows: Vec<f32> = df
+        .column(low_col)?
+        .f64()?
         .into_no_null_iter()
         .map(|l| l as f32)
-        .collect::<Vec<f32>>();
-    let closes = df
-        .column(&close_col)
-        .unwrap()
-        .f64()
-        .unwrap()
+        .collect();
+    let closes: Vec<f32> = df
+        .column(close_col)?
+        .f64()?
         .into_no_null_iter()
         .map(|c| c as f32)
-        .collect::<Vec<f32>>();
+        .collect();
 
     Ok((opens, highs, lows, closes))
 }

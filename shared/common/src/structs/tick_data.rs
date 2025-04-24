@@ -1,11 +1,11 @@
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use std::fmt;
 use std::io::{stdout, Write};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TickData {
     pub symbol: &'static str,
-    pub start_time: NaiveDateTime,
+    pub start_time: DateTime<Utc>,
     pub open: f64,
     pub high: f64,
     pub close: f64,
@@ -15,7 +15,7 @@ pub struct TickData {
 impl TickData {
     pub fn new_from_string(
         symbol: &'static str,
-        start_time: NaiveDateTime,
+        start_time: DateTime<Utc>,
         open: f64,
         high: f64,
         close: f64,

@@ -1,5 +1,5 @@
 use crate::{enums::TraderExchangeId, structs::ExchangeContext};
-use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use common::{r#static::SYMBOLS_MAP, structs::Contract};
 use std::{collections::HashMap, sync::LazyLock};
 
@@ -9,9 +9,12 @@ pub static TRADER_EXCHANGES_CONTEXT_MAP: LazyLock<HashMap<TraderExchangeId, Exch
 
         {
             let btcusdt_contract = Contract::new(
-                NaiveDateTime::new(
-                    NaiveDate::from_ymd_opt(2020, 3, 1).unwrap(),
-                    NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                DateTime::from_naive_utc_and_offset(
+                    NaiveDateTime::new(
+                        NaiveDate::from_ymd_opt(2020, 3, 1).unwrap(),
+                        NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                    ),
+                    Utc,
                 ),
                 Duration::hours(8),
                 0.000009,
@@ -24,9 +27,12 @@ pub static TRADER_EXCHANGES_CONTEXT_MAP: LazyLock<HashMap<TraderExchangeId, Exch
             );
 
             let ethusdt_contract = Contract::new(
-                NaiveDateTime::new(
-                    NaiveDate::from_ymd_opt(2021, 3, 1).unwrap(),
-                    NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                DateTime::from_naive_utc_and_offset(
+                    NaiveDateTime::new(
+                        NaiveDate::from_ymd_opt(2021, 3, 1).unwrap(),
+                        NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                    ),
+                    Utc,
                 ),
                 Duration::hours(8),
                 0.000031,
@@ -39,9 +45,12 @@ pub static TRADER_EXCHANGES_CONTEXT_MAP: LazyLock<HashMap<TraderExchangeId, Exch
             );
 
             let solusdt_contract = Contract::new(
-                NaiveDateTime::new(
-                    NaiveDate::from_ymd_opt(2021, 10, 1).unwrap(),
-                    NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                DateTime::from_naive_utc_and_offset(
+                    NaiveDateTime::new(
+                        NaiveDate::from_ymd_opt(2021, 10, 1).unwrap(),
+                        NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                    ),
+                    Utc,
                 ),
                 Duration::hours(8),
                 0.000048,
@@ -54,9 +63,12 @@ pub static TRADER_EXCHANGES_CONTEXT_MAP: LazyLock<HashMap<TraderExchangeId, Exch
             );
 
             let arbusdt_contract = Contract::new(
-                NaiveDateTime::new(
-                    NaiveDate::from_ymd_opt(2023, 3, 1).unwrap(),
-                    NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                DateTime::from_naive_utc_and_offset(
+                    NaiveDateTime::new(
+                        NaiveDate::from_ymd_opt(2023, 3, 1).unwrap(),
+                        NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                    ),
+                    Utc,
                 ),
                 Duration::hours(8),
                 -0.0288,
@@ -69,9 +81,12 @@ pub static TRADER_EXCHANGES_CONTEXT_MAP: LazyLock<HashMap<TraderExchangeId, Exch
             );
 
             let linkusdt_contract = Contract::new(
-                NaiveDateTime::new(
-                    NaiveDate::from_ymd_opt(2020, 10, 1).unwrap(),
-                    NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                DateTime::from_naive_utc_and_offset(
+                    NaiveDateTime::new(
+                        NaiveDate::from_ymd_opt(2020, 10, 1).unwrap(),
+                        NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                    ),
+                    Utc,
                 ),
                 Duration::hours(8),
                 0.000048,

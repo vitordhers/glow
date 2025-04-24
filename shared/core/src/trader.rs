@@ -251,9 +251,7 @@ impl Trader {
                                 open_order.update_units(left_units);
                                 current_trade = current_trade.update_trade(open_order)?;
                             } else {
-                                let error = format!(
-                                    "TradeStatus::PartiallyOpen -> amend order returned false"
-                                );
+                                let error = "TradeStatus::PartiallyOpen -> amend order returned false".to_string();
                                 let error = GlowError::new(String::from("Amend Order Error"), error);
                                 return Err(error);
                             }
@@ -333,7 +331,7 @@ impl Trader {
             .lock()
             .expect("process_last_signal -> temp_executions locked!");
 
-        if temp_executions_guard.len() <= 0 {
+        if temp_executions_guard.len() == 0 {
             return order;
         }
 
@@ -342,13 +340,13 @@ impl Trader {
         let mut removed_executions_ids = vec![];
 
         temp_executions_guard.iter().for_each(|execution| {
-            if &execution.order_uuid != "" && &execution.order_uuid == order_uuid {
+            if !execution.order_uuid.is_empty() && &execution.order_uuid == order_uuid {
                 pending_executions.push(execution.clone());
                 removed_executions_ids.push(execution.id.clone());
             }
         });
 
-        if pending_executions.len() <= 0 {
+        if pending_executions.is_empty() {
             return order;
         }
 
@@ -453,7 +451,7 @@ impl Trader {
         spawn(async move {
             let mut subscription = trader.executions_update_listener.subscribe();
             while let Some(latest_executions) = subscription.next().await {
-                if latest_executions.len() <= 0 {
+                if latest_executions.is_empty() {
                     continue;
                 }
 
@@ -508,7 +506,7 @@ impl Trader {
             let start_timestamp = start_times[index].expect(
                 "on_close_trade_update_trading_data -> TradeStatus::Closed arm -> interval_start_timestamp unwrap",
             );
-            let end_timestamp = current_timestamp_ms() as i64;
+            let end_timestamp = current_timestamp_ms();
             let (pnl, returns) = current_trade.calculate_pnl_and_returns();
             let fees =
                 current_trade.get_executed_fees_between_interval(start_timestamp, end_timestamp);
@@ -648,7 +646,7 @@ impl Trader {
             let trade_status = current_trade.status();
             if trade_status != TradeStatus::Cancelled && trade_status != TradeStatus::Closed {
                 let current_price = &updated_strategy_df
-                    .column(&close_col)
+                    .column(close_col)
                     .unwrap()
                     .f64()?
                     .into_iter()
@@ -734,7 +732,7 @@ impl Trader {
             .temp_executions
             .lock()
             .expect("TradingDataUpdate::CleanUp -> temp_executions deadlock");
-        if temp_executions_guard.len() <= 0 {
+        if temp_executions_guard.len() == 0 {
             return Ok(());
         }
         let open_order_uuid = &current_trade.open_order.uuid;
@@ -743,13 +741,13 @@ impl Trader {
         let mut removed_executions_ids = vec![];
         for execution in temp_executions_guard.iter() {
             if &execution.order_uuid == open_order_uuid
-                || close_order_uuid != "" && &execution.order_uuid == close_order_uuid
+                || !close_order_uuid.is_empty() && &execution.order_uuid == close_order_uuid
             {
                 pending_executions.push(execution.clone());
                 removed_executions_ids.push(execution.id.clone());
             }
         }
-        if pending_executions.len() <= 0 {
+        if pending_executions.is_empty() {
             return Ok(());
         }
         let updated_trade = current_trade

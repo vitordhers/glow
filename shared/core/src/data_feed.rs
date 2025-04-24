@@ -1,4 +1,4 @@
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use common::enums::trading_data_update::TradingDataUpdate;
 use common::structs::{Symbol, TradingSettings};
 use common::{structs::BehaviorSubject, traits::exchange::DataProviderExchange};
@@ -12,7 +12,7 @@ use tokio_stream::StreamExt;
 
 #[derive(Clone)]
 pub struct DataFeed {
-    benchmark_datetimes: (Option<NaiveDateTime>, Option<NaiveDateTime>), // (start, end)
+    benchmark_datetimes: (Option<DateTime<Utc>>, Option<DateTime<Utc>>), // (start, end)
     data_provider_exchange: DataProviderExchangeWrapper,
     kline_data_listener: BehaviorSubject<TradingDataUpdate>,
     run_benchmark_only: bool, // TODO check if this is really necessary
@@ -59,7 +59,7 @@ impl DataFeed {
         schema_fields.push(Field::new("balance".into(), DataType::Float64));
         schema_fields.push(Field::new("position".into(), DataType::Int32));
         schema_fields.push(Field::new("action".into(), DataType::String));
-        Schema::from_iter(schema_fields.clone().into_iter())
+        Schema::from_iter(schema_fields.clone())
     }
 
     fn update_trading_data_df(trading_data: &Arc<Mutex<DataFrame>>, trading_data_df: &DataFrame) {
@@ -94,7 +94,7 @@ impl DataFeed {
     }
 
     pub fn new(
-        benchmark_datetimes: (Option<NaiveDateTime>, Option<NaiveDateTime>),
+        benchmark_datetimes: (Option<DateTime<Utc>>, Option<DateTime<Utc>>),
         data_provider_exchange: DataProviderExchangeWrapper,
         run_benchmark_only: bool,
         strategy: &Strategy,
@@ -132,8 +132,8 @@ impl DataFeed {
     /// this must be run before init
     pub fn patch_benchmark_datetimes(
         &mut self,
-        benchmark_start: Option<NaiveDateTime>,
-        benchmark_end: Option<NaiveDateTime>,
+        benchmark_start: Option<DateTime<Utc>>,
+        benchmark_end: Option<DateTime<Utc>>,
     ) {
         self.benchmark_datetimes = (benchmark_start, benchmark_end)
     }

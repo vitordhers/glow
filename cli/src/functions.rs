@@ -11,7 +11,7 @@ use std::io::stdout;
 pub fn select_from_list<T: ToString>(prompt: &str, items: &[T], default: Option<usize>) -> usize {
     Select::with_theme(&ColorfulTheme::default())
         .with_prompt(prompt)
-        .items(&items)
+        .items(items)
         .default(default.unwrap_or_default())
         .interact()
         .expect("Failed to read input")
@@ -31,7 +31,7 @@ pub fn get_escapable_input(
             stdout(),
             Clear(ClearType::CurrentLine),
             MoveTo(initial_cursor_position.0, initial_cursor_position.1),
-            Print(format!("{}", input)),
+            Print(input.to_string()),
             MoveTo(input.len() as u16, initial_cursor_position.1),
         )
         .expect("Failed to clear the terminal");

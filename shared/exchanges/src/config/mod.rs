@@ -21,13 +21,13 @@ pub static TRADER_EXCHANGES_CONFIG_MAP: LazyLock<HashMap<TraderExchangeId, Excha
             let exchange_title = "Bybit".to_uppercase();
             let api_key_env_var = format!("{}_{}_{}", exchange_title, API_KEY_ENV_SUFFIX, env);
             let api_key = var(&api_key_env_var)
-                .expect(&format!("{} env var to be provided", api_key_env_var));
+                .unwrap_or_else(|_| panic!("{} env var to be provided", api_key_env_var));
             let api_secret_env_var =
                 format!("{}_{}_{}", exchange_title, API_SECRET_ENV_SUFFIX, env);
             let api_secret = var(&api_secret_env_var)
-                .expect(&format!("{} env var to be provided", api_secret_env_var));
+                .unwrap_or_else(|_| panic!("{} env var to be provided", api_secret_env_var));
 
-            if env == "PROD".to_string() {
+            if env == *"PROD" {
                 http_url = var("BYBIT_HTTP_BASE_URL_PROD")
                     .expect("BYBIT_HTTP_BASE_URL_PROD env var to be provided");
                 ws_url = var("BYBIT_WS_BASE_URL_PROD")
