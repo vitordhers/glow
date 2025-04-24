@@ -61,8 +61,8 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tungstenite::client::IntoClientRequest;
 use url::Url;
-// pub mod tests;
 
 #[derive(Clone)]
 pub struct BybitTraderExchange {
@@ -264,7 +264,11 @@ impl TraderHelper for BybitTraderExchange {
 
         units = round_down_nth_decimal(units - fract_units, size_decimals);
         let open_order_type = trading_settings.order_types.0;
-        let maximum_order_size = if open_order_type == OrderType::Market {maximum_order_sizes.0} else {maximum_order_sizes.1};
+        let maximum_order_size = if open_order_type == OrderType::Market {
+            maximum_order_sizes.0
+        } else {
+            maximum_order_sizes.1
+        };
 
         if units == 0.0
             || units < contract.minimum_order_size
@@ -321,7 +325,7 @@ impl TraderHelper for BybitTraderExchange {
         // };
         // let close_fee = units * bankruptcy_price * fee_rate;
 
-        return Ok((units, balance_remainder));
+        Ok((units, balance_remainder))
     }
 
     fn get_order_fee_rate(&self, order_type: OrderType) -> (f64, bool) {
@@ -1519,7 +1523,8 @@ impl TraderExchange for BybitTraderExchange {
         let url = self.get_ws_url()?;
 
         loop {
-            let connection = connect_async(url.clone()).await;
+            let request = url.as_str().into_client_request()?;
+            let connection = connect_async(request).await;
             if let Err(error) = connection {
                 eprintln!(
                     "Exchange WebSocket connection failed. \n

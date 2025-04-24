@@ -6,7 +6,7 @@ use crate::{
     binance::{enums::IncomingWsMessage, functions::from_tick_to_tick_data},
     config::WS_RECONNECT_INTERVAL_IN_SECS,
 };
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use common::{
     enums::trading_data_update::TradingDataUpdate,
     functions::{
@@ -24,7 +24,7 @@ use futures_util::SinkExt;
 use glow_error::{assert_or_error, GlowError};
 use polars::{
     frame::DataFrame,
-    prelude::{IntoLazy, Schema},
+    prelude::{IntoLazy, Schema, SortMultipleOptions},
     time::ClosedWindow,
 };
 use reqwest::Client;
@@ -43,6 +43,7 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tungstenite::client::IntoClientRequest;
 use url::Url;
 
 #[derive(Clone)]
@@ -93,17 +94,17 @@ impl BinanceDataProvider {
     async fn load_or_fetch_kline_data(
         &self,
         trading_data_schema: &Schema,
-        start_datetime: NaiveDateTime,
-        end_datetime: NaiveDateTime,
+        start_datetime: DateTime<Utc>,
+        end_datetime: DateTime<Utc>,
         tick_duration: Duration,
     ) -> Result<DataFrame, GlowError> {
-        let mut kline_df = DataFrame::from(trading_data_schema);
+        let mut kline_df = DataFrame::empty_with_schema(trading_data_schema);
         for symbol in &self.symbols.get_unique_symbols() {
             let (loaded_data_df, not_loaded_dates) =
                 load_interval_tick_dataframe(start_datetime, end_datetime, &symbol, "binance")?;
 
             let mut result_df =
-                loaded_data_df.unwrap_or_else(|| DataFrame::from(trading_data_schema));
+                loaded_data_df.unwrap_or_else(|| DataFrame::empty_with_schema(trading_data_schema));
 
             if result_df.schema().len() != trading_data_schema.len() {
                 result_df = coerce_df_to_schema(result_df, trading_data_schema)?;
@@ -133,7 +134,10 @@ impl BinanceDataProvider {
                 let fetched_data_df = coerce_df_to_schema(fetched_data_df, &trading_data_schema)?;
                 match &result_df.vstack(&fetched_data_df) {
                     Ok(stacked_df) => {
-                        result_df = stacked_df.sort(["start_time"], false, false)?;
+                        let sort_options = SortMultipleOptions::default();
+                        let sort_options = sort_options.with_order_descending(false);
+                        let sort_options = sort_options.with_maintain_order(false);
+                        result_df = stacked_df.sort(["start_time"], sort_options)?;
                     }
                     Err(error) => {
                         println!("STACK ERROR 1 {:?}", error);
@@ -152,9 +156,10 @@ impl BinanceDataProvider {
                 }
             };
         }
-
-        let mut kline_df = kline_df.sort(["start_time"], false, false)?;
-
+        let sort_options = SortMultipleOptions::default();
+        let sort_options = sort_options.with_order_descending(false);
+        let sort_options = sort_options.with_maintain_order(false);
+        let mut kline_df = kline_df.sort(["start_time"], sort_options)?;
         kline_df.align_chunks();
         let kline_lf = filter_df_timestamps_to_lf(kline_df, start_datetime, end_datetime)?;
         let kline_lf = downsample_tick_lf_to_kline_duration(
@@ -194,8 +199,8 @@ impl BinanceDataProvider {
             current_datetime(),
             symbol,
             limit,
-            NaiveDateTime::from_timestamp_millis(start_timestamp_ms).unwrap(),
-            NaiveDateTime::from_timestamp_millis(end_timestamp_ms).unwrap()
+            DateTime::from_timestamp_millis(start_timestamp_ms).unwrap(),
+            DateTime::from_timestamp_millis(end_timestamp_ms).unwrap()
         );
 
         let result: Vec<BinanceHttpKlineResponse> = self.http.get(url).send().await?.json().await?;
@@ -206,8 +211,7 @@ impl BinanceDataProvider {
                 let close = data.close.parse::<f64>().unwrap();
                 let high = data.high.parse::<f64>().unwrap();
                 let low = data.low.parse::<f64>().unwrap();
-                let start_time =
-                    NaiveDateTime::from_timestamp_opt(data.timestamp / 1000, 0).unwrap();
+                let start_time = DateTime::from_timestamp(data.timestamp / 1000, 0).unwrap();
                 TickData::new_from_string(symbol, start_time, open, high, close, low)
             })
             .collect();
@@ -248,8 +252,8 @@ impl BinanceDataProvider {
 
     async fn handle_initial_klines_fetch(
         &self,
-        benchmark_start: NaiveDateTime,
-        benchmark_end: NaiveDateTime,
+        benchmark_start: DateTime<Utc>,
+        benchmark_end: DateTime<Utc>,
         trading_data_schema: &Schema,
     ) -> Result<(), GlowError> {
         let initial_kline_data_df = self
@@ -304,13 +308,13 @@ impl DataProviderExchange for BinanceDataProvider {
 
     async fn handle_committed_ticks_data(
         &self,
-        discard_ticks_before: NaiveDateTime,
+        discard_ticks_before: DateTime<Utc>,
         trading_data_schema: &Schema,
     ) -> Result<(), GlowError> {
         let mut ticks_to_commit_subscription = self.ticks_to_commit.subscribe();
         let discard_ticks_before = discard_ticks_before - Duration::nanoseconds(1);
         let trading_data_schema = trading_data_schema.clone();
-        let kline_duration = self.kline_duration.clone();
+        let kline_duration = self.kline_duration;
         let unique_symbols = self.symbols.get_unique_symbols().clone();
         let klines_data_update_emitter = self.klines_data_update_emitter.clone();
 
@@ -320,13 +324,12 @@ impl DataProviderExchange for BinanceDataProvider {
                 continue;
             }
             let mut committed_ticks = committed_ticks.unwrap();
-            if committed_ticks.len() <= 0
+            if committed_ticks.is_empty()
                 || committed_ticks
                     .iter()
                     .filter(|tick| tick.start_time > discard_ticks_before)
                     .collect::<Vec<_>>()
-                    .len()
-                    <= 0
+                    .is_empty()
             {
                 continue;
             }
@@ -352,7 +355,7 @@ impl DataProviderExchange for BinanceDataProvider {
         }
     }
 
-    fn handle_ws_error(&self, trading_data_schema: &Schema) -> Option<NaiveDateTime> {
+    fn handle_ws_error(&self, trading_data_schema: &Schema) -> Option<DateTime<Utc>> {
         let schema = trading_data_schema.clone();
         let last_error_ts: Option<i64>;
         {
@@ -360,19 +363,17 @@ impl DataProviderExchange for BinanceDataProvider {
                 .last_ws_error_ts
                 .lock()
                 .expect("handle_ws_error -> last_error_guard unwrap");
-            last_error_ts = last_error_guard.clone();
+            last_error_ts = *last_error_guard;
         }
-        if last_error_ts.is_none() {
-            return None;
-        }
+        last_error_ts?;
         let now = Instant::now();
         let now_ts = current_timestamp_ms();
 
         let start_ms = timestamp_minute_start(true, last_error_ts);
         let end_ms = timestamp_minute_end(true, Some(now_ts));
-        let result = NaiveDateTime::from_timestamp_millis(end_ms).unwrap();
+        let result = DateTime::from_timestamp_millis(end_ms).unwrap();
         let data_provider = self.clone();
-        let _ = spawn(async move {
+        spawn(async move {
             let duration_until_available = StdDuration::from_millis((now_ts - end_ms) as u64);
 
             let wait_until = now + duration_until_available + data_provider.fetch_leeway;
@@ -393,8 +394,8 @@ impl DataProviderExchange for BinanceDataProvider {
 
     async fn init(
         &mut self,
-        benchmark_start: Option<NaiveDateTime>,
-        benchmark_end: Option<NaiveDateTime>,
+        benchmark_start: Option<DateTime<Utc>>,
+        benchmark_end: Option<DateTime<Utc>>,
         run_benchmark_only: bool,
         trading_data_schema: Schema,
     ) -> Result<(), GlowError> {
@@ -424,7 +425,8 @@ impl DataProviderExchange for BinanceDataProvider {
         let url = Url::parse(&format!("{}/ws/bookTicker", binance_ws_base_url))?; // ws url
 
         loop {
-            match connect_async(url.clone()).await {
+            let request = url.as_str().into_client_request()?;
+            match connect_async(request).await {
                 Ok((wss, resp)) => {
                     eprintln!(
                         "Data provider connection stablished. \n Response: {:?}",
@@ -464,7 +466,7 @@ impl DataProviderExchange for BinanceDataProvider {
     async fn listen_ticks(
         &mut self,
         mut wss: WebSocketStream<MaybeTlsStream<TcpStream>>,
-        discard_ticks_before: NaiveDateTime,
+        discard_ticks_before: DateTime<Utc>,
     ) -> Result<(), GlowError> {
         self.subscribe_to_tick_stream(&mut wss).await?;
 
@@ -580,12 +582,12 @@ impl DataProviderExchange for BinanceDataProvider {
 }
 
 fn adjust_benchmark_datetimes(
-    benchmark_start: Option<NaiveDateTime>,
-    benchmark_end: Option<NaiveDateTime>,
+    benchmark_start: Option<DateTime<Utc>>,
+    benchmark_end: Option<DateTime<Utc>>,
     kline_duration: Duration,
     minimum_days_for_analysis: Option<i64>,
     minimum_klines_for_benchmarking: i32,
-) -> Result<(NaiveDateTime, NaiveDateTime), GlowError> {
+) -> Result<(DateTime<Utc>, DateTime<Utc>), GlowError> {
     if let (Some(benchmark_start), Some(benchmark_end)) = (benchmark_start, benchmark_end) {
         assert_or_error!(benchmark_end > benchmark_start);
     }
@@ -600,7 +602,8 @@ fn adjust_benchmark_datetimes(
         .unwrap();
         let time =
             NaiveTime::from_hms_opt(current_datetime.hour(), current_datetime.minute(), 0).unwrap();
-        NaiveDateTime::new(date, time)
+        let datetime = NaiveDateTime::new(date, time);
+        DateTime::from_naive_utc_and_offset(datetime, Utc)
     });
 
     let benchmark_start = benchmark_start.unwrap_or_else(|| {

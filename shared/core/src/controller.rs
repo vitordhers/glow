@@ -1,7 +1,7 @@
 use crate::{config::BenchmarkSettings, data_feed::DataFeed, trader::Trader};
 
 use super::performance::Performance;
-use chrono::{Duration, NaiveDateTime};
+use chrono::{DateTime, Duration, Utc};
 use common::structs::TradingSettings;
 use common::traits::exchange::TraderHelper;
 use exchanges::enums::{DataProviderExchangeWrapper, TraderExchangeWrapper};
@@ -66,8 +66,8 @@ impl Controller {
 
     pub fn patch_benchmark_datetimes(
         &mut self,
-        benchmark_start: Option<NaiveDateTime>,
-        benchmark_end: Option<NaiveDateTime>,
+        benchmark_start: Option<DateTime<Utc>>,
+        benchmark_end: Option<DateTime<Utc>>,
     ) {
         self.benchmark_settings.datetimes = (benchmark_start, benchmark_end);
         let _ = self.benchmark_settings.save_config();

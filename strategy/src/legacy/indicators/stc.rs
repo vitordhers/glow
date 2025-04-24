@@ -95,7 +95,7 @@ impl Indicator for STCIndicator {
                 resampled_lf.with_column((col(ema_short_col) - col(ema_long_col)).alias(macd_col));
 
             let rolling_k_opts = RollingOptions {
-                window_size: Duration::parse(&format!("{}i", self.length)),
+                window_size: Duration::parse(&format!("{}m", self.length)),
                 min_periods: self.length as usize,
                 center: false,
                 by: Some("start_time".to_string()),

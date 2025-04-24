@@ -1,5 +1,5 @@
 use crate::{binance::structs::BinanceDataProvider, bybit::BybitTraderExchange};
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use common::{
     enums::{
         balance::Balance, modifiers::leverage::Leverage, order_action::OrderAction,
@@ -78,8 +78,8 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
 
     async fn init(
         &mut self,
-        benchmark_start: Option<NaiveDateTime>,
-        benchmark_end: Option<NaiveDateTime>,
+        benchmark_start: Option<DateTime<Utc>>,
+        benchmark_end: Option<DateTime<Utc>>,
         run_benchmark_only: bool,
         trading_data_schema: Schema,
     ) -> Result<(), GlowError> {
@@ -99,7 +99,7 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
     async fn listen_ticks(
         &mut self,
         wss: WebSocketStream<MaybeTlsStream<TcpStream>>,
-        benchmark_end: NaiveDateTime,
+        benchmark_end: DateTime<Utc>,
     ) -> Result<(), GlowError> {
         match self {
             Self::Binance(ex) => ex.listen_ticks(wss, benchmark_end).await,
@@ -108,7 +108,7 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
 
     async fn handle_committed_ticks_data(
         &self,
-        benchmark_end: NaiveDateTime,
+        benchmark_end: DateTime<Utc>,
         trading_data_schema: &Schema,
     ) -> Result<(), GlowError> {
         match self {
@@ -119,7 +119,7 @@ impl DataProviderExchange for DataProviderExchangeWrapper {
         }
     }
 
-    fn handle_ws_error(&self, trading_data_schema: &Schema) -> Option<NaiveDateTime> {
+    fn handle_ws_error(&self, trading_data_schema: &Schema) -> Option<DateTime<Utc>> {
         match self {
             Self::Binance(ex) => ex.handle_ws_error(trading_data_schema),
         }

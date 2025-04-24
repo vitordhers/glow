@@ -421,39 +421,39 @@ pub fn compute_benchmark_positions(
     let elapsed_time = perf_start.elapsed();
     let elapsed_millis = elapsed_time.as_nanos();
     println!(
-        "compute_benchmark_positions => Elapsed time in nanos: {}",
-        elapsed_millis
+        "compute_benchmark_positions => Elapsed time (ms): {}",
+        elapsed_millis as f64 / 1_000_000_f64
     );
 
     let trade_fee_series = Series::new(
-        "trade_fees",
+        "trade_fees".into(),
         trade_fees.iter().map(|&f| f as f64).collect::<Vec<f64>>(),
     );
     let units_series = Series::new(
-        "units",
+        "units".into(),
         units.iter().map(|&u| u as f64).collect::<Vec<f64>>(),
     );
     let profit_and_loss_series = Series::new(
-        "profit_and_loss",
+        "profit_and_loss".into(),
         profit_and_loss
             .iter()
             .map(|&p| p as f64)
             .collect::<Vec<f64>>(),
     );
     let returns_series = Series::new(
-        "returns",
+        "returns".into(),
         returns.iter().map(|&r| r as f64).collect::<Vec<f64>>(),
     );
     let balance_series = Series::new(
-        "balance",
+        "balance".into(),
         balances
             .iter()
             .zip(fundings.iter())
             .map(|(&a, &b)| (a + b) as f64)
             .collect::<Vec<f64>>(),
     );
-    let position_series = Series::new("position", positions);
-    let action_series = Series::new("action", actions);
+    let position_series = Series::new("position".into(), positions);
+    let action_series = Series::new("action".into(), actions);
 
     let df = df.with_column(trade_fee_series)?;
     let df = df.with_column(units_series)?;

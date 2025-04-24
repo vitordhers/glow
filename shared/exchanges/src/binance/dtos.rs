@@ -34,7 +34,7 @@ pub mod ws {
     }
 
     pub mod incoming {
-        use chrono::NaiveDateTime;
+        use chrono::{DateTime, Utc};
         // use common::structs::TickData;
         use serde::Deserialize;
 
@@ -62,9 +62,9 @@ pub mod ws {
         #[derive(Debug, Deserialize)]
         pub struct TickMessageData {
             #[serde(rename = "t", deserialize_with = "parse_u64_as_datetime")]
-            pub start_time: NaiveDateTime, // Kline start time
+            pub start_time: DateTime<Utc>, // Kline start time
             #[serde(rename = "T", deserialize_with = "parse_u64_as_datetime")]
-            pub close_time: NaiveDateTime, // Kline close time
+            pub close_time: DateTime<Utc>, // Kline close time
             pub s: String, // Symbol
             i: String,     // Interval
             f: i64,        // First trade ID

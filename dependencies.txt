@@ -1,0 +1,745 @@
+backtest v0.0.2 (/home/dina/dev/glow/backtest)
+├── chrono v0.4.38
+│   ├── iana-time-zone v0.1.58
+│   ├── num-traits v0.2.17
+│   │   └── libm v0.2.8
+│   │   [build-dependencies]
+│   │   └── autocfg v1.1.0
+│   └── serde v1.0.210
+│       └── serde_derive v1.0.210 (proc-macro)
+│           ├── proc-macro2 v1.0.95
+│           │   └── unicode-ident v1.0.12
+│           ├── quote v1.0.36
+│           │   └── proc-macro2 v1.0.95 (*)
+│           └── syn v2.0.100
+│               ├── proc-macro2 v1.0.95 (*)
+│               ├── quote v1.0.36 (*)
+│               └── unicode-ident v1.0.12
+├── cli v0.0.2 (/home/dina/dev/glow/cli)
+│   ├── chrono v0.4.38 (*)
+│   ├── common v0.0.2 (/home/dina/dev/glow/shared/common)
+│   │   ├── async-trait v0.1.83 (proc-macro)
+│   │   │   ├── proc-macro2 v1.0.95 (*)
+│   │   │   ├── quote v1.0.36 (*)
+│   │   │   └── syn v2.0.100 (*)
+│   │   ├── chrono v0.4.38 (*)
+│   │   ├── futures-util v0.3.31
+│   │   │   ├── futures-core v0.3.31
+│   │   │   ├── futures-macro v0.3.31 (proc-macro)
+│   │   │   │   ├── proc-macro2 v1.0.95 (*)
+│   │   │   │   ├── quote v1.0.36 (*)
+│   │   │   │   └── syn v2.0.100 (*)
+│   │   │   ├── futures-sink v0.3.31
+│   │   │   ├── futures-task v0.3.31
+│   │   │   ├── pin-project-lite v0.2.14
+│   │   │   ├── pin-utils v0.1.0
+│   │   │   └── slab v0.4.9
+│   │   │       [build-dependencies]
+│   │   │       └── autocfg v1.1.0
+│   │   ├── glow_error v0.0.2 (/home/dina/dev/glow/shared/error)
+│   │   │   ├── polars v0.46.0
+│   │   │   │   ├── polars-arrow v0.46.0
+│   │   │   │   │   ├── ahash v0.8.11
+│   │   │   │   │   │   ├── cfg-if v1.0.0
+│   │   │   │   │   │   ├── getrandom v0.2.10
+│   │   │   │   │   │   │   ├── cfg-if v1.0.0
+│   │   │   │   │   │   │   └── libc v0.2.172
+│   │   │   │   │   │   ├── once_cell v1.18.0
+│   │   │   │   │   │   └── zerocopy v0.7.35
+│   │   │   │   │   │   [build-dependencies]
+│   │   │   │   │   │   └── version_check v0.9.4
+│   │   │   │   │   ├── bytemuck v1.22.0
+│   │   │   │   │   │   └── bytemuck_derive v1.5.0 (proc-macro)
+│   │   │   │   │   │       ├── proc-macro2 v1.0.95 (*)
+│   │   │   │   │   │       ├── quote v1.0.36 (*)
+│   │   │   │   │   │       └── syn v2.0.100 (*)
+│   │   │   │   │   ├── chrono v0.4.38 (*)
+│   │   │   │   │   ├── chrono-tz v0.10.3
+│   │   │   │   │   │   ├── chrono v0.4.38 (*)
+│   │   │   │   │   │   └── phf v0.11.2
+│   │   │   │   │   │       ├── phf_macros v0.11.2 (proc-macro)
+│   │   │   │   │   │       │   ├── phf_generator v0.11.2
+│   │   │   │   │   │       │   │   ├── phf_shared v0.11.2
+│   │   │   │   │   │       │   │   │   └── siphasher v0.3.11
+│   │   │   │   │   │       │   │   └── rand v0.8.5
+│   │   │   │   │   │       │   │       └── rand_core v0.6.4
+│   │   │   │   │   │       │   ├── phf_shared v0.11.2 (*)
+│   │   │   │   │   │       │   ├── proc-macro2 v1.0.95 (*)
+│   │   │   │   │   │       │   ├── quote v1.0.36 (*)
+│   │   │   │   │   │       │   └── syn v2.0.100 (*)
+│   │   │   │   │   │       └── phf_shared v0.11.2
+│   │   │   │   │   │           └── siphasher v0.3.11
+│   │   │   │   │   │   [build-dependencies]
+│   │   │   │   │   │   └── chrono-tz-build v0.4.1
+│   │   │   │   │   │       ├── parse-zoneinfo v0.3.1
+│   │   │   │   │   │       │   └── regex v1.11.0
+│   │   │   │   │   │       │       ├── regex-automata v0.4.8
+│   │   │   │   │   │       │       │   └── regex-syntax v0.8.5
+│   │   │   │   │   │       │       └── regex-syntax v0.8.5
+│   │   │   │   │   │       └── phf_codegen v0.11.2
+│   │   │   │   │   │           ├── phf_generator v0.11.2 (*)
+│   │   │   │   │   │           └── phf_shared v0.11.2 (*)
+│   │   │   │   │   ├── dyn-clone v1.0.14
+│   │   │   │   │   ├── either v1.13.0
+│   │   │   │   │   ├── ethnum v1.5.0
+│   │   │   │   │   ├── hashbrown v0.15.2
+│   │   │   │   │   │   ├── allocator-api2 v0.2.16
+│   │   │   │   │   │   ├── equivalent v1.0.1
+│   │   │   │   │   │   ├── foldhash v0.1.5
+│   │   │   │   │   │   ├── rayon v1.10.0
+│   │   │   │   │   │   │   ├── either v1.13.0
+│   │   │   │   │   │   │   └── rayon-core v1.12.1
+│   │   │   │   │   │   │       ├── crossbeam-deque v0.8.6
+│   │   │   │   │   │   │       │   ├── crossbeam-epoch v0.9.18
+│   │   │   │   │   │   │       │   │   └── crossbeam-utils v0.8.21
+│   │   │   │   │   │   │       │   └── crossbeam-utils v0.8.21
+│   │   │   │   │   │   │       └── crossbeam-utils v0.8.21
+│   │   │   │   │   │   └── serde v1.0.210 (*)
+│   │   │   │   │   ├── num-traits v0.2.17 (*)
+│   │   │   │   │   ├── parking_lot v0.12.1
+│   │   │   │   │   │   ├── lock_api v0.4.11
+│   │   │   │   │   │   │   └── scopeguard v1.2.0
+│   │   │   │   │   │   │   [build-dependencies]
+│   │   │   │   │   │   │   └── autocfg v1.1.0
+│   │   │   │   │   │   └── parking_lot_core v0.9.9
+│   │   │   │   │   │       ├── cfg-if v1.0.0
+│   │   │   │   │   │       ├── libc v0.2.172
+│   │   │   │   │   │       └── smallvec v1.13.2
+│   │   │   │   │   ├── polars-arrow-format v0.1.0
+│   │   │   │   │   │   ├── planus v0.3.1
+│   │   │   │   │   │   │   └── array-init-cursor v0.2.0
+│   │   │   │   │   │   └── serde v1.0.210 (*)
+│   │   │   │   │   ├── polars-error v0.46.0
+│   │   │   │   │   │   ├── polars-arrow-format v0.1.0 (*)
+│   │   │   │   │   │   ├── regex v1.11.0
+│   │   │   │   │   │   │   ├── aho-corasick v1.1.2
+│   │   │   │   │   │   │   │   └── memchr v2.6.4
+│   │   │   │   │   │   │   ├── memchr v2.6.4
+│   │   │   │   │   │   │   ├── regex-automata v0.4.8
+│   │   │   │   │   │   │   │   ├── aho-corasick v1.1.2 (*)
+│   │   │   │   │   │   │   │   ├── memchr v2.6.4
+│   │   │   │   │   │   │   │   └── regex-syntax v0.8.5
+│   │   │   │   │   │   │   └── regex-syntax v0.8.5
+│   │   │   │   │   │   ├── simdutf8 v0.1.4
+│   │   │   │   │   │   └── thiserror v2.0.12
+│   │   │   │   │   │       └── thiserror-impl v2.0.12 (proc-macro)
+│   │   │   │   │   │           ├── proc-macro2 v1.0.95 (*)
+│   │   │   │   │   │           ├── quote v1.0.36 (*)
+│   │   │   │   │   │           └── syn v2.0.100 (*)
+│   │   │   │   │   ├── polars-schema v0.46.0
+│   │   │   │   │   │   ├── indexmap v2.0.2
+│   │   │   │   │   │   │   ├── equivalent v1.0.1
+│   │   │   │   │   │   │   ├── hashbrown v0.14.5
+│   │   │   │   │   │   │   │   ├── ahash v0.8.11 (*)
+│   │   │   │   │   │   │   │   ├── allocator-api2 v0.2.16
+│   │   │   │   │   │   │   │   ├── rayon v1.10.0 (*)
+│   │   │   │   │   │   │   │   └── serde v1.0.210 (*)
+│   │   │   │   │   │   │   └── serde v1.0.210 (*)
+│   │   │   │   │   │   ├── polars-error v0.46.0 (*)
+│   │   │   │   │   │   └── polars-utils v0.46.0
+│   │   │   │   │   │       ├── ahash v0.8.11 (*)
+│   │   │   │   │   │       ├── bytemuck v1.22.0 (*)
+│   │   │   │   │   │       ├── bytes v1.7.2
+│   │   │   │   │   │       │   └── serde v1.0.210 (*)
+│   │   │   │   │   │       ├── compact_str v0.8.0
+│   │   │   │   │   │       │   ├── castaway v0.2.3
+│   │   │   │   │   │       │   │   └── rustversion v1.0.14 (proc-macro)
+│   │   │   │   │   │       │   ├── cfg-if v1.0.0
+│   │   │   │   │   │       │   ├── itoa v1.0.9
+│   │   │   │   │   │       │   ├── rustversion v1.0.14 (proc-macro)
+│   │   │   │   │   │       │   ├── ryu v1.0.15
+│   │   │   │   │   │       │   ├── serde v1.0.210 (*)
+│   │   │   │   │   │       │   └── static_assertions v1.1.0
+│   │   │   │   │   │       ├── hashbrown v0.15.2 (*)
+│   │   │   │   │   │       ├── indexmap v2.0.2 (*)
+│   │   │   │   │   │       ├── libc v0.2.172
+│   │   │   │   │   │       ├── memmap2 v0.9.5
+│   │   │   │   │   │       │   └── libc v0.2.172
+│   │   │   │   │   │       ├── num-traits v0.2.17 (*)
+│   │   │   │   │   │       ├── once_cell v1.18.0
+│   │   │   │   │   │       ├── polars-error v0.46.0 (*)
+│   │   │   │   │   │       ├── rand v0.8.5
+│   │   │   │   │   │       │   ├── libc v0.2.172
+│   │   │   │   │   │       │   ├── rand_chacha v0.3.1
+│   │   │   │   │   │       │   │   ├── ppv-lite86 v0.2.17
+│   │   │   │   │   │       │   │   └── rand_core v0.6.4
+│   │   │   │   │   │       │   │       └── getrandom v0.2.10 (*)
+│   │   │   │   │   │       │   └── rand_core v0.6.4 (*)
+│   │   │   │   │   │       ├── raw-cpuid v11.2.0
+│   │   │   │   │   │       │   └── bitflags v2.4.1
+│   │   │   │   │   │       ├── rayon v1.10.0 (*)
+│   │   │   │   │   │       └── stacker v0.1.15
+│   │   │   │   │   │           ├── cfg-if v1.0.0
+│   │   │   │   │   │           ├── libc v0.2.172
+│   │   │   │   │   │           └── psm v0.1.23
+│   │   │   │   │   │               [build-dependencies]
+│   │   │   │   │   │               └── cc v1.1.7
+│   │   │   │   │   │           [build-dependencies]
+│   │   │   │   │   │           └── cc v1.1.7
+│   │   │   │   │   │       [build-dependencies]
+│   │   │   │   │   │       └── version_check v0.9.4
+│   │   │   │   │   │   [build-dependencies]
+│   │   │   │   │   │   └── version_check v0.9.4
+│   │   │   │   │   ├── polars-utils v0.46.0 (*)
+│   │   │   │   │   ├── simdutf8 v0.1.4
+│   │   │   │   │   ├── streaming-iterator v0.1.9
+│   │   │   │   │   ├── strength_reduce v0.2.4
+│   │   │   │   │   └── strum_macros v0.26.4 (proc-macro)
+│   │   │   │   │       ├── heck v0.5.0
+│   │   │   │   │       ├── proc-macro2 v1.0.95 (*)
+│   │   │   │   │       ├── quote v1.0.36 (*)
+│   │   │   │   │       ├── rustversion v1.0.14 (proc-macro)
+│   │   │   │   │       └── syn v2.0.100 (*)
+│   │   │   │   │   [build-dependencies]
+│   │   │   │   │   └── version_check v0.9.4
+│   │   │   │   ├── polars-core v0.46.0
+│   │   │   │   │   ├── ahash v0.8.11 (*)
+│   │   │   │   │   ├── bitflags v2.4.1
+│   │   │   │   │   ├── bytemuck v1.22.0 (*)
+│   │   │   │   │   ├── chrono v0.4.38 (*)
+│   │   │   │   │   ├── comfy-table v7.1.1
+│   │   │   │   │   │   ├── crossterm v0.27.0
+│   │   │   │   │   │   │   ├── bitflags v2.4.1
+│   │   │   │   │   │   │   ├── libc v0.2.172
+│   │   │   │   │   │   │   └── parking_lot v0.12.1 (*)
+│   │   │   │   │   │   ├── strum v0.26.3
+│   │   │   │   │   │   ├── strum_macros v0.26.4 (proc-macro) (*)
+│   │   │   │   │   │   └── unicode-width v0.1.11
+│   │   │   │   │   ├── either v1.13.0
+│   │   │   │   │   ├── hashbrown v0.14.5 (*)
+│   │   │   │   │   ├── hashbrown v0.15.2 (*)
+│   │   │   │   │   ├── indexmap v2.0.2 (*)
+│   │   │   │   │   ├── itoa v1.0.9
+│   │   │   │   │   ├── num-traits v0.2.17 (*)
+│   │   │   │   │   ├── once_cell v1.18.0
+│   │   │   │   │   ├── polars-arrow v0.46.0 (*)
+│   │   │   │   │   ├── polars-compute v0.46.0
+│   │   │   │   │   │   ├── atoi_simd v0.16.0
+│   │   │   │   │   │   ├── bytemuck v1.22.0 (*)
+│   │   │   │   │   │   ├── chrono v0.4.38 (*)
+│   │   │   │   │   │   ├── either v1.13.0
+│   │   │   │   │   │   ├── fast-float2 v0.2.3
+│   │   │   │   │   │   ├── itoa v1.0.9
+│   │   │   │   │   │   ├── num-traits v0.2.17 (*)
+│   │   │   │   │   │   ├── polars-arrow v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-error v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-utils v0.46.0 (*)
+│   │   │   │   │   │   ├── ryu v1.0.15
+│   │   │   │   │   │   └── strength_reduce v0.2.4
+│   │   │   │   │   │   [build-dependencies]
+│   │   │   │   │   │   └── version_check v0.9.4
+│   │   │   │   │   ├── polars-error v0.46.0 (*)
+│   │   │   │   │   ├── polars-row v0.46.0
+│   │   │   │   │   │   ├── bitflags v2.4.1
+│   │   │   │   │   │   ├── bytemuck v1.22.0 (*)
+│   │   │   │   │   │   ├── polars-arrow v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-compute v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-error v0.46.0 (*)
+│   │   │   │   │   │   └── polars-utils v0.46.0 (*)
+│   │   │   │   │   ├── polars-schema v0.46.0 (*)
+│   │   │   │   │   ├── polars-utils v0.46.0 (*)
+│   │   │   │   │   ├── rand v0.8.5 (*)
+│   │   │   │   │   ├── rand_distr v0.4.3
+│   │   │   │   │   │   ├── num-traits v0.2.17 (*)
+│   │   │   │   │   │   └── rand v0.8.5 (*)
+│   │   │   │   │   ├── rayon v1.10.0 (*)
+│   │   │   │   │   ├── regex v1.11.0 (*)
+│   │   │   │   │   ├── strum_macros v0.26.4 (proc-macro) (*)
+│   │   │   │   │   ├── thiserror v2.0.12 (*)
+│   │   │   │   │   └── xxhash-rust v0.8.7
+│   │   │   │   │   [build-dependencies]
+│   │   │   │   │   └── version_check v0.9.4
+│   │   │   │   ├── polars-error v0.46.0 (*)
+│   │   │   │   ├── polars-io v0.46.0
+│   │   │   │   │   ├── ahash v0.8.11 (*)
+│   │   │   │   │   ├── atoi_simd v0.16.0
+│   │   │   │   │   ├── bytes v1.7.2 (*)
+│   │   │   │   │   ├── chrono v0.4.38 (*)
+│   │   │   │   │   ├── fast-float2 v0.2.3
+│   │   │   │   │   ├── glob v0.3.1
+│   │   │   │   │   ├── hashbrown v0.15.2 (*)
+│   │   │   │   │   ├── home v0.5.5
+│   │   │   │   │   ├── itoa v1.0.9
+│   │   │   │   │   ├── memchr v2.6.4
+│   │   │   │   │   ├── memmap2 v0.9.5 (*)
+│   │   │   │   │   ├── num-traits v0.2.17 (*)
+│   │   │   │   │   ├── once_cell v1.18.0
+│   │   │   │   │   ├── percent-encoding v2.3.1
+│   │   │   │   │   ├── polars-arrow v0.46.0 (*)
+│   │   │   │   │   ├── polars-core v0.46.0 (*)
+│   │   │   │   │   ├── polars-error v0.46.0 (*)
+│   │   │   │   │   ├── polars-schema v0.46.0 (*)
+│   │   │   │   │   ├── polars-time v0.46.0
+│   │   │   │   │   │   ├── atoi_simd v0.16.0
+│   │   │   │   │   │   ├── bytemuck v1.22.0 (*)
+│   │   │   │   │   │   ├── chrono v0.4.38 (*)
+│   │   │   │   │   │   ├── now v0.1.3
+│   │   │   │   │   │   │   └── chrono v0.4.38 (*)
+│   │   │   │   │   │   ├── num-traits v0.2.17 (*)
+│   │   │   │   │   │   ├── once_cell v1.18.0
+│   │   │   │   │   │   ├── polars-arrow v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-compute v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-core v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-error v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-ops v0.46.0
+│   │   │   │   │   │   │   ├── ahash v0.8.11 (*)
+│   │   │   │   │   │   │   ├── argminmax v0.6.2
+│   │   │   │   │   │   │   │   └── num-traits v0.2.17 (*)
+│   │   │   │   │   │   │   ├── bytemuck v1.22.0 (*)
+│   │   │   │   │   │   │   ├── either v1.13.0
+│   │   │   │   │   │   │   ├── hashbrown v0.15.2 (*)
+│   │   │   │   │   │   │   ├── indexmap v2.0.2 (*)
+│   │   │   │   │   │   │   ├── memchr v2.6.4
+│   │   │   │   │   │   │   ├── num-traits v0.2.17 (*)
+│   │   │   │   │   │   │   ├── once_cell v1.18.0
+│   │   │   │   │   │   │   ├── polars-arrow v0.46.0 (*)
+│   │   │   │   │   │   │   ├── polars-compute v0.46.0 (*)
+│   │   │   │   │   │   │   ├── polars-core v0.46.0 (*)
+│   │   │   │   │   │   │   ├── polars-error v0.46.0 (*)
+│   │   │   │   │   │   │   ├── polars-schema v0.46.0 (*)
+│   │   │   │   │   │   │   ├── polars-utils v0.46.0 (*)
+│   │   │   │   │   │   │   ├── rayon v1.10.0 (*)
+│   │   │   │   │   │   │   ├── regex v1.11.0 (*)
+│   │   │   │   │   │   │   ├── regex-syntax v0.8.5
+│   │   │   │   │   │   │   └── strum_macros v0.26.4 (proc-macro) (*)
+│   │   │   │   │   │   │   [build-dependencies]
+│   │   │   │   │   │   │   └── version_check v0.9.4
+│   │   │   │   │   │   ├── polars-utils v0.46.0 (*)
+│   │   │   │   │   │   ├── rayon v1.10.0 (*)
+│   │   │   │   │   │   ├── regex v1.11.0 (*)
+│   │   │   │   │   │   └── strum_macros v0.26.4 (proc-macro) (*)
+│   │   │   │   │   ├── polars-utils v0.46.0 (*)
+│   │   │   │   │   ├── rayon v1.10.0 (*)
+│   │   │   │   │   ├── regex v1.11.0 (*)
+│   │   │   │   │   ├── ryu v1.0.15
+│   │   │   │   │   └── simdutf8 v0.1.4
+│   │   │   │   ├── polars-lazy v0.46.0
+│   │   │   │   │   ├── ahash v0.8.11 (*)
+│   │   │   │   │   ├── bitflags v2.4.1
+│   │   │   │   │   ├── chrono v0.4.38 (*)
+│   │   │   │   │   ├── memchr v2.6.4
+│   │   │   │   │   ├── once_cell v1.18.0
+│   │   │   │   │   ├── polars-arrow v0.46.0 (*)
+│   │   │   │   │   ├── polars-core v0.46.0 (*)
+│   │   │   │   │   ├── polars-expr v0.46.0
+│   │   │   │   │   │   ├── ahash v0.8.11 (*)
+│   │   │   │   │   │   ├── bitflags v2.4.1
+│   │   │   │   │   │   ├── hashbrown v0.15.2 (*)
+│   │   │   │   │   │   ├── num-traits v0.2.17 (*)
+│   │   │   │   │   │   ├── once_cell v1.18.0
+│   │   │   │   │   │   ├── polars-arrow v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-compute v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-core v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-io v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-ops v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-plan v0.46.0
+│   │   │   │   │   │   │   ├── ahash v0.8.11 (*)
+│   │   │   │   │   │   │   ├── bitflags v2.4.1
+│   │   │   │   │   │   │   ├── bytemuck v1.22.0 (*)
+│   │   │   │   │   │   │   ├── bytes v1.7.2 (*)
+│   │   │   │   │   │   │   ├── chrono v0.4.38 (*)
+│   │   │   │   │   │   │   ├── either v1.13.0
+│   │   │   │   │   │   │   ├── hashbrown v0.15.2 (*)
+│   │   │   │   │   │   │   ├── memmap2 v0.9.5 (*)
+│   │   │   │   │   │   │   ├── num-traits v0.2.17 (*)
+│   │   │   │   │   │   │   ├── once_cell v1.18.0
+│   │   │   │   │   │   │   ├── percent-encoding v2.3.1
+│   │   │   │   │   │   │   ├── polars-arrow v0.46.0 (*)
+│   │   │   │   │   │   │   ├── polars-compute v0.46.0 (*)
+│   │   │   │   │   │   │   ├── polars-core v0.46.0 (*)
+│   │   │   │   │   │   │   ├── polars-io v0.46.0 (*)
+│   │   │   │   │   │   │   ├── polars-ops v0.46.0 (*)
+│   │   │   │   │   │   │   ├── polars-time v0.46.0 (*)
+│   │   │   │   │   │   │   ├── polars-utils v0.46.0 (*)
+│   │   │   │   │   │   │   ├── rayon v1.10.0 (*)
+│   │   │   │   │   │   │   ├── recursive v0.1.1
+│   │   │   │   │   │   │   │   ├── recursive-proc-macro-impl v0.1.1 (proc-macro)
+│   │   │   │   │   │   │   │   │   ├── quote v1.0.36 (*)
+│   │   │   │   │   │   │   │   │   └── syn v2.0.100 (*)
+│   │   │   │   │   │   │   │   └── stacker v0.1.15 (*)
+│   │   │   │   │   │   │   └── strum_macros v0.26.4 (proc-macro) (*)
+│   │   │   │   │   │   │   [build-dependencies]
+│   │   │   │   │   │   │   └── version_check v0.9.4
+│   │   │   │   │   │   ├── polars-row v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-time v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-utils v0.46.0 (*)
+│   │   │   │   │   │   ├── rand v0.8.5 (*)
+│   │   │   │   │   │   └── rayon v1.10.0 (*)
+│   │   │   │   │   ├── polars-io v0.46.0 (*)
+│   │   │   │   │   ├── polars-mem-engine v0.46.0
+│   │   │   │   │   │   ├── memmap2 v0.9.5 (*)
+│   │   │   │   │   │   ├── polars-arrow v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-core v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-error v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-expr v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-io v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-ops v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-plan v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-time v0.46.0 (*)
+│   │   │   │   │   │   ├── polars-utils v0.46.0 (*)
+│   │   │   │   │   │   └── rayon v1.10.0 (*)
+│   │   │   │   │   ├── polars-ops v0.46.0 (*)
+│   │   │   │   │   ├── polars-plan v0.46.0 (*)
+│   │   │   │   │   ├── polars-time v0.46.0 (*)
+│   │   │   │   │   ├── polars-utils v0.46.0 (*)
+│   │   │   │   │   └── rayon v1.10.0 (*)
+│   │   │   │   │   [build-dependencies]
+│   │   │   │   │   └── version_check v0.9.4
+│   │   │   │   ├── polars-ops v0.46.0 (*)
+│   │   │   │   ├── polars-parquet v0.46.0
+│   │   │   │   │   ├── ahash v0.8.11 (*)
+│   │   │   │   │   ├── base64 v0.22.1
+│   │   │   │   │   ├── bytemuck v1.22.0 (*)
+│   │   │   │   │   ├── ethnum v1.5.0
+│   │   │   │   │   ├── hashbrown v0.15.2 (*)
+│   │   │   │   │   ├── num-traits v0.2.17 (*)
+│   │   │   │   │   ├── polars-arrow v0.46.0 (*)
+│   │   │   │   │   ├── polars-compute v0.46.0 (*)
+│   │   │   │   │   ├── polars-error v0.46.0 (*)
+│   │   │   │   │   ├── polars-parquet-format v0.1.0
+│   │   │   │   │   ├── polars-utils v0.46.0 (*)
+│   │   │   │   │   ├── simdutf8 v0.1.4
+│   │   │   │   │   └── streaming-decompression v0.1.2
+│   │   │   │   │       └── fallible-streaming-iterator v0.1.9
+│   │   │   │   ├── polars-time v0.46.0 (*)
+│   │   │   │   └── polars-utils v0.46.0 (*)
+│   │   │   │   [build-dependencies]
+│   │   │   │   └── version_check v0.9.4
+│   │   │   ├── reqwest v0.12.8
+│   │   │   │   ├── async-compression v0.4.12
+│   │   │   │   │   ├── flate2 v1.0.30
+│   │   │   │   │   │   ├── crc32fast v1.4.2
+│   │   │   │   │   │   │   └── cfg-if v1.0.0
+│   │   │   │   │   │   └── miniz_oxide v0.7.4
+│   │   │   │   │   │       └── adler v1.0.2
+│   │   │   │   │   ├── futures-core v0.3.31
+│   │   │   │   │   ├── memchr v2.6.4
+│   │   │   │   │   ├── pin-project-lite v0.2.14
+│   │   │   │   │   └── tokio v1.40.0
+│   │   │   │   │       ├── bytes v1.7.2 (*)
+│   │   │   │   │       ├── libc v0.2.172
+│   │   │   │   │       ├── mio v1.0.1
+│   │   │   │   │       │   ├── libc v0.2.172
+│   │   │   │   │       │   └── log v0.4.22
+│   │   │   │   │       ├── parking_lot v0.12.1 (*)
+│   │   │   │   │       ├── pin-project-lite v0.2.14
+│   │   │   │   │       ├── signal-hook-registry v1.4.2
+│   │   │   │   │       │   └── libc v0.2.172
+│   │   │   │   │       ├── socket2 v0.5.5
+│   │   │   │   │       │   └── libc v0.2.172
+│   │   │   │   │       └── tokio-macros v2.4.0 (proc-macro)
+│   │   │   │   │           ├── proc-macro2 v1.0.95 (*)
+│   │   │   │   │           ├── quote v1.0.36 (*)
+│   │   │   │   │           └── syn v2.0.100 (*)
+│   │   │   │   ├── base64 v0.22.1
+│   │   │   │   ├── bytes v1.7.2 (*)
+│   │   │   │   ├── encoding_rs v0.8.34
+│   │   │   │   │   └── cfg-if v1.0.0
+│   │   │   │   ├── futures-core v0.3.31
+│   │   │   │   ├── futures-util v0.3.31 (*)
+│   │   │   │   ├── h2 v0.4.6
+│   │   │   │   │   ├── atomic-waker v1.1.2
+│   │   │   │   │   ├── bytes v1.7.2 (*)
+│   │   │   │   │   ├── fnv v1.0.7
+│   │   │   │   │   ├── futures-core v0.3.31
+│   │   │   │   │   ├── futures-sink v0.3.31
+│   │   │   │   │   ├── http v1.1.0
+│   │   │   │   │   │   ├── bytes v1.7.2 (*)
+│   │   │   │   │   │   ├── fnv v1.0.7
+│   │   │   │   │   │   └── itoa v1.0.9
+│   │   │   │   │   ├── indexmap v2.0.2 (*)
+│   │   │   │   │   ├── slab v0.4.9 (*)
+│   │   │   │   │   ├── tokio v1.40.0 (*)
+│   │   │   │   │   ├── tokio-util v0.7.11
+│   │   │   │   │   │   ├── bytes v1.7.2 (*)
+│   │   │   │   │   │   ├── futures-core v0.3.31
+│   │   │   │   │   │   ├── futures-sink v0.3.31
+│   │   │   │   │   │   ├── pin-project-lite v0.2.14
+│   │   │   │   │   │   └── tokio v1.40.0 (*)
+│   │   │   │   │   └── tracing v0.1.40
+│   │   │   │   │       ├── pin-project-lite v0.2.14
+│   │   │   │   │       └── tracing-core v0.1.32
+│   │   │   │   │           └── once_cell v1.18.0
+│   │   │   │   ├── http v1.1.0 (*)
+│   │   │   │   ├── http-body v1.0.1
+│   │   │   │   │   ├── bytes v1.7.2 (*)
+│   │   │   │   │   └── http v1.1.0 (*)
+│   │   │   │   ├── http-body-util v0.1.2
+│   │   │   │   │   ├── bytes v1.7.2 (*)
+│   │   │   │   │   ├── futures-util v0.3.31 (*)
+│   │   │   │   │   ├── http v1.1.0 (*)
+│   │   │   │   │   ├── http-body v1.0.1 (*)
+│   │   │   │   │   └── pin-project-lite v0.2.14
+│   │   │   │   ├── hyper v1.4.1
+│   │   │   │   │   ├── bytes v1.7.2 (*)
+│   │   │   │   │   ├── futures-channel v0.3.31
+│   │   │   │   │   │   └── futures-core v0.3.31
+│   │   │   │   │   ├── futures-util v0.3.31 (*)
+│   │   │   │   │   ├── h2 v0.4.6 (*)
+│   │   │   │   │   ├── http v1.1.0 (*)
+│   │   │   │   │   ├── http-body v1.0.1 (*)
+│   │   │   │   │   ├── httparse v1.9.4
+│   │   │   │   │   ├── itoa v1.0.9
+│   │   │   │   │   ├── pin-project-lite v0.2.14
+│   │   │   │   │   ├── smallvec v1.13.2
+│   │   │   │   │   ├── tokio v1.40.0 (*)
+│   │   │   │   │   └── want v0.3.1
+│   │   │   │   │       └── try-lock v0.2.5
+│   │   │   │   ├── hyper-tls v0.6.0
+│   │   │   │   │   ├── bytes v1.7.2 (*)
+│   │   │   │   │   ├── http-body-util v0.1.2 (*)
+│   │   │   │   │   ├── hyper v1.4.1 (*)
+│   │   │   │   │   ├── hyper-util v0.1.9
+│   │   │   │   │   │   ├── bytes v1.7.2 (*)
+│   │   │   │   │   │   ├── futures-channel v0.3.31 (*)
+│   │   │   │   │   │   ├── futures-util v0.3.31 (*)
+│   │   │   │   │   │   ├── http v1.1.0 (*)
+│   │   │   │   │   │   ├── http-body v1.0.1 (*)
+│   │   │   │   │   │   ├── hyper v1.4.1 (*)
+│   │   │   │   │   │   ├── pin-project-lite v0.2.14
+│   │   │   │   │   │   ├── socket2 v0.5.5 (*)
+│   │   │   │   │   │   ├── tokio v1.40.0 (*)
+│   │   │   │   │   │   ├── tower-service v0.3.2
+│   │   │   │   │   │   └── tracing v0.1.40 (*)
+│   │   │   │   │   ├── native-tls v0.2.12
+│   │   │   │   │   │   ├── log v0.4.22
+│   │   │   │   │   │   ├── openssl v0.10.66
+│   │   │   │   │   │   │   ├── bitflags v2.4.1
+│   │   │   │   │   │   │   ├── cfg-if v1.0.0
+│   │   │   │   │   │   │   ├── foreign-types v0.3.2
+│   │   │   │   │   │   │   │   └── foreign-types-shared v0.1.1
+│   │   │   │   │   │   │   ├── libc v0.2.172
+│   │   │   │   │   │   │   ├── once_cell v1.18.0
+│   │   │   │   │   │   │   ├── openssl-macros v0.1.1 (proc-macro)
+│   │   │   │   │   │   │   │   ├── proc-macro2 v1.0.95 (*)
+│   │   │   │   │   │   │   │   ├── quote v1.0.36 (*)
+│   │   │   │   │   │   │   │   └── syn v2.0.100 (*)
+│   │   │   │   │   │   │   └── openssl-sys v0.9.103
+│   │   │   │   │   │   │       └── libc v0.2.172
+│   │   │   │   │   │   │       [build-dependencies]
+│   │   │   │   │   │   │       ├── cc v1.1.7
+│   │   │   │   │   │   │       ├── pkg-config v0.3.27
+│   │   │   │   │   │   │       └── vcpkg v0.2.15
+│   │   │   │   │   │   ├── openssl-probe v0.1.5
+│   │   │   │   │   │   └── openssl-sys v0.9.103 (*)
+│   │   │   │   │   ├── tokio v1.40.0 (*)
+│   │   │   │   │   ├── tokio-native-tls v0.3.1
+│   │   │   │   │   │   ├── native-tls v0.2.12 (*)
+│   │   │   │   │   │   └── tokio v1.40.0 (*)
+│   │   │   │   │   └── tower-service v0.3.2
+│   │   │   │   ├── hyper-util v0.1.9 (*)
+│   │   │   │   ├── ipnet v2.9.0
+│   │   │   │   ├── log v0.4.22
+│   │   │   │   ├── mime v0.3.17
+│   │   │   │   ├── native-tls v0.2.12 (*)
+│   │   │   │   ├── once_cell v1.18.0
+│   │   │   │   ├── percent-encoding v2.3.1
+│   │   │   │   ├── pin-project-lite v0.2.14
+│   │   │   │   ├── rustls-pemfile v2.2.0
+│   │   │   │   │   └── rustls-pki-types v1.9.0
+│   │   │   │   ├── serde v1.0.210 (*)
+│   │   │   │   ├── serde_json v1.0.128
+│   │   │   │   │   ├── itoa v1.0.9
+│   │   │   │   │   ├── memchr v2.6.4
+│   │   │   │   │   ├── ryu v1.0.15
+│   │   │   │   │   └── serde v1.0.210 (*)
+│   │   │   │   ├── serde_urlencoded v0.7.1
+│   │   │   │   │   ├── form_urlencoded v1.2.1
+│   │   │   │   │   │   └── percent-encoding v2.3.1
+│   │   │   │   │   ├── itoa v1.0.9
+│   │   │   │   │   ├── ryu v1.0.15
+│   │   │   │   │   └── serde v1.0.210 (*)
+│   │   │   │   ├── sync_wrapper v1.0.1
+│   │   │   │   │   └── futures-core v0.3.31
+│   │   │   │   ├── tokio v1.40.0 (*)
+│   │   │   │   ├── tokio-native-tls v0.3.1 (*)
+│   │   │   │   ├── tokio-util v0.7.11 (*)
+│   │   │   │   ├── tower-service v0.3.2
+│   │   │   │   └── url v2.5.2
+│   │   │   │       ├── form_urlencoded v1.2.1 (*)
+│   │   │   │       ├── idna v0.5.0
+│   │   │   │       │   ├── unicode-bidi v0.3.15
+│   │   │   │       │   └── unicode-normalization v0.1.24
+│   │   │   │       │       └── tinyvec v1.8.0
+│   │   │   │       │           └── tinyvec_macros v0.1.1
+│   │   │   │       └── percent-encoding v2.3.1
+│   │   │   ├── serde v1.0.210 (*)
+│   │   │   ├── serde_json v1.0.128 (*)
+│   │   │   ├── serde_urlencoded v0.7.1 (*)
+│   │   │   ├── tokio v1.40.0 (*)
+│   │   │   ├── tokio-tungstenite v0.24.0
+│   │   │   │   ├── futures-util v0.3.31 (*)
+│   │   │   │   ├── log v0.4.22
+│   │   │   │   ├── native-tls v0.2.12 (*)
+│   │   │   │   ├── tokio v1.40.0 (*)
+│   │   │   │   ├── tokio-native-tls v0.3.1 (*)
+│   │   │   │   └── tungstenite v0.24.0
+│   │   │   │       ├── byteorder v1.5.0
+│   │   │   │       ├── bytes v1.7.2 (*)
+│   │   │   │       ├── data-encoding v2.6.0
+│   │   │   │       ├── http v1.1.0 (*)
+│   │   │   │       ├── httparse v1.9.4
+│   │   │   │       ├── log v0.4.22
+│   │   │   │       ├── native-tls v0.2.12 (*)
+│   │   │   │       ├── rand v0.8.5 (*)
+│   │   │   │       ├── sha1 v0.10.6
+│   │   │   │       │   ├── cfg-if v1.0.0
+│   │   │   │       │   ├── cpufeatures v0.2.12
+│   │   │   │       │   └── digest v0.10.7
+│   │   │   │       │       ├── block-buffer v0.10.4
+│   │   │   │       │       │   └── generic-array v0.14.7
+│   │   │   │       │       │       └── typenum v1.17.0
+│   │   │   │       │       │       [build-dependencies]
+│   │   │   │       │       │       └── version_check v0.9.4
+│   │   │   │       │       ├── crypto-common v0.1.6
+│   │   │   │       │       │   ├── generic-array v0.14.7 (*)
+│   │   │   │       │       │   └── typenum v1.17.0
+│   │   │   │       │       └── subtle v2.6.1
+│   │   │   │       ├── thiserror v1.0.50
+│   │   │   │       │   └── thiserror-impl v1.0.50 (proc-macro)
+│   │   │   │       │       ├── proc-macro2 v1.0.95 (*)
+│   │   │   │       │       ├── quote v1.0.36 (*)
+│   │   │   │       │       └── syn v2.0.100 (*)
+│   │   │   │       └── utf-8 v0.7.6
+│   │   │   └── url v2.5.2 (*)
+│   │   ├── hmac v0.12.1
+│   │   │   └── digest v0.10.7 (*)
+│   │   ├── phf v0.11.2 (*)
+│   │   ├── polars v0.46.0 (*)
+│   │   ├── regex v1.11.0 (*)
+│   │   ├── reqwest v0.12.8 (*)
+│   │   ├── serde v1.0.210 (*)
+│   │   ├── serde_json v1.0.128 (*)
+│   │   ├── sha2 v0.10.8
+│   │   │   ├── cfg-if v1.0.0
+│   │   │   ├── cpufeatures v0.2.12
+│   │   │   └── digest v0.10.7 (*)
+│   │   ├── tokio v1.40.0 (*)
+│   │   ├── tokio-stream v0.1.16
+│   │   │   ├── futures-core v0.3.31
+│   │   │   ├── pin-project-lite v0.2.14
+│   │   │   ├── tokio v1.40.0 (*)
+│   │   │   └── tokio-util v0.7.11 (*)
+│   │   ├── tokio-tungstenite v0.24.0 (*)
+│   │   └── url v2.5.2 (*)
+│   ├── crossterm v0.28.1
+│   │   ├── bitflags v2.4.1
+│   │   ├── mio v1.0.1 (*)
+│   │   ├── parking_lot v0.12.1 (*)
+│   │   ├── rustix v0.38.34
+│   │   │   ├── bitflags v2.4.1
+│   │   │   └── linux-raw-sys v0.4.14
+│   │   ├── signal-hook v0.3.17
+│   │   │   ├── libc v0.2.172
+│   │   │   └── signal-hook-registry v1.4.2 (*)
+│   │   └── signal-hook-mio v0.2.4
+│   │       ├── libc v0.2.172
+│   │       ├── mio v1.0.1 (*)
+│   │       └── signal-hook v0.3.17 (*)
+│   ├── dialoguer v0.11.0
+│   │   ├── console v0.15.8
+│   │   │   ├── lazy_static v1.5.0
+│   │   │   ├── libc v0.2.172
+│   │   │   └── unicode-width v0.1.11
+│   │   ├── shell-words v1.1.0
+│   │   ├── tempfile v3.8.1
+│   │   │   ├── cfg-if v1.0.0
+│   │   │   ├── fastrand v2.1.0
+│   │   │   └── rustix v0.38.34 (*)
+│   │   ├── thiserror v1.0.50 (*)
+│   │   └── zeroize v1.8.1
+│   ├── exchanges v0.0.2 (/home/dina/dev/glow/shared/exchanges)
+│   │   ├── async-trait v0.1.83 (proc-macro) (*)
+│   │   ├── chrono v0.4.38 (*)
+│   │   ├── common v0.0.2 (/home/dina/dev/glow/shared/common) (*)
+│   │   ├── dotenv v0.15.0
+│   │   ├── futures-util v0.3.31 (*)
+│   │   ├── glow_error v0.0.2 (/home/dina/dev/glow/shared/error) (*)
+│   │   ├── polars v0.46.0 (*)
+│   │   ├── reqwest v0.12.8 (*)
+│   │   ├── serde v1.0.210 (*)
+│   │   ├── serde_json v1.0.128 (*)
+│   │   ├── serde_urlencoded v0.7.1 (*)
+│   │   ├── strategy v0.0.2 (/home/dina/dev/glow/strategy)
+│   │   │   ├── chrono v0.4.38 (*)
+│   │   │   ├── common v0.0.2 (/home/dina/dev/glow/shared/common) (*)
+│   │   │   ├── enum_dispatch v0.3.13 (proc-macro)
+│   │   │   │   ├── once_cell v1.18.0
+│   │   │   │   ├── proc-macro2 v1.0.95 (*)
+│   │   │   │   ├── quote v1.0.36 (*)
+│   │   │   │   └── syn v2.0.100 (*)
+│   │   │   ├── glow_error v0.0.2 (/home/dina/dev/glow/shared/error) (*)
+│   │   │   ├── polars v0.46.0 (*)
+│   │   │   └── serde v1.0.210 (*)
+│   │   ├── tokio v1.40.0 (*)
+│   │   ├── tokio-stream v0.1.16 (*)
+│   │   ├── tokio-tungstenite v0.24.0 (*)
+│   │   ├── tungstenite v0.24.0 (*)
+│   │   └── url v2.5.2 (*)
+│   ├── glow_error v0.0.2 (/home/dina/dev/glow/shared/error) (*)
+│   ├── polars v0.46.0 (*)
+│   ├── regex v1.11.0 (*)
+│   ├── serde v1.0.210 (*)
+│   └── strategy v0.0.2 (/home/dina/dev/glow/strategy) (*)
+├── common v0.0.2 (/home/dina/dev/glow/shared/common) (*)
+├── core v0.0.2 (/home/dina/dev/glow/shared/core)
+│   ├── chrono v0.4.38 (*)
+│   ├── common v0.0.2 (/home/dina/dev/glow/shared/common) (*)
+│   ├── exchanges v0.0.2 (/home/dina/dev/glow/shared/exchanges) (*)
+│   ├── futures-util v0.3.31 (*)
+│   ├── glow_error v0.0.2 (/home/dina/dev/glow/shared/error) (*)
+│   ├── log v0.4.22
+│   ├── polars v0.46.0 (*)
+│   ├── reqwest v0.12.8 (*)
+│   ├── serde v1.0.210 (*)
+│   ├── serde_json v1.0.128 (*)
+│   ├── strategy v0.0.2 (/home/dina/dev/glow/strategy) (*)
+│   ├── tokio v1.40.0 (*)
+│   ├── tokio-stream v0.1.16 (*)
+│   ├── tokio-tungstenite v0.24.0 (*)
+│   └── url v2.5.2 (*)
+├── dialoguer v0.11.0 (*)
+├── dotenv v0.15.0
+├── exchanges v0.0.2 (/home/dina/dev/glow/shared/exchanges) (*)
+├── futures-util v0.3.31 (*)
+├── polars v0.46.0 (*)
+├── regex v1.11.0 (*)
+├── strategy v0.0.2 (/home/dina/dev/glow/strategy) (*)
+└── tokio v1.40.0 (*)
+
+cli v0.0.2 (/home/dina/dev/glow/cli) (*)
+
+common v0.0.2 (/home/dina/dev/glow/shared/common) (*)
+
+core v0.0.2 (/home/dina/dev/glow/shared/core) (*)
+
+exchanges v0.0.2 (/home/dina/dev/glow/shared/exchanges) (*)
+
+glow_error v0.0.2 (/home/dina/dev/glow/shared/error) (*)
+
+optimization v0.0.2 (/home/dina/dev/glow/optimization)
+
+strategy v0.0.2 (/home/dina/dev/glow/strategy) (*)
+
+trader v0.0.2 (/home/dina/dev/glow/trader)
+├── chrono v0.4.38 (*)
+├── common v0.0.2 (/home/dina/dev/glow/shared/common) (*)
+├── dotenv v0.15.0
+├── env_logger v0.11.5
+│   ├── anstream v0.6.15
+│   │   ├── anstyle v1.0.8
+│   │   ├── anstyle-parse v0.2.5
+│   │   │   └── utf8parse v0.2.2
+│   │   ├── anstyle-query v1.1.1
+│   │   ├── colorchoice v1.0.2
+│   │   ├── is_terminal_polyfill v1.70.1
+│   │   └── utf8parse v0.2.2
+│   ├── anstyle v1.0.8
+│   ├── env_filter v0.1.2
+│   │   ├── log v0.4.22
+│   │   └── regex v1.11.0 (*)
+│   ├── humantime v2.1.0
+│   └── log v0.4.22
+├── polars v0.46.0 (*)
+├── regex v1.11.0 (*)
+└── tokio v1.40.0 (*)

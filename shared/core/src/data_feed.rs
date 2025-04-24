@@ -1,4 +1,4 @@
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use common::enums::trading_data_update::TradingDataUpdate;
 use common::structs::{Symbol, TradingSettings};
 use common::{structs::BehaviorSubject, traits::exchange::DataProviderExchange};
@@ -12,7 +12,7 @@ use tokio_stream::StreamExt;
 
 #[derive(Clone)]
 pub struct DataFeed {
-    benchmark_datetimes: (Option<NaiveDateTime>, Option<NaiveDateTime>), // (start, end)
+    benchmark_datetimes: (Option<DateTime<Utc>>, Option<DateTime<Utc>>), // (start, end)
     data_provider_exchange: DataProviderExchangeWrapper,
     kline_data_listener: BehaviorSubject<TradingDataUpdate>,
     run_benchmark_only: bool, // TODO check if this is really necessary
@@ -28,10 +28,10 @@ impl DataFeed {
     fn insert_kline_fields(schema_fields: &mut Vec<Field>, unique_symbols: &Vec<&Symbol>) {
         for symbol in unique_symbols {
             let (open_col, high_col, low_col, close_col) = symbol.get_ohlc_cols();
-            schema_fields.push(Field::new(&open_col, DataType::Float64));
-            schema_fields.push(Field::new(&high_col, DataType::Float64));
-            schema_fields.push(Field::new(&low_col, DataType::Float64));
-            schema_fields.push(Field::new(&close_col, DataType::Float64));
+            schema_fields.push(Field::new(open_col.into(), DataType::Float64));
+            schema_fields.push(Field::new(high_col.into(), DataType::Float64));
+            schema_fields.push(Field::new(low_col.into(), DataType::Float64));
+            schema_fields.push(Field::new(close_col.into(), DataType::Float64));
         }
     }
 
@@ -39,27 +39,27 @@ impl DataFeed {
         let columns = strategy.get_indicators_columns();
 
         for (name, dtype) in columns {
-            let field = Field::new(name.as_str(), dtype.clone());
+            let field = Field::new(name.as_str().into(), dtype.clone());
             schema_fields.push(field);
         }
     }
 
     fn insert_signals_fields(schema_fields: &mut Vec<Field>, strategy: &Strategy) {
         for (name, dtype) in strategy.get_signals_columns() {
-            let field = Field::new(name.as_str(), dtype);
+            let field = Field::new(name.as_str().into(), dtype);
             schema_fields.push(field);
         }
     }
 
     fn insert_trading_fields(schema_fields: &mut Vec<Field>) -> Schema {
-        schema_fields.push(Field::new("trade_fees", DataType::Float64));
-        schema_fields.push(Field::new("units", DataType::Float64));
-        schema_fields.push(Field::new("profit_and_loss", DataType::Float64));
-        schema_fields.push(Field::new("returns", DataType::Float64));
-        schema_fields.push(Field::new("balance", DataType::Float64));
-        schema_fields.push(Field::new("position", DataType::Int32));
-        schema_fields.push(Field::new("action", DataType::Utf8));
-        Schema::from_iter(schema_fields.clone().into_iter())
+        schema_fields.push(Field::new("trade_fees".into(), DataType::Float64));
+        schema_fields.push(Field::new("units".into(), DataType::Float64));
+        schema_fields.push(Field::new("profit_and_loss".into(), DataType::Float64));
+        schema_fields.push(Field::new("returns".into(), DataType::Float64));
+        schema_fields.push(Field::new("balance".into(), DataType::Float64));
+        schema_fields.push(Field::new("position".into(), DataType::Int32));
+        schema_fields.push(Field::new("action".into(), DataType::String));
+        Schema::from_iter(schema_fields.clone())
     }
 
     fn update_trading_data_df(trading_data: &Arc<Mutex<DataFrame>>, trading_data_df: &DataFrame) {
@@ -77,7 +77,7 @@ impl DataFeed {
 
     fn set_schema(strategy: &Strategy, unique_symbols: &Vec<&Symbol>) -> (Schema, DataFrame, u32) {
         let mut schema_fields = vec![Field::new(
-            "start_time",
+            "start_time".into(),
             DataType::Datetime(TimeUnit::Milliseconds, None),
         )];
         Self::insert_kline_fields(&mut schema_fields, &unique_symbols);
@@ -85,7 +85,7 @@ impl DataFeed {
         Self::insert_signals_fields(&mut schema_fields, &strategy);
         let minimum_klines_for_benchmarking = strategy.get_minimum_klines_for_calculation();
         let trading_data_schema = Self::insert_trading_fields(&mut schema_fields);
-        let trading_data_df = DataFrame::from(&trading_data_schema);
+        let trading_data_df = DataFrame::empty_with_schema(&trading_data_schema);
         (
             trading_data_schema,
             trading_data_df,
@@ -94,7 +94,7 @@ impl DataFeed {
     }
 
     pub fn new(
-        benchmark_datetimes: (Option<NaiveDateTime>, Option<NaiveDateTime>),
+        benchmark_datetimes: (Option<DateTime<Utc>>, Option<DateTime<Utc>>),
         data_provider_exchange: DataProviderExchangeWrapper,
         run_benchmark_only: bool,
         strategy: &Strategy,
@@ -132,8 +132,8 @@ impl DataFeed {
     /// this must be run before init
     pub fn patch_benchmark_datetimes(
         &mut self,
-        benchmark_start: Option<NaiveDateTime>,
-        benchmark_end: Option<NaiveDateTime>,
+        benchmark_start: Option<DateTime<Utc>>,
+        benchmark_end: Option<DateTime<Utc>>,
     ) {
         self.benchmark_datetimes = (benchmark_start, benchmark_end)
     }
@@ -259,35 +259,3 @@ impl DataFeed {
         self.init_data_provider_handler();
     }
 }
-
-// #[test]
-// fn test_vstack() {
-//     use common::functions::coerce_df_to_schema;
-
-//     let df1 = df![
-//         "start_time" => &[1, 2, 3],
-//         "col2" => &["1", "2", "3"],
-//         "col3" => &["1", "2", "3"],
-//     ]
-//     .unwrap();
-
-//     let df2 = df![
-//         "start_time" => &[4],
-//         "col2" => &["4"],
-//     ]
-//     .unwrap();
-
-//     let df2 = coerce_df_to_schema(df2, &df1.schema()).unwrap();
-
-//     let mut result_df = df1.vstack(&df2).unwrap();
-
-//     let update_last_col =  |series: &Series| -> Series {
-//         let test = series.utf8().unwrap().app
-
-//         series2
-//     };
-
-//     result_df.apply("col3", update_last_col).unwrap();
-
-//     println!("{:?}", result_df);
-// }

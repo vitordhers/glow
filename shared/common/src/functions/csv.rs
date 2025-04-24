@@ -1,5 +1,5 @@
 use crate::{functions::get_days_between, structs::Symbol};
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, NaiveDate, Utc};
 use glow_error::{assert_or_error, GlowError};
 use polars::prelude::*;
 use std::{
@@ -27,14 +27,14 @@ pub fn save_csv(
                 panic!("Path exists, but it is not a directory");
             }
             let file_path_metadata_result = metadata(&file_path);
-            let result = match file_path_metadata_result {
+
+            match file_path_metadata_result {
                 Ok(file_path_metadata) => file_path_metadata.is_file(),
                 Err(_) => {
                     println!("File {} doesn't exist, creating it ...", file_path);
                     false
                 }
-            };
-            result
+            }
         }
         Err(_) => {
             println!("Directory {} doesn't exist, creating it ...", &path);
@@ -51,7 +51,7 @@ pub fn save_csv(
     if file_exists & !overwrite {
         return Err(GlowError::new(
             String::from("Save .csv error"),
-            format!("File already exists, overwrite is set to false"),
+            "File already exists, overwrite is set to false".to_string(),
         ));
     }
 
@@ -60,7 +60,7 @@ pub fn save_csv(
     match File::create(file_path) {
         Ok(output_file) => {
             CsvWriter::new(output_file)
-                .has_header(true)
+                .include_header(true)
                 .with_float_precision(Some(6))
                 .finish(&mut df)?;
 
@@ -86,14 +86,14 @@ pub fn save_kline_df_to_csv(
                 panic!("Path exists, but it is not a directory");
             }
             let file_path_metadata_result = metadata(&file_path);
-            let result = match file_path_metadata_result {
+
+            match file_path_metadata_result {
                 Ok(file_path_metadata) => file_path_metadata.is_file(),
                 Err(_) => {
                     println!("File {:?} doesn't exist, creating it ...", file_path);
                     false
                 }
-            };
-            result
+            }
         }
         Err(_) => {
             match create_file_directories(file_path.to_str().unwrap()) {
@@ -111,7 +111,7 @@ pub fn save_kline_df_to_csv(
     match File::create(file_path) {
         Ok(output_file) => {
             CsvWriter::new(output_file)
-                .has_header(true)
+                .include_header(true)
                 .with_float_precision(Some(6))
                 .finish(&mut df)?;
 
@@ -140,8 +140,8 @@ pub fn get_tick_data_csv_path(
 
 /// Tries to load ticks data between an interval. If a file is absent, push the NaiveDates of absent dates
 pub fn load_interval_tick_dataframe(
-    start_datetime: NaiveDateTime,
-    end_datetime: NaiveDateTime,
+    start_datetime: DateTime<Utc>,
+    end_datetime: DateTime<Utc>,
     symbol: &Symbol,
     data_provider_exchange_name: &str,
 ) -> Result<(Option<DataFrame>, Vec<NaiveDate>), GlowError> {
@@ -172,9 +172,10 @@ pub fn load_interval_tick_dataframe(
 }
 
 pub fn load_csv<P: Into<PathBuf>>(path: P, schema: &Schema) -> Result<DataFrame, PolarsError> {
-    CsvReader::from_path(path)?
-        .has_header(true)
+    CsvReadOptions::default()
+        .with_has_header(true)
         .with_schema(Some(Arc::new(schema.clone())))
+        .try_into_reader_with_file_path(Some(path.into()))?
         .finish()
 }
 

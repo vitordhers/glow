@@ -1,6 +1,5 @@
-use chrono::Duration;
 use cli::{change_benchmark_datetimes, change_symbols_pair, select_from_list};
-use common::functions::{current_datetime, current_datetime_minute_start};
+use common::functions::current_datetime;
 use common::traits::exchange::TraderHelper;
 use core::controller::Controller;
 use dialoguer::console::Term;
@@ -17,13 +16,20 @@ async fn main() {
     let max_rows = "40".to_string();
     env::set_var("POLARS_FMT_MAX_ROWS", max_rows);
 
-    
     let term = Term::stdout();
     let mut controller = Controller::new(true);
     loop {
         // term.clear_screen().unwrap(); // comment this to debug
-        let start_datetime = controller.benchmark_settings.datetimes.0.unwrap_or(current_datetime());
-        let end_datetime = controller.benchmark_settings.datetimes.1.unwrap_or(current_datetime());
+        let start_datetime = controller
+            .benchmark_settings
+            .datetimes
+            .0
+            .unwrap_or(current_datetime());
+        let end_datetime = controller
+            .benchmark_settings
+            .datetimes
+            .1
+            .unwrap_or(current_datetime());
         term.write_line("Glow Backtesting Suite - v0.02.").unwrap();
         term.write_line(
             r#"Gloria Patri, et Filio, et Spiritui Sancto.
@@ -34,8 +40,8 @@ async fn main() {
 
         term.write_line(&format!(
             "🕛 Current Start Time: {} \n🕒 Current End Time: {}\n⚙️ Current Settings {:?}",
-            start_datetime.format("%d-%m-%Y %H:%M:%S").to_string(),
-            end_datetime.format("%d-%m-%Y %H:%M:%S").to_string(),
+            start_datetime.format("%d-%m-%Y %H:%M:%S"),
+            end_datetime.format("%d-%m-%Y %H:%M:%S"),
             controller.trader.trader_exchange.get_trading_settings()
         ))
         .unwrap();
@@ -75,7 +81,7 @@ async fn main() {
             1 => {
                 let current_trading_settings =
                     controller.trader.trader_exchange.get_trading_settings();
-                let current_symbols_pair = current_trading_settings.symbols_pair.clone();
+                let current_symbols_pair = current_trading_settings.symbols_pair;
                 let updated_symbols_pair = change_symbols_pair(current_symbols_pair);
                 if updated_symbols_pair.is_none() {
                     continue;

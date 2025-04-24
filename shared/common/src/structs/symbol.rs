@@ -57,7 +57,7 @@ impl Symbol {
     }
 
     pub fn derive_symbol_tick_data_schema(&self) -> Schema {
-        let mut schema = Schema::new();
+        let mut schema = Schema::default();
         let _ = schema.insert_at_index(
             0,
             "start_time".into(),

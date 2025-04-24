@@ -7,3 +7,4 @@ config
 .zed
 .vscode
 Cargo.lock
+.env

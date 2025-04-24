@@ -1,14 +1,14 @@
 use super::Symbol;
-use chrono::{Duration, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, Duration, NaiveTime, Utc};
 
 #[derive(Clone, Debug)]
 pub struct Contract {
-    pub available_since: NaiveDateTime,
+    pub available_since: DateTime<Utc>,
     _funding_interval: Duration,
     pub funding_rate: f64,
     pub max_leverage: f64,
     pub maximum_order_sizes: (f64, f64), // (market, limit) in units
-    pub minimum_order_size: f64, // in units
+    pub minimum_order_size: f64,         // in units
     pub next_funding: Option<NaiveTime>,
     pub symbol: &'static Symbol,
     pub tick_size: f64, // in USDT
@@ -16,7 +16,7 @@ pub struct Contract {
 
 impl Contract {
     pub fn new(
-        available_since: NaiveDateTime,
+        available_since: DateTime<Utc>,
         funding_interval: Duration,
         funding_rate: f64,
         max_leverage: f64,

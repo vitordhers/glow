@@ -1,12 +1,12 @@
-use chrono::{NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer};
 
-pub fn parse_u64_as_datetime<'de, D>(deserializer: D) -> Result<NaiveDateTime, D::Error>
+pub fn parse_u64_as_datetime<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let ts = i64::deserialize(deserializer)?;
-    Ok(NaiveDateTime::from_timestamp_opt(ts / 1000, 0).unwrap_or(Utc::now().naive_utc()))
+    Ok(DateTime::from_timestamp(ts / 1000, 0).unwrap_or_default())
 }
 
 pub fn parse_f64<'de, D>(deserializer: D) -> Result<f64, D::Error>

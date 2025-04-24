@@ -77,7 +77,7 @@ impl Indicator for StochasticIndicator {
             let d_window = 3;
 
             let rolling_k_opts = RollingOptions {
-                window_size: Duration::parse(&format!("{}i", k_window)),
+                window_size: Duration::parse(&format!("{}m", k_window)),
                 min_periods: k_window as usize,
                 center: false,
                 by: Some("start_time".to_string()),
@@ -87,7 +87,7 @@ impl Indicator for StochasticIndicator {
             };
 
             let rolling_mean_d_opts = RollingOptions {
-                window_size: Duration::parse(&format!("{}i", d_window)),
+                window_size: Duration::parse(&format!("{}m", d_window)),
                 min_periods: d_window as usize,
                 center: false,
                 by: Some("start_time".to_string()),

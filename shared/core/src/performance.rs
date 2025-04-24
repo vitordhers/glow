@@ -1,4 +1,4 @@
-use chrono::{Duration, NaiveDateTime};
+use chrono::{DateTime, Duration, Utc};
 use common::{
     constants::DAY_IN_MS,
     enums::trading_data_update::TradingDataUpdate,
@@ -25,7 +25,7 @@ pub struct Performance {
     benchmark_stats: Arc<Mutex<Statistics>>,
     _http: Client,
     risk_free_returns: f64,
-    initial_datetime: NaiveDateTime,
+    initial_datetime: DateTime<Utc>,
     symbols: SymbolsPair,
     traded_data_listener: BehaviorSubject<TradingDataUpdate>,
     trading_stats: Arc<Mutex<Statistics>>,
@@ -33,7 +33,7 @@ pub struct Performance {
 
 impl Performance {
     pub fn new(
-        initial_datetime: NaiveDateTime,
+        initial_datetime: DateTime<Utc>,
         trading_settings: &TradingSettings,
         traded_data_listener: &BehaviorSubject<TradingDataUpdate>,
     ) -> Self {
@@ -51,8 +51,8 @@ impl Performance {
 
     pub fn patch_benchmark_datetimes(
         &mut self,
-        benchmark_start: Option<NaiveDateTime>,
-        benchmark_end: Option<NaiveDateTime>,
+        benchmark_start: Option<DateTime<Utc>>,
+        benchmark_end: Option<DateTime<Utc>>,
     ) {
         self.initial_datetime = benchmark_start.unwrap_or_else(|| {
             let benchmark_end = benchmark_end.unwrap();
@@ -61,7 +61,7 @@ impl Performance {
     }
 
     pub fn patch_settings(&mut self, trading_settings: &TradingSettings) {
-        self.symbols = trading_settings.symbols_pair.clone();
+        self.symbols = trading_settings.symbols_pair;
     }
 }
 
@@ -127,7 +127,14 @@ impl Performance {
         let trading_journey_start = self.initial_datetime.timestamp_millis();
         let filter_mask = traded_data
             .column("start_time")?
-            .gt_eq(trading_journey_start)?;
+            .gt_eq(&Column::new_scalar(
+                "trading_journey_start".into(),
+                Scalar::new(
+                    DataType::Datetime(TimeUnit::Milliseconds, None),
+                    AnyValue::Int64(trading_journey_start),
+                ),
+                traded_data.size(),
+            ))?;
         let trading_data = traded_data.filter(&filter_mask)?;
         let path = get_current_env_log_path();
         let file_name = format!("{}_trading_data.csv", trading_journey_identifier);
@@ -204,7 +211,7 @@ pub fn update_trading_data(
     trading_data: &DataFrame,
     risk_free_returns: f64,
     traded_symbol: &Symbol,
-    log_from_timestamp_on: Option<NaiveDateTime>,
+    log_from_timestamp_on: Option<DateTime<Utc>>,
 ) -> Result<(DataFrame, Statistics), GlowError> {
     let trading_data_lf = trading_data.clone().lazy();
     let trades_lf = calculate_trades(trading_data_lf)?;
@@ -223,9 +230,9 @@ pub fn update_trading_data(
 pub fn calculate_trades(lf: LazyFrame) -> Result<LazyFrame, GlowError> {
     let lf = lf.with_columns([when(
         col("position")
-            .shift(1)
+            .shift(lit(1))
             .is_not_null()
-            .and(col("position").neq(col("position").shift(1))),
+            .and(col("position").neq(col("position").shift(lit(1)))),
     )
     .then(1)
     .otherwise(0)
@@ -237,51 +244,48 @@ pub fn calculate_trades(lf: LazyFrame) -> Result<LazyFrame, GlowError> {
 pub fn calculate_trading_sessions(
     lf: LazyFrame,
     traded_symbol: &Symbol,
-    log_from_timestamp_on: Option<NaiveDateTime>,
+    log_from_timestamp_on: Option<DateTime<Utc>>,
 ) -> Result<LazyFrame, GlowError> {
     let mut lf = lf.clone();
 
     if log_from_timestamp_on.is_some() {
         let log_from_timestamp_on = log_from_timestamp_on.unwrap();
         let mut log_from_timestamp_on = log_from_timestamp_on.timestamp_millis();
-        log_from_timestamp_on = log_from_timestamp_on - DAY_IN_MS;
+        log_from_timestamp_on -= DAY_IN_MS;
         lf = lf.filter(col("start_time").gt_eq(lit(log_from_timestamp_on)));
     }
 
     lf = lf
-        .with_column(col("trade").sign().cumsum(false).alias("session"))
+        .with_column(col("trade").sign().cum_sum(false).alias("session"))
         // extends session to the next cell, where it is closed
         .with_column(
             when(
-                col("trade").neq(col("trade").shift(1)).and(
+                col("trade").neq(col("trade").shift(lit(1))).and(
                     col("position")
-                        .shift(1)
+                        .shift(lit(1))
                         .neq(0)
-                        .and(col("position").shift(1).is_not_null()),
+                        .and(col("position").shift(lit(1)).is_not_null()),
                 ),
             )
-            .then(col("session").shift(1))
+            .then(col("session").shift(lit(1)))
             .otherwise(col("session"))
-            .keep_name(),
+            .alias("session")
+            .name()
+            .keep(),
         );
     let (open_col, high_col, low_col, close_col) = traded_symbol.get_ohlc_cols();
-
-    // let file_name = "trades_lf.csv".to_string();
-    // let trades_df = lf.clone().collect()?;
-    // save_csv(path, file_name, &trades_df, true)?;
     let returns_output: SpecialEq<Arc<dyn FunctionOutputField>> =
         GetOutput::from_type(DataType::Float64);
-
     let aggs = [
         col("start_time").first().alias("start"),
         col("start_time").last().alias("end"),
-        col(&open_col).first().alias("start_price"),
-        col(&close_col).last().alias("end_price"),
-        col(&low_col).min().alias("min_price"),
-        col(&high_col).max().alias("max_price"),
+        col(open_col).first().alias("start_price"),
+        col(close_col).last().alias("end_price"),
+        col(low_col).min().alias("min_price"),
+        col(high_col).max().alias("max_price"),
         col("action").last().alias("close_signal"),
         col("position").first().alias("position"),
-        col("returns").last().keep_name(),
+        col("returns").last().alias("returns").name().keep(),
         col("returns").max().alias("max_returns"),
         col("returns").min().alias("min_returns"),
         (when(col("returns").last().eq(lit(0)))
@@ -292,21 +296,29 @@ pub fn calculate_trading_sessions(
                     .otherwise(col("returns").last() / col("returns").min()),
             ))
         .alias("returns_seized"),
-        col("units").mean().keep_name(),
-        col("profit_and_loss").last().keep_name(),
-        col("balance").last().keep_name(),
+        col("units").mean().alias("units").name().keep(),
+        col("profit_and_loss")
+            .last()
+            .alias("profit_and_loss")
+            .name()
+            .keep(),
+        col("balance").last().alias("balance").name().keep(),
         col("returns").std(0).alias("risk"),
-        col("trade_fees").sum().keep_name(),
+        col("trade_fees").sum().alias("trade_fees").name().keep(),
         col("returns")
             .apply_many(
                 |series| {
-                    let positions_series: &Series = &series[1];
-                    let returns_series: &Series = &series[0];
-                    let position = positions_series.head(Some(1)).mean().unwrap_or_default();
+                    let positions_series = &series[1];
+                    let returns_series = &series[0];
+                    let position = positions_series
+                        .head(Some(1))
+                        .i32()?
+                        .mean()
+                        .unwrap_or_default();
 
                     // if position is long
                     if position == 0.0 {
-                        return Ok(Some(Series::new("downside_risk", vec![0.0])));
+                        return Ok(Some(Column::new("downside_risk".into(), vec![0.0])));
                     };
 
                     let negative_returns_vec = returns_series
@@ -326,21 +338,23 @@ pub fn calculate_trading_sessions(
                     let filtered_downside_squared_sum: f64 = downside_squared.iter().sum();
                     let trade_downside_risk =
                         (filtered_downside_squared_sum / negative_returns_len).sqrt();
-                    let series = Series::new("downside_risk", vec![trade_downside_risk]);
+                    let series = Column::new("downside_risk".into(), vec![trade_downside_risk]);
                     Ok(Some(series))
                 },
                 &[col("position")],
                 returns_output,
             )
+            .mean()
             .alias("downside_risk"),
     ];
 
     lf = lf
         .group_by([col("session")])
         .agg(aggs)
-        .sort("start", SortOptions::default())
+        .sort(["start"], SortMultipleOptions::default())
         .filter(col("position").neq(0).or(col("session").eq(0)))
-        .with_column(((col("balance").cummax(false) - col("balance")).abs()/ col("balance").cummax(false)).alias("drawdown"))
+        // TODO: add new column for calculating drawdown
+        .with_column(((col("balance").cum_max(false) - col("balance")).abs()/ col("balance").cum_max(false)).alias("drawdown"))
         // .with_columns(vec![
         //     ((col("end_price") - col("start_price")) / col("start_price")).alias("relative_return"),
         //     // ().alias("")
@@ -371,6 +385,10 @@ pub fn calculate_trading_sessions(
     // let trades_df = lf.clone().collect()?;
     // save_csv(path, file_name, &trades_df, true)?;
 
+    // let path = "data/test".to_string();
+    // let file_name = "debug.csv".to_string();
+    // let debug_df = lf.clone().collect()?;
+    // save_csv(path, file_name, &debug_df, true)?;
     Ok(lf)
 }
 
@@ -378,7 +396,14 @@ pub fn calculate_trading_stats(
     trading_data: &DataFrame,
     risk_free_returns: f64,
 ) -> Result<Statistics, GlowError> {
-    let initial_data_filter_mask = trading_data.column("position")?.not_equal(0)?;
+    let initial_data_filter_mask =
+        trading_data
+            .column("position")?
+            .not_equal(&Column::new_scalar(
+                "zeroes".into(),
+                Scalar::new(DataType::Int32, AnyValue::Int32(0)),
+                trading_data.size(),
+            ))?;
     let df = trading_data.filter(&initial_data_filter_mask)?;
 
     let start_series = df.column("start")?;
@@ -388,13 +413,13 @@ pub fn calculate_trading_stats(
     let downside_risk_series = df.column("downside_risk")?;
     let drawdown_series = df.column("drawdown")?;
     let balance_series = df.column("balance")?;
-    let current_balance = df.column("balance")?.f64()?.tail(Some(1)).to_vec()[0].unwrap();
+    let current_balance = balance_series.f64()?.tail(Some(1)).to_vec()[0].unwrap();
     let current_balance = round_down_nth_decimal(current_balance, 6);
 
     let success_rate = calculate_success_rate(returns_series)?;
 
-    let risk = risk_series.mean().unwrap_or_default();
-    let downside_deviation = downside_risk_series.mean().unwrap_or_default();
+    let risk = risk_series.f64()?.mean().unwrap_or_default();
+    let downside_deviation = downside_risk_series.f64()?.mean().unwrap_or_default();
 
     let (max_drawdown, max_drawdown_duration) =
         calculate_max_drawdown_and_duration(start_series, end_series, drawdown_series)?;

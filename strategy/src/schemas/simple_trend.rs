@@ -9,7 +9,7 @@ use glow_error::GlowError;
 use polars::prelude::*;
 use std::collections::HashMap;
 
-const TREND_COL: &'static str = "EMA_bullish";
+const TREND_COL: &str = "EMA_bullish";
 
 #[derive(Clone, Copy, Default)]
 pub struct SimpleTrendStrategySchema {}
@@ -22,21 +22,18 @@ impl Schema for SimpleTrendStrategySchema {
         params: &HashMap<ParamId, Param>,
     ) -> Result<LazyFrame, GlowError> {
         let close_col = symbols_pair.anchor.get_close_col();
-
         let cols = self.get_indicators_columns(symbols_pair, params);
-
         let (ema_fast_col, _) = cols
-            .get(0)
+            .first()
             .expect("EMA indicator to have column at index 0");
         let fast_span_param = params
             .get(&ParamId::FastSpan)
             .expect("FastSpan param to be set at ParamsMap");
         let fast_span = if let Param::UInt32(value, _) = fast_span_param {
-            value.clone()
+            *value
         } else {
             20
         };
-
         let (ema_slow_col, _) = cols
             .get(1)
             .expect("EMA indicator to have column at index 1");
@@ -44,7 +41,7 @@ impl Schema for SimpleTrendStrategySchema {
             .get(&ParamId::SlowSpan)
             .expect("SlowSpan param to be set at ParamsMap");
         let slow_span = if let Param::UInt32(value, _) = slow_span_param {
-            value.clone()
+            *value
         } else {
             100
         };
@@ -79,7 +76,7 @@ impl Schema for SimpleTrendStrategySchema {
                             .then(true)
                             .otherwise(false),
                     )
-                    .alias(&TREND_COL),
+                    .alias(TREND_COL),
             );
 
         Ok(lf)
@@ -99,7 +96,8 @@ impl Schema for SimpleTrendStrategySchema {
 
         for (column, _) in self.get_indicators_columns(symbols_pair, params) {
             let series = new_df.column(column.as_str())?;
-            let _ = result_df.replace(&column, series.to_owned());
+            let index = df.try_get_column_index(column.as_str())?;
+            let _ = result_df.replace_column(index, series.to_owned());
         }
 
         Ok(result_df)
@@ -123,20 +121,30 @@ impl Schema for SimpleTrendStrategySchema {
         let fast_ema_lesser_than_slow_ema = col(&fast_ema_col).lt(col(&slow_ema_col));
         let fast_ema_greater_than_slow_ema = col(&fast_ema_col).gt(col(&slow_ema_col));
 
-        let prev_fast_ema_lesser_than_prev_slow_ema =
-            col(&fast_ema_col).shift(1).lt(col(&slow_ema_col).shift(1));
-        let prev_fast_ema_greater_than_prev_slow_ema =
-            col(&fast_ema_col).shift(1).gt(col(&slow_ema_col).shift(1));
+        let prev_fast_ema_lesser_than_prev_slow_ema = col(&fast_ema_col)
+            .shift_and_fill(lit(1), lit(NULL))
+            .lt(col(&slow_ema_col).shift_and_fill(lit(1), lit(NULL)));
+        let prev_fast_ema_greater_than_prev_slow_ema = col(&fast_ema_col)
+            .shift_and_fill(lit(1), lit(NULL))
+            .gt(col(&slow_ema_col).shift_and_fill(lit(1), lit(NULL)));
 
         let signal_lf = lf.clone().with_columns([
-            when(fast_ema_lesser_than_slow_ema.clone().and(prev_fast_ema_greater_than_prev_slow_ema.clone()))
-                .then(lit(1))
-                .otherwise(lit(0))
-                .alias(short_col),
-            when(fast_ema_greater_than_slow_ema.clone().and(prev_fast_ema_lesser_than_prev_slow_ema.clone()))
-                .then(lit(1))
-                .otherwise(lit(0))
-                .alias(long_col),
+            when(
+                fast_ema_lesser_than_slow_ema
+                    .clone()
+                    .and(prev_fast_ema_greater_than_prev_slow_ema.clone()),
+            )
+            .then(lit(1))
+            .otherwise(lit(0))
+            .alias(short_col),
+            when(
+                fast_ema_greater_than_slow_ema
+                    .clone()
+                    .and(prev_fast_ema_lesser_than_prev_slow_ema.clone()),
+            )
+            .then(lit(1))
+            .otherwise(lit(0))
+            .alias(long_col),
             when(fast_ema_greater_than_slow_ema.and(prev_fast_ema_lesser_than_prev_slow_ema))
                 .then(lit(1))
                 .otherwise(lit(0))
@@ -172,7 +180,8 @@ impl Schema for SimpleTrendStrategySchema {
         for signal in signals.iter() {
             let column = signal.get_column();
             let series = result_df.column(column)?;
-            let _ = result_df.replace(&column, series.to_owned());
+            let index = result_df.try_get_column_index(column)?;
+            let _ = result_df.replace_column(index, series.to_owned());
         }
         // let signal = self.signal_category();
 
@@ -216,14 +225,12 @@ impl Schema for SimpleTrendStrategySchema {
         let slow_span_param = params
             .get(&ParamId::SlowSpan)
             .expect("LongSpan param to be set at ParamsMap");
-        let slow_span = if let Param::UInt32(value, _) = slow_span_param {
-            value.clone()
+        if let Param::UInt32(value, _) = slow_span_param {
+            *value
         } else {
             // TODO: review this
             0
-        };
-
-        slow_span
+        }
     }
 
     fn get_signals_columns(
