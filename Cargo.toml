@@ -10,15 +10,15 @@ edition = "2021"
 license = "GPL"
 
 [workspace.dependencies]
-async-trait = "0.1.83"
+async-trait = "0.1.88"
 chrono = "0.4.38"
-crossterm = "0.28.1"
+crossterm = "0.29.0"
 dotenv = "0.15.0"
 enum_dispatch = "0.3.13"
 env_logger = "0.11.5"
 futures-util = "0.3.31"
 log = "0.4.17"
-phf = { version = "0.11.2", features = ["macros"] }
+phf = { version = "0.11.3", features = ["macros"] }
 polars = { version = "0.46.0", features = [
     "lazy",
     "dtype-datetime",
@@ -48,7 +48,7 @@ url = "2.3.1"
 hmac = "0.12.1"
 sha2 = "0.10.7"
 serde_urlencoded = "0.7.1"
-itertools = "0.13.0"
+itertools = "0.14.0"
 regex = "1.11.0"
 dialoguer = "0.11.0"
 
