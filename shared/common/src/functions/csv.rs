@@ -1,5 +1,5 @@
 use crate::{functions::get_days_between, structs::Symbol};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use glow_error::{assert_or_error, GlowError};
 use polars::prelude::*;
 use std::{
@@ -27,14 +27,14 @@ pub fn save_csv(
                 panic!("Path exists, but it is not a directory");
             }
             let file_path_metadata_result = metadata(&file_path);
-            let result = match file_path_metadata_result {
+
+            match file_path_metadata_result {
                 Ok(file_path_metadata) => file_path_metadata.is_file(),
                 Err(_) => {
                     println!("File {} doesn't exist, creating it ...", file_path);
                     false
                 }
-            };
-            result
+            }
         }
         Err(_) => {
             println!("Directory {} doesn't exist, creating it ...", &path);
@@ -51,7 +51,7 @@ pub fn save_csv(
     if file_exists & !overwrite {
         return Err(GlowError::new(
             String::from("Save .csv error"),
-            format!("File already exists, overwrite is set to false"),
+            "File already exists, overwrite is set to false".to_string(),
         ));
     }
 
@@ -86,14 +86,14 @@ pub fn save_kline_df_to_csv(
                 panic!("Path exists, but it is not a directory");
             }
             let file_path_metadata_result = metadata(&file_path);
-            let result = match file_path_metadata_result {
+
+            match file_path_metadata_result {
                 Ok(file_path_metadata) => file_path_metadata.is_file(),
                 Err(_) => {
                     println!("File {:?} doesn't exist, creating it ...", file_path);
                     false
                 }
-            };
-            result
+            }
         }
         Err(_) => {
             match create_file_directories(file_path.to_str().unwrap()) {

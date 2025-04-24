@@ -1,5 +1,5 @@
 use crate::{binance::structs::BinanceDataProvider, bybit::BybitTraderExchange};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use common::{
     enums::{
         balance::Balance, modifiers::leverage::Leverage, order_action::OrderAction,

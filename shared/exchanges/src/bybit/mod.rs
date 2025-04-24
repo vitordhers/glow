@@ -325,7 +325,7 @@ impl TraderHelper for BybitTraderExchange {
         // };
         // let close_fee = units * bankruptcy_price * fee_rate;
 
-        return Ok((units, balance_remainder));
+        Ok((units, balance_remainder))
     }
 
     fn get_order_fee_rate(&self, order_type: OrderType) -> (f64, bool) {

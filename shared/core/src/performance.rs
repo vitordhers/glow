@@ -127,7 +127,14 @@ impl Performance {
         let trading_journey_start = self.initial_datetime.timestamp_millis();
         let filter_mask = traded_data
             .column("start_time")?
-            .gt_eq(trading_journey_start)?;
+            .gt_eq(&Column::new_scalar(
+                "trading_journey_start".into(),
+                Scalar::new(
+                    DataType::Datetime(TimeUnit::Milliseconds, None),
+                    AnyValue::Int64(trading_journey_start),
+                ),
+                traded_data.size(),
+            ))?;
         let trading_data = traded_data.filter(&filter_mask)?;
         let path = get_current_env_log_path();
         let file_name = format!("{}_trading_data.csv", trading_journey_identifier);
@@ -389,7 +396,14 @@ pub fn calculate_trading_stats(
     trading_data: &DataFrame,
     risk_free_returns: f64,
 ) -> Result<Statistics, GlowError> {
-    let initial_data_filter_mask = trading_data.column("position")?.not_equal(Column)?;
+    let initial_data_filter_mask =
+        trading_data
+            .column("position")?
+            .not_equal(&Column::new_scalar(
+                "zeroes".into(),
+                Scalar::new(DataType::Int32, AnyValue::Int32(0)),
+                trading_data.size(),
+            ))?;
     let df = trading_data.filter(&initial_data_filter_mask)?;
 
     let start_series = df.column("start")?;
