@@ -29,12 +29,12 @@ pub fn change_benchmark_datetimes(
     let kline_duration = settings.granularity.get_chrono_duration();
     let minimum_klines_duration =
         Duration::minutes(minimum_klines_for_benchmarking as i64 * kline_duration.num_minutes());
-    let traded_contract = current_trader_exchange.get_traded_contract();
+    let base_contract = current_trader_exchange.get_base_contract();
     let current_datetime = current_datetime();
     let minimum_benchmark_duration = minimum_klines_duration + benchmark_minimum_days_duration;
     match selection {
         0 => loop {
-            let start_after_datetime = traded_contract.available_since + minimum_benchmark_duration;
+            let start_after_datetime = base_contract.available_since + minimum_benchmark_duration;
             let start_after_date = start_after_datetime.date_naive();
             let start_before_datetime = benchmark_end - minimum_benchmark_duration;
             let start_before_date = start_before_datetime.date_naive();

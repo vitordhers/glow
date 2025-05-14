@@ -49,9 +49,9 @@ impl Strategy {
         let params_config = self.schema.get_params_config();
         let param_to_update = params_config
             .get(&param_id)
-            .expect(&format!("Param {:?} to exist at params", param_id));
+            .unwrap_or_else(|| panic!("Param {:?} to exist at params", param_id));
 
-        let _ = param_to_update.validate(&value)?;
+        param_to_update.validate(&value)?;
         updated.params.insert(param_id, value);
         Ok(updated)
     }

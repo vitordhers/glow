@@ -9,10 +9,34 @@ use glow_error::GlowError;
 use polars::prelude::*;
 use std::collections::HashMap;
 
-const TREND_COL: &str = "EMA_bullish";
+// const TREND_COL_PREFIX: &str = "EMA_bullish";
 
 #[derive(Clone, Copy, Default)]
 pub struct SimpleTrendStrategySchema {}
+
+impl SimpleTrendStrategySchema {
+    fn get_fast_span(&self, params: &HashMap<ParamId, Param>) -> u32 {
+        let fast_span_param = params
+            .get(&ParamId::FastSpan)
+            .expect("FastSpan param to be set at ParamsMap");
+        if let Param::UInt32(value, _) = fast_span_param {
+            *value
+        } else {
+            20
+        }
+    }
+
+    fn get_slow_span(&self, params: &HashMap<ParamId, Param>) -> u32 {
+        let slow_span_param = params
+            .get(&ParamId::SlowSpan)
+            .expect("SlowSpan param to be set at ParamsMap");
+        if let Param::UInt32(value, _) = slow_span_param {
+            *value
+        } else {
+            100
+        }
+    }
+}
 
 impl Schema for SimpleTrendStrategySchema {
     fn append_indicators_to_lf(
@@ -21,7 +45,7 @@ impl Schema for SimpleTrendStrategySchema {
         symbols_pair: SymbolsPair,
         params: &HashMap<ParamId, Param>,
     ) -> Result<LazyFrame, GlowError> {
-        let close_col = symbols_pair.anchor.get_close_col();
+        let close_col = symbols_pair.quote.get_close_col();
         let cols = self.get_indicators_columns(symbols_pair, params);
         let (ema_fast_col, _) = cols
             .first()
@@ -67,17 +91,17 @@ impl Schema for SimpleTrendStrategySchema {
             .with_columns([
                 col(close_col).ewm_mean(slow_opts).alias(ema_slow_col),
                 col(close_col).ewm_mean(fast_opts).alias(ema_fast_col),
-            ])
-            .with_column(
-                when(col(ema_fast_col).is_null().or(col(ema_slow_col).is_null()))
-                    .then(lit(NULL))
-                    .otherwise(
-                        when(col(ema_fast_col).gt(col(ema_slow_col)))
-                            .then(true)
-                            .otherwise(false),
-                    )
-                    .alias(TREND_COL),
-            );
+            ]);
+            // .with_column(
+            //     when(col(ema_fast_col).is_null().or(col(ema_slow_col).is_null()))
+            //         .then(lit(NULL))
+            //         .otherwise(
+            //             when(col(ema_fast_col).gt(col(ema_slow_col)))
+            //                 .then(true)
+            //                 .otherwise(false),
+            //         )
+            //         .alias(format!("{}_{}_{}", TREND_COL_PREFIX, slow_span, fast_span)),
+            // );
 
         Ok(lf)
     }
@@ -115,8 +139,8 @@ impl Schema for SimpleTrendStrategySchema {
         let close_long_col = SignalCategory::CloseLong.get_column();
         // let select_columns = vec![col("start_time"), col(signal_col)];
 
-        let fast_ema_col = format!("{}_fast_ema", &symbols_pair.anchor.name);
-        let slow_ema_col = format!("{}_slow_ema", &symbols_pair.anchor.name);
+        let fast_ema_col = format!("{}_fast_ema", &symbols_pair.quote.name);
+        let slow_ema_col = format!("{}_slow_ema", &symbols_pair.quote.name);
 
         let fast_ema_lesser_than_slow_ema = col(&fast_ema_col).lt(col(&slow_ema_col));
         let fast_ema_greater_than_slow_ema = col(&fast_ema_col).gt(col(&slow_ema_col));
@@ -197,7 +221,7 @@ impl Schema for SimpleTrendStrategySchema {
 
         default_params.insert(
             ParamId::FastSpan,
-            Param::UInt32(20, NumberParamConfig::new(20, Some(1), Some(50))),
+            Param::UInt32(20, NumberParamConfig::new(20, Some(1), Some(49))),
         );
 
         default_params
@@ -206,18 +230,23 @@ impl Schema for SimpleTrendStrategySchema {
     fn get_indicators_columns(
         &self,
         symbols_pair: SymbolsPair,
-        _: &HashMap<ParamId, Param>,
+        params: &HashMap<ParamId, Param>,
     ) -> Vec<(String, DataType)> {
         let mut columns = Vec::new();
         columns.push((
-            format!("{}_fast_ema", symbols_pair.anchor.name),
+            format!("{}_fast_ema", symbols_pair.quote.name),
             DataType::Float64,
         ));
         columns.push((
-            format!("{}_slow_ema", symbols_pair.anchor.name),
+            format!("{}_slow_ema", symbols_pair.quote.name),
             DataType::Float64,
         ));
-        columns.push((TREND_COL.to_string(), DataType::Boolean));
+        // let slow_span = self.get_slow_span(params);
+        // let fast_span = self.get_fast_span(params);
+        // columns.push((
+        //     format!("{}_{}_{}", TREND_COL_PREFIX, slow_span, fast_span),
+        //     DataType::Boolean,
+        // ));
         columns
     }
 

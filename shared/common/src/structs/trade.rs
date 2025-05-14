@@ -9,7 +9,7 @@ use crate::enums::{
 
 #[derive(Debug, Clone, Default)]
 pub struct Trade {
-    /// defined as `{traded_symbol}_{timestamp}
+    /// defined as `{base_symbol}_{timestamp}
     pub id: String,
     pub open_order: Order,
     pub close_order: Option<Order>,
@@ -18,9 +18,9 @@ pub struct Trade {
 impl Trade {
     pub fn new(open_order: Order, close_order: Option<Order>) -> Self {
         let mut iter = open_order.id.splitn(3, '_');
-        let traded_symbol = iter.next().unwrap_or("");
+        let base_symbol = iter.next().unwrap_or("");
         let open_order_timestamp = iter.next().unwrap_or("");
-        let id = format!("{}_{}", traded_symbol, open_order_timestamp).to_string();
+        let id = format!("{}_{}", base_symbol, open_order_timestamp).to_string();
         if id.len() == 1 {
             panic!(
                 "trade id incorrectly generated. Open order {:?}",

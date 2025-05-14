@@ -16,7 +16,10 @@ pub fn change_symbols_pair(current_symbols_pair: SymbolsPair) -> Option<SymbolsP
 
         let back_index = benchmark_symbols_pair_options.len() - 1;
         let selection = select_from_list(
-            &format!("Select a Symbol to change. \n Current anchor symbol: {} \n Current traded symbol {}", current_symbols_pair.anchor.name, current_symbols_pair.traded.name),
+            &format!(
+                "Select a Symbol to change. \n Current quote symbol: {} \n Current base symbol {}",
+                current_symbols_pair.quote.name, current_symbols_pair.base.name
+            ),
             &benchmark_symbols_pair_options,
             Some(back_index),
         );
@@ -24,24 +27,23 @@ pub fn change_symbols_pair(current_symbols_pair: SymbolsPair) -> Option<SymbolsP
         break match selection {
             0 => {
                 let selection =
-                    get_different_than_symbol(current_symbols_pair.anchor.name, "Anchor");
+                    get_different_than_symbol(current_symbols_pair.quote.name, "Anchor");
                 if selection.is_none() {
                     continue;
                 }
                 let selected_symbol = selection.unwrap();
                 let mut updated_symbols_pair = current_symbols_pair.clone();
-                updated_symbols_pair.anchor = selected_symbol;
+                updated_symbols_pair.quote = selected_symbol;
                 Some(updated_symbols_pair)
             }
             1 => {
-                let selection =
-                    get_different_than_symbol(current_symbols_pair.traded.name, "Traded");
+                let selection = get_different_than_symbol(current_symbols_pair.base.name, "Traded");
                 if selection.is_none() {
                     continue;
                 }
                 let selected_symbol = selection.unwrap();
                 let mut updated_symbols_pair = current_symbols_pair.clone();
-                updated_symbols_pair.traded = selected_symbol;
+                updated_symbols_pair.base = selected_symbol;
                 Some(updated_symbols_pair)
             }
             _ => None,

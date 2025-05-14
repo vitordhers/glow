@@ -55,7 +55,7 @@ impl Param {
             (Param::Float32(_, config), Param::Float32(value, _)) => config.validate(value),
             (Param::Float64(_, config), Param::Float64(value, _)) => config.validate(value),
             (_, value) => Err(GlowError::new(
-                format!("Invalid param validation"),
+                "Invalid param validation".to_string(),
                 format!("Incompatible param types {:?} and {:?}", self, value),
             )),
         }
@@ -84,16 +84,16 @@ impl<T: Clone + Copy + PartialOrd + PartialEq + Display> NumberParamConfig<T> {
             let min = self.min.unwrap();
             if value < &min {
                 return Err(GlowError::new(
-                    format!("Invalid param"),
+                    "Invalid param".to_string(),
                     format!("value {} is less than param minimum {}", value, min),
                 ));
             }
         }
         if self.max.is_some() {
-            let max = self.min.unwrap();
+            let max = self.max.unwrap();
             if value > &max {
                 return Err(GlowError::new(
-                    format!("Invalid param"),
+                    "Invalid param".to_string(),
                     format!("value {} is more than param maximum {}", value, max),
                 ));
             }

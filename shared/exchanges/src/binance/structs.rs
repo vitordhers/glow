@@ -99,9 +99,10 @@ impl BinanceDataProvider {
         tick_duration: Duration,
     ) -> Result<DataFrame, GlowError> {
         let mut kline_df = DataFrame::empty_with_schema(trading_data_schema);
-        for symbol in &self.symbols.get_unique_symbols() {
+        let symbols = [self.symbols.base, self.symbols.quote];
+        for symbol in symbols {
             let (loaded_data_df, not_loaded_dates) =
-                load_interval_tick_dataframe(start_datetime, end_datetime, &symbol, "binance")?;
+                load_interval_tick_dataframe(start_datetime, end_datetime, symbol, "binance")?;
 
             let mut result_df =
                 loaded_data_df.unwrap_or_else(|| DataFrame::empty_with_schema(trading_data_schema));

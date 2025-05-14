@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{from_reader, to_writer};
 use std::{
     collections::HashMap,
-    env::{self},
+    env::args as env_args,
     fmt::{Debug, Formatter, Result as DebugResult},
     fs::File,
     io::{BufReader, Result as IoResult},
@@ -39,8 +39,8 @@ impl TradingSettings {
         position_lock_modifier: PositionLock,
         price_level_modifier_map: HashMap<String, PriceLevel>,
         signals_revert_its_opposite: bool,
-        anchor_contract_symbol: &SymbolId,
-        traded_contract_symbol: &SymbolId,
+        quote_symbol_id: &SymbolId,
+        base_symbol_id: &SymbolId,
         bechmark_minimum_days: u32,
         granularity: Granularity,
     ) -> Self {
@@ -51,14 +51,14 @@ impl TradingSettings {
             position_lock_modifier,
             price_level_modifier_map,
             signals_revert_its_opposite,
-            symbols_pair: SymbolsPair::new(&anchor_contract_symbol, &traded_contract_symbol),
+            symbols_pair: SymbolsPair::new(&quote_symbol_id, &base_symbol_id),
             bechmark_minimum_days,
             granularity,
         }
     }
 
     fn get_config_file_path() -> Result<String, GlowError> {
-        let args: Vec<String> = env::args().collect();
+        let args: Vec<String> = env_args().collect();
 
         match args.get(0) {
             Some(member) => {
@@ -91,16 +91,16 @@ impl TradingSettings {
     }
 
     #[inline]
-    pub fn get_anchor_symbol(&self) -> &'static Symbol {
-        self.symbols_pair.anchor
+    pub fn get_quote_symbol(&self) -> &'static Symbol {
+        self.symbols_pair.quote
     }
 
     #[inline]
-    pub fn get_traded_symbol(&self) -> &'static Symbol {
-        self.symbols_pair.traded
+    pub fn get_base_symbol(&self) -> &'static Symbol {
+        self.symbols_pair.base
     }
 
-    pub fn get_unique_symbols(&self) -> Vec<&'static Symbol> {
+    pub fn get_unique_symbols(&self) -> [&'static Symbol; 2] {
         self.symbols_pair.get_unique_symbols()
     }
 

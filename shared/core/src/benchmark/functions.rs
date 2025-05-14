@@ -65,9 +65,9 @@ pub fn compute_benchmark_positions(
     let mut df = initial_strategy_df;
     let df_height = df.height();
 
-    let traded_symbol = trader.trader_exchange.get_traded_symbol();
-    let traded_contract = trader.trader_exchange.get_traded_contract();
-    let (opens, highs, lows, closes) = get_price_columns_f32(&df, &traded_symbol)?;
+    let base_symbol = trader.trader_exchange.get_base_symbol();
+    let base_contract = trader.trader_exchange.get_base_contract();
+    let (opens, highs, lows, closes) = get_price_columns_f32(&df, &base_symbol)?;
     let shorts = get_signal_col_values(&df, SignalCategory::GoShort)?;
     let longs = get_signal_col_values(&df, SignalCategory::GoShort)?;
     let close_shorts = get_signal_col_values(&df, SignalCategory::CloseShort)?;
@@ -87,11 +87,9 @@ pub fn compute_benchmark_positions(
 
     let price_level_modifier_map_binding = trading_settings.price_level_modifier_map.clone();
     let stop_loss: Option<PriceLock> = price_level_modifier_map_binding
-        .get("sl")
-        .map_or(None, |sl| Some(sl.clone().into()));
+        .get("sl").map(|sl| sl.clone().into());
     let take_profit: Option<PriceLock> = price_level_modifier_map_binding
-        .get("tp")
-        .map_or(None, |tp| Some(tp.clone().into()));
+        .get("tp").map(|tp| tp.clone().into());
     let should_check_price_modifiers = has_leverage || stop_loss.is_some() || take_profit.is_some();
 
     let maker_fee_rate = trader.trader_exchange.get_maker_fee() as f32;
@@ -107,14 +105,14 @@ pub fn compute_benchmark_positions(
         maker_fee_rate
     };
     let order_sizes = (
-        traded_contract.minimum_order_size as f32,
+        base_contract.minimum_order_size as f32,
         if trading_settings.order_types.0 == OrderType::Market {
-            traded_contract.maximum_order_sizes.0 as f32
+            base_contract.maximum_order_sizes.0 as f32
         } else {
-            traded_contract.maximum_order_sizes.1 as f32
+            base_contract.maximum_order_sizes.1 as f32
         },
     );
-    let tick_size = traded_contract.tick_size;
+    let tick_size = base_contract.tick_size;
     let price_locks = (stop_loss, take_profit);
     let minimum_notional_value = trader
         .trader_exchange

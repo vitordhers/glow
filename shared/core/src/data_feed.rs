@@ -25,7 +25,7 @@ pub struct DataFeed {
 }
 
 impl DataFeed {
-    fn insert_kline_fields(schema_fields: &mut Vec<Field>, unique_symbols: &Vec<&Symbol>) {
+    fn insert_kline_fields(schema_fields: &mut Vec<Field>, unique_symbols: &[&Symbol]) {
         for symbol in unique_symbols {
             let (open_col, high_col, low_col, close_col) = symbol.get_ohlc_cols();
             schema_fields.push(Field::new(open_col.into(), DataType::Float64));
@@ -75,7 +75,7 @@ impl DataFeed {
         *lock = value;
     }
 
-    fn set_schema(strategy: &Strategy, unique_symbols: &Vec<&Symbol>) -> (Schema, DataFrame, u32) {
+    fn set_schema(strategy: &Strategy, unique_symbols: &[&Symbol]) -> (Schema, DataFrame, u32) {
         let mut schema_fields = vec![Field::new(
             "start_time".into(),
             DataType::Datetime(TimeUnit::Milliseconds, None),
@@ -125,7 +125,7 @@ impl DataFeed {
             strategy_data_emitter,
             trading_data,
             trading_data_schema,
-            unique_symbols: unique_symbols.clone(),
+            unique_symbols: unique_symbols.to_vec(),
         }
     }
 

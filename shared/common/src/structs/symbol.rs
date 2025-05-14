@@ -8,10 +8,7 @@ use serde::{
     ser::{Serialize, SerializeStruct, Serializer},
     {Deserialize, Serialize as DerivedSerialize},
 };
-use std::{
-    collections::HashSet,
-    fmt::{self, Debug},
-};
+use std::fmt::{Debug, Formatter, Result as FormatterResult};
 
 #[derive(DerivedSerialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Symbol {
@@ -24,21 +21,6 @@ pub struct Symbol {
 }
 
 impl Symbol {
-    // pub fn new(name: &'static str) -> Self {
-    //     let open = format!("{}_open", name);
-    //     let high = format!("{}_high", name);
-    //     let low = format!("{}_low", name);
-    //     let close = format!("{}_close", name);
-
-    //     Self {
-    //         name,
-    //         open: Box::leak(open.into_boxed_str()),
-    //         high: Box::leak(high.into_boxed_str()),
-    //         low: Box::leak(low.into_boxed_str()),
-    //         close: Box::leak(close.into_boxed_str()),
-    //     }
-    // }
-
     pub fn get_open_col(&self) -> &'static str {
         self.open
     }
@@ -74,34 +56,33 @@ impl Symbol {
 
 #[derive(Clone, Copy)]
 pub struct SymbolsPair {
-    pub anchor: &'static Symbol,
-    pub traded: &'static Symbol,
+    pub base: &'static Symbol,
+    pub quote: &'static Symbol,
 }
 
 impl SymbolsPair {
-    pub fn new(anchor_symbol_id: &SymbolId, traded_symbol_id: &SymbolId) -> Self {
-        let anchor_symbol_str = anchor_symbol_id.get_symbol_str();
-        let anchor = SYMBOLS_MAP.get(anchor_symbol_str).expect(&format!(
-            "Anchor symbol {} to exist at SYMBOLS_MAP",
-            anchor_symbol_str
-        ));
-        let traded_symbol_str = traded_symbol_id.get_symbol_str();
-        let traded = SYMBOLS_MAP.get(traded_symbol_str).expect(&format!(
-            "Traded symbol {} to exist at SYMBOLS_MAP",
-            traded_symbol_str
-        ));
-        Self { anchor, traded }
+    pub fn new(quote_symbol_id: &SymbolId, base_symbol_id: &SymbolId) -> Self {
+        assert!(
+            quote_symbol_id != base_symbol_id,
+            "Base and Quote ids must be different!"
+        );
+        let quote = quote_symbol_id.get_symbol_str();
+        let quote = SYMBOLS_MAP
+            .get(quote)
+            .unwrap_or_else(|| panic!("Quote symbol {} to exist at SYMBOLS_MAP", quote));
+        let base = base_symbol_id.get_symbol_str();
+        let base = SYMBOLS_MAP
+            .get(base)
+            .unwrap_or_else(|| panic!("Base symbol {} to exist at SYMBOLS_MAP", base));
+        Self { base, quote }
     }
 
     pub fn get_tuple(&self) -> (&'static str, &'static str) {
-        (&self.anchor.name, &self.traded.name)
+        (self.quote.name, self.base.name)
     }
 
-    pub fn get_unique_symbols(&self) -> Vec<&'static Symbol> {
-        let mut symbols = HashSet::new();
-        symbols.insert(self.anchor);
-        symbols.insert(self.traded);
-        symbols.into_iter().collect()
+    pub fn get_unique_symbols(&self) -> [&'static Symbol; 2] {
+        [self.base, self.quote]
     }
 }
 
@@ -110,8 +91,8 @@ impl Default for SymbolsPair {
         let default_symbol = get_default_symbol();
 
         Self {
-            anchor: default_symbol,
-            traded: default_symbol,
+            quote: default_symbol,
+            base: default_symbol,
         }
     }
 }
@@ -122,8 +103,8 @@ impl Serialize for SymbolsPair {
         S: Serializer,
     {
         let mut state = serializer.serialize_struct("SymbolsPair", 2)?;
-        state.serialize_field("anchor", &self.anchor.name)?;
-        state.serialize_field("traded", &self.traded.name)?;
+        state.serialize_field("quote", &self.quote.name)?;
+        state.serialize_field("base", &self.base.name)?;
         state.end()
     }
 }
@@ -138,7 +119,7 @@ impl<'de> Deserialize<'de> for SymbolsPair {
         impl<'de> Visitor<'de> for SymbolsPairVisitor {
             type Value = SymbolsPair;
 
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            fn expecting(&self, formatter: &mut Formatter) -> FormatterResult {
                 formatter.write_str("a struct representing a pair of symbols")
             }
 
@@ -146,16 +127,16 @@ impl<'de> Deserialize<'de> for SymbolsPair {
             where
                 V: MapAccess<'de>,
             {
-                let mut anchor: Option<String> = None;
-                let mut traded: Option<String> = None;
+                let mut quote: Option<String> = None;
+                let mut base: Option<String> = None;
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
-                        "anchor" => {
-                            anchor = Some(map.next_value()?);
+                        "quote" => {
+                            quote = Some(map.next_value()?);
                         }
-                        "traded" => {
-                            traded = Some(map.next_value()?);
+                        "base" => {
+                            base = Some(map.next_value()?);
                         }
                         _ => {
                             let _: IgnoredAny = map.next_value()?;
@@ -163,33 +144,30 @@ impl<'de> Deserialize<'de> for SymbolsPair {
                     }
                 }
 
-                let anchor_str = anchor.ok_or_else(|| Error::missing_field("anchor"))?;
-                let traded_str = traded.ok_or_else(|| Error::missing_field("traded"))?;
+                let quote = quote.ok_or_else(|| Error::missing_field("quote"))?;
+                let base = base.ok_or_else(|| Error::missing_field("base"))?;
 
-                let anchor_ref = SYMBOLS_MAP
-                    .get(anchor_str.as_str())
-                    .ok_or_else(|| Error::custom("Invalid anchor symbol"))?;
-                let traded_ref = SYMBOLS_MAP
-                    .get(traded_str.as_str())
-                    .ok_or_else(|| Error::custom("Invalid traded symbol"))?;
+                let quote = SYMBOLS_MAP
+                    .get(quote.as_str())
+                    .ok_or_else(|| Error::custom("Invalid quote symbol"))?;
+                let base = SYMBOLS_MAP
+                    .get(base.as_str())
+                    .ok_or_else(|| Error::custom("Invalid base symbol"))?;
 
-                Ok(SymbolsPair {
-                    anchor: anchor_ref,
-                    traded: traded_ref,
-                })
+                Ok(SymbolsPair { base, quote })
             }
         }
 
-        deserializer.deserialize_struct("SymbolsPair", &["anchor", "traded"], SymbolsPairVisitor)
+        deserializer.deserialize_struct("SymbolsPair", &["quote", "base"], SymbolsPairVisitor)
     }
 }
 
 impl Debug for SymbolsPair {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FormatterResult {
         write!(
             f,
-            "⚓ Anchor Symbol {}, 📈 Traded Symbol {}",
-            self.anchor.name, self.traded.name
+            "⚓ Quote Symbol {}, 📈 Base Symbol {}",
+            self.quote.name, self.base.name
         )
     }
 }

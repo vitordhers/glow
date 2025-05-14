@@ -6,25 +6,25 @@ use crate::{r#static::SYMBOLS_MAP, structs::Symbol};
 pub enum SymbolId {
     #[default]
     #[serde(rename = "BTCUSDT")]
-    Bitcoin,
+    BitcoinUsdt,
     #[serde(rename = "ETHUSDT")]
-    Ethereum,
+    EthereumUsdt,
     #[serde(rename = "SOLUSDT")]
-    Solana,
+    SolanaUsdt,
     #[serde(rename = "ARBUSDT")]
-    Arbitrum,
+    ArbitrumUsdt,
     #[serde(rename = "LINKUSDT")]
-    Chainlink,
+    LinkUsdt,
 }
 
 impl SymbolId {
     pub fn get_symbol_str(&self) -> &str {
         match self {
-            Self::Bitcoin => "BTCUSDT",
-            Self::Ethereum => "ETHUSDT",
-            Self::Solana => "SOLUSDT",
-            Self::Arbitrum => "ARBUSDT",
-            Self::Chainlink => "LINKUSDT",
+            Self::BitcoinUsdt => "BTCUSDT",
+            Self::EthereumUsdt => "ETHUSDT",
+            Self::SolanaUsdt => "SOLUSDT",
+            Self::ArbitrumUsdt => "ARBUSDT",
+            Self::LinkUsdt => "LINKUSDT",
         }
     }
 

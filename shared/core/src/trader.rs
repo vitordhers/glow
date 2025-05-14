@@ -135,8 +135,8 @@ impl Trader {
 
     async fn process_last_signal(&self, signal: SignalCategory) -> Result<(), GlowError> {
         let current_trade = self.current_trade_listener.value();
-        let traded_symbol = self.trader_exchange.get_traded_symbol();
-        let close_col = traded_symbol.get_close_col();
+        let base_symbol = self.trader_exchange.get_base_symbol();
+        let close_col = base_symbol.get_close_col();
         let trading_data = self.get_trading_data()?;
         // TODO: check if this can be received via param
         let last_price = trading_data
@@ -585,7 +585,7 @@ impl Trader {
         &self,
         initial_strategy_df: DataFrame,
     ) -> Result<DataFrame, GlowError> {
-        compute_benchmark_positions(&self, initial_strategy_df)
+        compute_benchmark_positions(self, initial_strategy_df)
     }
 
     fn handle_initial_strategy_data(
@@ -621,26 +621,20 @@ impl Trader {
             let error = GlowError::new(String::from("Empty start times"), error);
             return Err(error);
         }
-
         let index = start_times.len() - 1;
         let previous_index = index - 1;
-
         let balance = self.current_balance_listener.value();
         balances[index] = Some(balance.available_to_withdraw);
         let signal = self.signal_listener.value();
         actions[index] = Some(signal.get_column());
-
-        let traded_symbol = self.trader_exchange.get_traded_contract().symbol;
-        let close_col = traded_symbol.get_close_col();
-
+        let base_symbol = self.trader_exchange.get_base_contract().symbol;
+        let close_col = base_symbol.get_close_col();
         trades_fees[index] = Some(0.0);
         units[index] = Some(0.0);
         pnl[index] = Some(0.0);
         returns[index] = Some(0.0);
         positions[index] = Some(0);
-
         let trade = self.current_trade_listener.value();
-
         if trade.is_some() {
             let current_trade = trade.unwrap();
             let trade_status = current_trade.status();

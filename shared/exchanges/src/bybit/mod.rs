@@ -157,14 +157,14 @@ impl BybitTraderExchange {
         payload: &S,
     ) -> Result<String, GlowError> {
         let suffix = match method {
-            HttpMethod::Get => to_url_string(&payload)?,
+            HttpMethod::Get => to_url_string(payload)?,
             HttpMethod::Post => to_json_string(&payload)?,
         };
         let query_string = format!(
             "{}{}{}{}",
             timestamp, self.credentials.key, recv_window, suffix
         );
-        let signature = calculate_hmac(&self.credentials.key, &query_string)?;
+        let signature = calculate_hmac(self.credentials.key, &query_string)?;
         Ok(signature)
     }
 
@@ -190,8 +190,7 @@ impl BybitTraderExchange {
     ) -> Result<RequestBuilder, GlowError> {
         let timestamp = current_timestamp_ms();
         let recv_window = 5000;
-
-        let query_params_str = to_url_string(&payload)?;
+        let query_params_str = to_url_string(payload)?;
         let signature = self.get_signature(method, timestamp, recv_window, payload)?;
         let url = format!("{}{}?{}", self.endpoints.http, req_uri, query_params_str);
         let mut request_builder = self.get_http_client().get(url);
@@ -235,7 +234,7 @@ impl TraderHelper for BybitTraderExchange {
         // Order Cost × Leverage / [Order Price × (0.0012 × Leverage + 1.0006)]
 
         // _balance / ((price / leverage_factor) + (price * fee_rate) + (default_price * fee_rate))
-        let contract = self.get_traded_contract();
+        let contract = self.get_base_contract();
         let taker_fee_rate = self.get_taker_fee();
         let maximum_order_sizes = contract.maximum_order_sizes;
 
@@ -365,7 +364,7 @@ impl TraderHelper for BybitTraderExchange {
     }
 
     fn calculate_order_stop_loss_price(&self, side: Side, price: f64) -> Option<f64> {
-        let contract = self.get_traded_contract();
+        let contract = self.get_base_contract();
         let trading_settings = self.get_trading_settings();
         let stop_loss = trading_settings.price_level_modifier_map.get("sl");
         let leverage_factor = trading_settings.leverage.get_factor();
@@ -414,7 +413,7 @@ impl TraderHelper for BybitTraderExchange {
     }
 
     fn calculate_order_take_profit_price(&self, side: Side, price: f64) -> Option<f64> {
-        let contract = self.get_traded_contract();
+        let contract = self.get_base_contract();
         let trading_settings = self.get_trading_settings();
         let take_profit = trading_settings.price_level_modifier_map.get("tp");
         let leverage_factor = trading_settings.leverage.get_factor();
@@ -481,11 +480,11 @@ impl TraderExchange for BybitTraderExchange {
         let timestamp = current_timestamp();
         let expires = ((timestamp + 5) * 1000).to_string();
         let message = format!("GET/realtime{}", expires);
-        let signature = calculate_hmac(&self.credentials.secret, &message).unwrap();
+        let signature = calculate_hmac(self.credentials.secret, &message).unwrap();
         let args = vec![self.credentials.key.to_string(), expires, signature];
         let auth_request = WsRequest::new("auth".to_string(), args);
         let auth_json_str = to_json_string(&auth_request)
-            .expect(&format!("JSON ({:?}) parsing error", auth_request));
+            .unwrap_or_else(|_| panic!("JSON ({:?}) parsing error", auth_request));
         let auth_message = Message::Text(auth_json_str);
         wss.send(auth_message).await?;
         Ok(())
@@ -505,7 +504,7 @@ impl TraderExchange for BybitTraderExchange {
         );
 
         let subscription_json = to_json_string(&subscribe_request)
-            .expect(&format!("JSON ({:?}) parsing error", subscribe_request));
+            .unwrap_or_else(|_| panic!("JSON ({:?}) parsing error", subscribe_request));
 
         let subscription_message = Message::Text(subscription_json);
 
@@ -516,7 +515,7 @@ impl TraderExchange for BybitTraderExchange {
     // TODO: divide this in own methods
     fn process_ws_message(&self, json: &String) -> Result<(), GlowError> {
         let response: BybitWsMessage = from_str::<BybitWsMessage>(&json).unwrap_or_default();
-        let traded_symbol_str = self.get_traded_symbol().name;
+        let base_symbol_str = self.get_base_symbol().name;
 
         match response {
             BybitWsMessage::None => Ok(()),
@@ -561,10 +560,10 @@ impl TraderExchange for BybitTraderExchange {
             }
             BybitWsMessage::Order(message) => {
                 let order_response = message.data.into_iter().find(|order_data| {
-                    order_data.symbol == traded_symbol_str && !order_data.is_trigger_order()
+                    order_data.symbol == base_symbol_str && !order_data.is_trigger_order()
                 });
 
-                if let None = order_response {
+                if order_response.is_none() {
                     println!(
                         "No order response was found being the same symbol and not a trigger order"
                     );
@@ -599,16 +598,11 @@ impl TraderExchange for BybitTraderExchange {
                 let usdt_data = message
                     .data
                     .into_iter()
-                    .find_map(|wallet_data| {
-                        let found_coin = wallet_data
+                    .find_map(|wallet_data| -> Option<structs::CoinData> {
+                        wallet_data
                             .coin
                             .into_iter()
-                            .find(|coin_data| coin_data.coin == "USDT");
-                        if let Some(coin) = found_coin {
-                            Some(coin)
-                        } else {
-                            None
-                        }
+                            .find(|coin_data| coin_data.coin == "USDT")
                     })
                     .expect(
                         "process_ws_message error -> USDT coin is missing in ws wallet message",
@@ -631,11 +625,11 @@ impl TraderExchange for BybitTraderExchange {
         start_timestamp: i64,
         end_timestamp: i64,
     ) -> Result<Vec<Execution>, GlowError> {
-        let traded_symbol = self.get_traded_symbol();
+        let base_symbol = self.get_base_symbol();
         let payload = FetchExecutionsDto {
             category: "linear".to_string(),
             order_uuid,
-            symbol: traded_symbol.name.to_string(),
+            symbol: base_symbol.name.to_string(),
             start_timestamp,
             end_timestamp,
         };
@@ -650,7 +644,7 @@ impl TraderExchange for BybitTraderExchange {
         >(result)
         .await?;
 
-        if parsed_response.ret_code != 0 || parsed_response.ret_message != String::from("OK") {
+        if parsed_response.ret_code != 0 || parsed_response.ret_message != *"OK" {
             return Ok(vec![]);
         }
 
@@ -669,12 +663,12 @@ impl TraderExchange for BybitTraderExchange {
         side: Option<Side>,
         fetch_executions: bool,
     ) -> Result<Order, GlowError> {
-        let traded_symbol = self.get_traded_symbol();
+        let base_symbol = self.get_base_symbol();
         let payload = FetchHistoryOrderDto {
             category: "linear".to_string(),
             id: id.clone(),
             side,
-            symbol: traded_symbol.name.to_string(),
+            symbol: base_symbol.name.to_string(),
         };
 
         let request_builder =
@@ -686,7 +680,7 @@ impl TraderExchange for BybitTraderExchange {
             Self::try_parse_response::<BybitHttpResponseWrapper<HttpResultList<OrderData>>>(result)
                 .await?;
 
-        if parsed_response.ret_code != 0 || parsed_response.ret_message != "OK".to_string() {
+        if parsed_response.ret_code != 0 || parsed_response.ret_message != *"OK" {
             let error = format!(
                 "fetch_history_order -> unexpected order response -> {:?}",
                 parsed_response
@@ -707,7 +701,7 @@ impl TraderExchange for BybitTraderExchange {
             .into_iter()
             .find(|order_data| !order_data.is_cancel() && !order_data.is_trigger_order());
 
-        if let None = order_response {
+        if order_response.is_none() {
             let error = "fetch_history_order -> no closed order was found".to_string();
             return Err(GlowError::new(String::from("Failed Query"), error));
         }
@@ -738,11 +732,11 @@ impl TraderExchange for BybitTraderExchange {
         order_id: String,
         fetch_executions: bool,
     ) -> Result<Order, GlowError> {
-        let traded_symbol = self.get_traded_symbol();
+        let base_symbol = self.get_base_symbol();
         let payload = FetchCurrentOrderDto {
             category: "linear".to_string(),
             id: order_id.clone(),
-            symbol: traded_symbol.name.to_string(),
+            symbol: base_symbol.name.to_string(),
             open_only: 2,
         };
 
@@ -755,7 +749,7 @@ impl TraderExchange for BybitTraderExchange {
             Self::try_parse_response::<BybitHttpResponseWrapper<HttpResultList<OrderData>>>(result)
                 .await?;
 
-        if parsed_response.ret_code != 0 || parsed_response.ret_message != String::from("OK") {
+        if parsed_response.ret_code != 0 || parsed_response.ret_message != *"OK" {
             let description = format!(
                 "fetch_opened_order -> inadequate order response -> {:?}",
                 parsed_response
@@ -772,9 +766,9 @@ impl TraderExchange for BybitTraderExchange {
                 },
             );
 
-        if let None = order_response {
+        if order_response.is_none() {
             let mut retries = 2;
-            let error = format!("fetch_opened_order -> order wasn't opened at all");
+            let error = "fetch_opened_order -> order wasn't opened at all".to_string();
 
             let mut result = Err(GlowError::new(String::from("Failed Query"), error));
             while retries > 0 {
@@ -816,10 +810,10 @@ impl TraderExchange for BybitTraderExchange {
     }
 
     async fn fetch_current_trade_position(&self) -> Result<Option<Trade>, GlowError> {
-        let traded_symbol = self.get_traded_symbol();
+        let base_symbol = self.get_base_symbol();
         let payload = FetchPositionDto {
             category: "linear".to_string(),
-            symbol: traded_symbol.name.to_string(),
+            symbol: base_symbol.name.to_string(),
         };
 
         let request_builder =
@@ -832,7 +826,7 @@ impl TraderExchange for BybitTraderExchange {
 
         let position_response = parsed_response.result.list.into_iter().next();
 
-        if let None = position_response {
+        if position_response.is_none() {
             return Ok(None);
         }
         let position_response = position_response.unwrap();
@@ -879,10 +873,10 @@ impl TraderExchange for BybitTraderExchange {
         trade_id: String,
         last_status: TradeStatus,
     ) -> Result<Trade, GlowError> {
-        let traded_symbol = self.get_traded_symbol();
+        let base_symbol = self.get_base_symbol();
         let payload = FetchPositionDto {
             category: "linear".to_string(),
-            symbol: traded_symbol.name.to_string(),
+            symbol: base_symbol.name.to_string(),
         };
 
         let request_builder =
@@ -897,10 +891,10 @@ impl TraderExchange for BybitTraderExchange {
 
         let position_response = parsed_response.result.list.into_iter().next();
 
-        if let None = position_response {
+        if position_response.is_none() {
             let error = format!(
                 r#"fetch_trade_state -> symbol {} doesn't have any open position"#,
-                traded_symbol.name
+                base_symbol.name
             );
             return Err(GlowError::new(
                 String::from("Invalid Position Error"),
@@ -1097,7 +1091,7 @@ impl TraderExchange for BybitTraderExchange {
             wallet_data
                 .coin
                 .iter()
-                .find(|coin_data| coin_data.coin == "USDT".to_string())
+                .find(|coin_data| coin_data.coin == *"USDT")
         });
 
         let usdt_data = usdt_coin_data.expect("get_current_usdt_balance -> missing usdt coin data");
@@ -1123,24 +1117,20 @@ impl TraderExchange for BybitTraderExchange {
         );
 
         let trading_settings = self.get_trading_settings();
-        let traded_contract = self.get_traded_contract();
+        let base_contract = self.get_base_contract();
 
         let mut expected_price = expected_price;
         if trading_settings.get_open_order_type() == OrderType::Limit {
             if side == Side::Sell {
                 // add last price marginally in order to realize maker_fee
-                let tick_decimals = count_decimal_places(traded_contract.tick_size);
-                expected_price = round_down_nth_decimal(
-                    expected_price + traded_contract.tick_size,
-                    tick_decimals,
-                );
+                let tick_decimals = count_decimal_places(base_contract.tick_size);
+                expected_price =
+                    round_down_nth_decimal(expected_price + base_contract.tick_size, tick_decimals);
             } else {
                 // subtract last price marginally in order to realize maker_fee
-                let tick_decimals = count_decimal_places(traded_contract.tick_size);
-                expected_price = round_down_nth_decimal(
-                    expected_price - traded_contract.tick_size,
-                    tick_decimals,
-                );
+                let tick_decimals = count_decimal_places(base_contract.tick_size);
+                expected_price =
+                    round_down_nth_decimal(expected_price - base_contract.tick_size, tick_decimals);
             }
         }
         let order_cost = total_balance * trading_settings.allocation_percentage;
@@ -1154,7 +1144,7 @@ impl TraderExchange for BybitTraderExchange {
         let parsed_response =
             Self::try_parse_response::<BybitHttpResponseWrapper<OrderResponse>>(result).await?;
 
-        if parsed_response.ret_code != 0 || parsed_response.ret_message != String::from("OK") {
+        if parsed_response.ret_code != 0 || parsed_response.ret_message != *"OK" {
             let error = format!("open_order -> unexpected response => {:?}", parsed_response);
             println!("{:?}", error);
             return Err(GlowError::new(String::from("Wrong Response Error"), error));
@@ -1198,7 +1188,7 @@ impl TraderExchange for BybitTraderExchange {
         let parsed_response =
             Self::try_parse_response::<BybitHttpResponseWrapper<OrderResponse>>(result).await?;
         if parsed_response.ret_code != 0
-            || parsed_response.ret_message != String::from("OK")
+            || parsed_response.ret_message != *"OK"
             || parsed_response.result.order_link_id != order_id
         {
             println!("amend_order -> unexpected response {:?}", parsed_response);
@@ -1210,17 +1200,17 @@ impl TraderExchange for BybitTraderExchange {
 
     async fn try_close_position(&self, trade: &Trade, est_price: f64) -> Result<Order, GlowError> {
         let mut est_price = est_price;
-        let traded_contract = self.get_traded_contract();
+        let base_contract = self.get_base_contract();
         let trading_settings = self.get_trading_settings();
         let close_order_type = trading_settings.get_close_order_type();
 
         if close_order_type == OrderType::Limit {
             if trade.open_order.side == Side::Sell {
                 // close order will have open order opposite side, subtract last price marginally in order to realize maker_fee
-                est_price -= traded_contract.minimum_order_size
+                est_price -= base_contract.minimum_order_size
             } else if trade.open_order.side == Side::Buy {
                 // close order will have open order opposite side, add last price marginally in order to realize maker_fee
-                est_price += traded_contract.minimum_order_size;
+                est_price += base_contract.minimum_order_size;
             }
         }
 
@@ -1273,7 +1263,7 @@ impl TraderExchange for BybitTraderExchange {
         let parsed_response =
             Self::try_parse_response::<BybitHttpResponseWrapper<OrderResponse>>(result).await?;
         if parsed_response.ret_code != 0
-            || parsed_response.ret_message != "OK".to_string()
+            || parsed_response.ret_message != *"OK"
             || parsed_response.result.order_link_id != close_order_id
         {
             close_order.uuid = parsed_response.result.order_id;
@@ -1288,11 +1278,11 @@ impl TraderExchange for BybitTraderExchange {
     }
 
     async fn cancel_order(&self, order_id: String) -> Result<bool, GlowError> {
-        let traded_symbol = self.get_traded_symbol();
+        let base_symbol = self.get_base_symbol();
         let payload = CancelOrderDto::new(
             order_id.clone(),
             "linear".to_string(),
-            traded_symbol.name.to_string(),
+            base_symbol.name.to_string(),
         );
         let request_builder =
             self.prepare_request_builder(HttpMethod::Post, "/v5/order/cancel", &payload)?;
@@ -1300,7 +1290,7 @@ impl TraderExchange for BybitTraderExchange {
         let parsed_response =
             Self::try_parse_response::<BybitHttpResponseWrapper<OrderResponse>>(result).await?;
         if parsed_response.ret_code != 0
-            || parsed_response.ret_message != String::from("OK")
+            || parsed_response.ret_message != *"OK"
             || parsed_response.result.order_link_id != order_id
         {
             println!("cancel_order -> parsed response {:?}", parsed_response);
@@ -1311,20 +1301,20 @@ impl TraderExchange for BybitTraderExchange {
 
     async fn set_leverage(&self, leverage: Leverage) -> Result<bool, GlowError> {
         let leverage_factor = leverage.get_factor();
-        let traded_contract = self.get_traded_contract();
-        let traded_symbol = traded_contract.symbol;
-        let max_leverage_allowed = traded_contract.max_leverage;
+        let base_contract = self.get_base_contract();
+        let base_symbol = base_contract.symbol;
+        let max_leverage_allowed = base_contract.max_leverage;
         assert!(
             leverage_factor > max_leverage_allowed,
             "symbol {} only allows for max {} leverage, {} was sent",
-            traded_symbol.name,
+            base_symbol.name,
             max_leverage_allowed,
             leverage_factor
         );
 
         let payload = SetLeverageDto::new(
             "linear".to_string(),
-            traded_symbol.name.to_string(),
+            base_symbol.name.to_string(),
             leverage_factor,
         );
 
@@ -1333,9 +1323,9 @@ impl TraderExchange for BybitTraderExchange {
         let result = request_builder.send().await;
         let parsed_response =
             Self::try_parse_response::<BybitHttpResponseWrapper<EmptyObject>>(result).await?;
-        if (parsed_response.ret_code != 0 || parsed_response.ret_message != "OK".to_string())
+        if (parsed_response.ret_code != 0 || parsed_response.ret_message != *"OK")
             || (parsed_response.ret_code == 110043
-                && parsed_response.ret_message == "Set leverage not modified".to_string())
+                && parsed_response.ret_message == *"Set leverage not modified")
         {
             Ok(true)
         } else {
@@ -1354,7 +1344,7 @@ impl TraderExchange for BybitTraderExchange {
         let ((open_fee, _), fee_rate, is_maker) =
             self.calculate_order_fees(open_order_type, side, units, price);
 
-        let contract = self.get_traded_contract();
+        let contract = self.get_base_contract();
 
         let timestamp = current_timestamp_ms();
         let id = format!(
@@ -1654,7 +1644,7 @@ impl BenchmarkExchange for BybitTraderExchange {
             self.calculate_open_order_units_and_balance_remainder(side, order_cost, price)?;
         let ((open_fee, _), fee_rate, is_maker) =
             self.calculate_order_fees(open_order_type, side, units, price);
-        let contract = self.get_traded_contract();
+        let contract = self.get_base_contract();
         let id = format!(
             "{}_{}_{}",
             &contract.symbol.name,

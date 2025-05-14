@@ -6,3 +6,25 @@ license.workspace = true
 edition.workspace = true
 
 [dependencies]
+chrono = { workspace = true }
+cli = { workspace = true }
+common = { workspace = true }
+dialoguer = { workspace = true }
+dotenv = { workspace = true }
+exchanges = { workspace = true }
+futures-util = { workspace = true }
+core = { workspace = true }
+polars = { workspace = true, features = [
+  "dtype-struct",
+  "dtype-array",
+  "dtype-u8",
+  "dtype-u16",
+] }
+regex = { workspace = true }
+strategy = { workspace = true }
+tokio = { workspace = true }
+num-traits = { version = "0.2" }
+num = { version = "0.4" }
+itertools = { workspace = true }
+glow_error = { workspace = true }
+# thiserror = { version = "2.0.12" }

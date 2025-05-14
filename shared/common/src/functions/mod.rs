@@ -276,7 +276,7 @@ pub fn filter_df_timestamps_to_lf(
 // downsample = decrease frequency. i.e. seconds -> minutes. methods: aggregation
 // currently working only for downsampling
 pub fn downsample_tick_lf_to_kline_duration(
-    unique_symbols: &Vec<&Symbol>,
+    unique_symbols: &[&Symbol],
     kline_duration: Duration,
     tick_lf: LazyFrame,
     closed_window: ClosedWindow, // TODO: check why benchmark frame doesn't leave last minute tick -- CHECK if this is still happening

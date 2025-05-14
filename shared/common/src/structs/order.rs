@@ -25,7 +25,7 @@ pub struct Order {
     pub time_in_force: TimeInForce,
     pub units: f64,
     pub updated_at: i64,
-    // defined as `{traded_symbol}_{timestamp}_{order_position}
+    // defined as `{base_symbol}_{timestamp}_{order_position}
     pub uuid: String,
 }
 

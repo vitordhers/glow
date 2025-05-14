@@ -35,27 +35,27 @@ pub trait TraderHelper {
     ) -> Result<(f64, f64), GlowError>;
 
     fn get_contracts(&self) -> &HashMap<SymbolId, Contract>;
-    fn get_anchor_contract(&self) -> &Contract {
+    fn get_quote_contract(&self) -> &Contract {
         let contracts = self.get_contracts();
         contracts
-            .get(&self.get_anchor_symbol().id)
-            .expect("Exchange to have anchor contract")
+            .get(&self.get_quote_symbol().id)
+            .expect("Exchange to have quote contract")
     }
-    fn get_anchor_symbol(&self) -> &'static Symbol {
+    fn get_quote_symbol(&self) -> &'static Symbol {
         let trading_settings = self.get_trading_settings();
-        trading_settings.get_anchor_symbol()
+        trading_settings.get_quote_symbol()
     }
-    fn get_traded_contract(&self) -> &Contract {
+    fn get_base_contract(&self) -> &Contract {
         let contracts = self.get_contracts();
         contracts
-            .get(&self.get_traded_symbol().id)
-            .expect("Exchange to have anchor contract")
+            .get(&self.get_base_symbol().id)
+            .expect("Exchange to have base contract")
     }
-    fn get_traded_symbol(&self) -> &'static Symbol {
+    fn get_base_symbol(&self) -> &'static Symbol {
         let trading_settings = self.get_trading_settings();
-        trading_settings.get_traded_symbol()
+        trading_settings.get_base_symbol()
     }
-    fn get_unique_symbols(&self) -> Vec<&'static Symbol> {
+    fn get_unique_symbols(&self) -> [&'static Symbol; 2] {
         let trading_settings = self.get_trading_settings();
         trading_settings.get_unique_symbols()
     }

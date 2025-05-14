@@ -83,7 +83,7 @@ impl Performance {
 
         let trading_journey_identifier = format!(
             "{}_{}_{}",
-            journey_formmated_datetime_start, self.symbols.anchor.name, self.symbols.traded.name
+            journey_formmated_datetime_start, self.symbols.quote.name, self.symbols.base.name
         );
 
         let path = get_current_env_log_path();
@@ -94,7 +94,7 @@ impl Performance {
         let (benchmark_data, benchmark_stats) = calculate_benchmark_data(
             benchmark_trading_lf,
             self.risk_free_returns,
-            self.symbols.traded,
+            self.symbols.base,
         )?;
         {
             let mut lock = self.benchmark_stats.lock().unwrap();
@@ -122,7 +122,7 @@ impl Performance {
 
         let trading_journey_identifier = format!(
             "{}_{}_{}",
-            journey_formmated_datetime_start, self.symbols.anchor.name, self.symbols.traded.name
+            journey_formmated_datetime_start, self.symbols.quote.name, self.symbols.base.name
         );
         let trading_journey_start = self.initial_datetime.timestamp_millis();
         let filter_mask = traded_data
@@ -142,7 +142,7 @@ impl Performance {
         let (trading_data, trading_stats) = update_trading_data(
             &trading_data,
             self.risk_free_returns,
-            self.symbols.traded,
+            self.symbols.base,
             Some(self.initial_datetime),
         )?;
         {
@@ -191,11 +191,11 @@ impl Performance {
 pub fn calculate_benchmark_data(
     benchmark_trading_data: LazyFrame,
     risk_free_returns: f64,
-    traded_symbol: &Symbol,
+    base_symbol: &Symbol,
 ) -> Result<(DataFrame, Statistics), GlowError> {
     let trades_lf = calculate_trades(benchmark_trading_data)?;
 
-    let mut trading_lf = calculate_trading_sessions(trades_lf, traded_symbol, None)?;
+    let mut trading_lf = calculate_trading_sessions(trades_lf, base_symbol, None)?;
     trading_lf = trading_lf.drop_nulls(None);
 
     let df = trading_lf.collect()?;
@@ -210,14 +210,13 @@ pub fn calculate_benchmark_data(
 pub fn update_trading_data(
     trading_data: &DataFrame,
     risk_free_returns: f64,
-    traded_symbol: &Symbol,
+    base_symbol: &Symbol,
     log_from_timestamp_on: Option<DateTime<Utc>>,
 ) -> Result<(DataFrame, Statistics), GlowError> {
     let trading_data_lf = trading_data.clone().lazy();
     let trades_lf = calculate_trades(trading_data_lf)?;
 
-    let mut trading_lf =
-        calculate_trading_sessions(trades_lf, traded_symbol, log_from_timestamp_on)?;
+    let mut trading_lf = calculate_trading_sessions(trades_lf, base_symbol, log_from_timestamp_on)?;
     trading_lf = trading_lf.drop_nulls(None);
 
     let df = trading_lf.collect()?;
@@ -243,7 +242,7 @@ pub fn calculate_trades(lf: LazyFrame) -> Result<LazyFrame, GlowError> {
 
 pub fn calculate_trading_sessions(
     lf: LazyFrame,
-    traded_symbol: &Symbol,
+    base_symbol: &Symbol,
     log_from_timestamp_on: Option<DateTime<Utc>>,
 ) -> Result<LazyFrame, GlowError> {
     let mut lf = lf.clone();
@@ -273,7 +272,7 @@ pub fn calculate_trading_sessions(
             .name()
             .keep(),
         );
-    let (open_col, high_col, low_col, close_col) = traded_symbol.get_ohlc_cols();
+    let (open_col, high_col, low_col, close_col) = base_symbol.get_ohlc_cols();
     let returns_output: SpecialEq<Arc<dyn FunctionOutputField>> =
         GetOutput::from_type(DataType::Float64);
     let aggs = [

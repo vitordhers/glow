@@ -12,7 +12,106 @@
 // use std::marker::Send;
 // use traits::{optimizable_indicator::OptimizableIndicator, optimizable_signal::OptimizableSignal};
 
-fn main() {
+use std::task::Wake;
+
+use common::r#static::get_default_symbol;
+use polars::prelude::*;
+use strategy::schemas::StrategySchema;
+pub mod prelude;
+
+fn main() -> PolarsResult<()> {
+    // 1. select trading pair for optimization. e.g.: BTC-USDT
+    let selected_symbol = get_default_symbol();
+    // 2. select strategy schema to be optimized
+    let strategy_schema = StrategySchema::default();
+    // Generate a lot of columns (small example here for demo)
+    let n = 10; // or 1_000_000 for real test
+
+    // let fields = (0..n)
+    //     .map(|i| Field::new(format!("col_{i}").into(), DataType::Int32))
+    //     .collect::<Vec<_>>();
+
+    // let struct_dtype = DataType::Struct(fields);
+    // StructOwned(Box<(Vec<AnyValue<'a>>, Vec<Field>)>)
+
+    // let inner = (0..n)
+    //     .map(|i| {
+    //         (
+    //             AnyValue::Int32(i),
+    //             Field::new(format!("col_{i}").into(), DataType::Int32),
+    //         )
+    //     })
+    //     .collect::<_>();
+    let outer: (Vec<AnyValue>, Vec<Field>) = (
+        vec![AnyValue::Int32(1), AnyValue::Int32(2)],
+        vec![
+            Field::new("thisistest".into(), DataType::Int32),
+            Field::new("thisistest2".into(), DataType::Int32),
+        ],
+    );
+    let column = Column::new(
+        "features2".into(),
+        &[AnyValue::StructOwned(Box::new(outer))],
+    );
+
+    // let n = 5;
+
+    // Create a Vec of Series, each with 2 values
+    // let fields: Vec<Series> = (0..n)
+    //     .map(|i| {
+    //         Series::new(
+    //             format!("col_{}", i).into(),
+    //             &[i as i32, (i * 10) as i32], // 2 values per column
+    //         )
+    //     })
+    //     .collect();
+    //
+    // // Create the struct series
+    // let struct_series = StructChunked::new("features", &fields)?.into_series();
+
+    // let column = Column::new(
+    //     "features2".into(),
+    //     &[AnyValue::StructOwned(Box::new(
+    //         (0..n)
+    //             .map(|i| {
+    //                 (
+    //                     AnyValue::Int32(i),
+    //                     Field::new(
+    //                         PlSmallStr::from_str(format!("col_{}", i).as_str()),
+    //                         DataType::Int32,
+    //                     ),
+    //                 )
+    //             })
+    //             .collect::<_>(),
+    //     ))],
+    // );
+
+    let df = DataFrame::new(vec![column])?;
+
+    // try to get value of col_3
+    // let result = df.column("features2")?.struct_()?.field_by_name("col_3")?;
+    let binding = df
+        .column("features2")?
+        .struct_()?
+        .fields_as_series();
+    let result = binding
+        .get(0).unwrap();
+
+    println!("{:?}", df);
+    println!("{:?}", result);
+    Ok(())
+    // 3. select period for optimization
+
+    // 4. generate dataframe with all indicators
+
+    // 5. combine signals to generate lazyframes
+
+    // 6. filter lazyframes without any open signals
+
+    // 7. combine strategy settings to get best results
+
+    // 8. get best performances
+
     // use super::{traits::optimizable_indicator::OptimizableIndicatorWrapper, *};
 
     // async fn optimize_strategy(
