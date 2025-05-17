@@ -2,7 +2,7 @@ use crate::trader::indicators::{ExponentialMovingAverageIndicator, StochasticThr
 use crate::trader::traits::indicator::Indicator;
 use crate::trader::{errors::Error, indicators::StochasticIndicator};
 use itertools::Itertools;
-use polars_lazy::prelude::{col, Expr, LazyFrame};
+use polars::prelude::{col, Expr, LazyFrame};
 
 pub trait OptimizableIndicator {
     fn get_select_clauses(&self, arg: OptimizableIndicatorArg) -> Vec<Expr>;

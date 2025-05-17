@@ -20,6 +20,7 @@ polars = { workspace = true, features = [
   "dtype-u8",
   "dtype-u16",
 ] }
+polars-arrow = { workspace = true }
 regex = { workspace = true }
 strategy = { workspace = true }
 tokio = { workspace = true }

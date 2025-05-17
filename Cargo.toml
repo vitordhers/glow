@@ -19,24 +19,26 @@ env_logger = "0.11.5"
 futures-util = "0.3.31"
 log = "0.4.17"
 phf = { version = "0.11.3", features = ["macros"] }
-polars = { version = "0.46.0", features = [
-    "lazy",
-    "dtype-datetime",
-    "diagonal_concat",
-    "temporal",
-    "rolling_window",
-    "rows",
-    "cse",
-    "repeat_by",
-    "ewma",
-    "sign",
-    "dynamic_group_by",
-    "round_series",
-    "abs",
-    "cum_agg",
-    "is_in",
+polars = { version = "0.47.1", features = [
+  "lazy",
+  "dtype-datetime",
+  "diagonal_concat",
+  "temporal",
+  "rolling_window",
+  "rows",
+  "cse",
+  "repeat_by",
+  "ewma",
+  "sign",
+  "dynamic_group_by",
+  "round_series",
+  "abs",
+  "cum_agg",
+  "is_in",
+  "rolling_window",
+  "dtype-categorical",
 ] }
-polars-lazy = { version = "0.46.0", features = ["rolling_window"] }
+polars-arrow = { version = "0.47.1" }
 reqwest = { version = "0.12.8", features = ["json", "gzip"] }
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.128"

@@ -1,4 +1,4 @@
-use polars_lazy::prelude::LazyFrame;
+use polars::prelude::LazyFrame;
 
 use crate::trader::{enums::signal_category::SignalCategory, errors::Error};
 
