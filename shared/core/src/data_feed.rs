@@ -80,9 +80,9 @@ impl DataFeed {
             "start_time".into(),
             DataType::Datetime(TimeUnit::Milliseconds, None),
         )];
-        Self::insert_kline_fields(&mut schema_fields, &unique_symbols);
-        Self::insert_indicators_fields(&mut schema_fields, &strategy);
-        Self::insert_signals_fields(&mut schema_fields, &strategy);
+        Self::insert_kline_fields(&mut schema_fields, unique_symbols);
+        Self::insert_indicators_fields(&mut schema_fields, strategy);
+        Self::insert_signals_fields(&mut schema_fields, strategy);
         let minimum_klines_for_benchmarking = strategy.get_minimum_klines_for_calculation();
         let trading_data_schema = Self::insert_trading_fields(&mut schema_fields);
         let trading_data_df = DataFrame::empty_with_schema(&trading_data_schema);

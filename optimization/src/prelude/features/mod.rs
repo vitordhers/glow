@@ -1,12 +1,22 @@
 use super::combinable_params::{CombinableParam, FeatureGenerator, OptimizableParam};
 use common::structs::SymbolsPair;
 use glow_error::GlowError;
-use polars::{chunked_array::builder::fixed_size_list, prelude::*};
+use polars::prelude::*;
 
 pub struct EMAFeatureGenerator {
     pub name: &'static str,
     pub param: OptimizableParam<u8>,
     pub symbols: SymbolsPair,
+}
+
+impl EMAFeatureGenerator {
+    pub fn new(name: &'static str, param: OptimizableParam<u8>, symbols: SymbolsPair) -> Self {
+        Self {
+            name,
+            param,
+            symbols,
+        }
+    }
 }
 
 impl FeatureGenerator for EMAFeatureGenerator {
@@ -23,149 +33,53 @@ impl FeatureGenerator for EMAFeatureGenerator {
         let param_size = self.param.range_size();
         let close_col = self.symbols.quote.get_close_col();
         let mut result_lf = lf.clone();
-        let output_type: SpecialEq<Arc<dyn FunctionOutputField>> = GetOutput::from_type(
-            DataType::Array(Box::new(DataType::Float32), param_size.into()),
-        );
+        let output_type: SpecialEq<Arc<dyn FunctionOutputField>> =
+            GetOutput::from_type(DataType::List(Box::new(DataType::Float32)));
         let range = self.param.range.clone();
         let name = PlSmallStr::from_static(self.name);
-
+        let name_ref = self.name.clone();
         result_lf = result_lf.with_column(
             col(close_col)
                 .apply_many(
                     move |columns| {
-                        // 1440 prices for the day
-                        let close_prices = columns
-                    .get(0)
-                    .expect("close prices column to be defined at EMA Feature Generator compute")
-                    .f32()?;
+                        let close_prices = columns[0].f32()?;
                         let close_prices: Vec<f32> = close_prices.into_no_null_iter().collect();
-                        let mut alphas: Vec<f32> = vec![];
-                        for param in range.clone() {
+                        let series_len = close_prices.len();
+                        let values_capacity = range.len() * series_len;
+                        let mut values = vec![];
+                        for param in range.iter() {
                             let alpha =
-                                calculate_span_alpha(param.into()).expect("alpha to be valid");
-                            alphas.push(alpha);
+                                calculate_span_alpha((*param).into()).expect("alpha to be valid");
+                            let ewmas = ewma(&close_prices, alpha);
+                            values.push(ewmas);
                         }
-                        let capacity = range.len();
-                        let values_capacity = range.len() * close_prices.len();
-                        let mut series: ListPrimitiveChunkedBuilder<Float32Type> =
+
+                        let mut ca_builder: ListPrimitiveChunkedBuilder<Float32Type> =
                             ListPrimitiveChunkedBuilder::new(
-                                name.clone(),
-                                capacity,
+                                "".into(),
+                                series_len,
                                 values_capacity,
                                 DataType::Float32,
                             );
 
-                        for (idx, param) in range.iter().enumerate() {
-                            let mut values = vec![];
-
-                            for window in close_prices.windows(*param as usize) {
-                                let alpha = alphas[idx];
-                                let ewmas = ewma(window, alpha);
-                                values.push(ewmas);
+                        let transposed_values = transpose(values);
+                        (0..close_prices.len()).for_each(|row_idx| {
+                            let mut col_values = vec![];
+                            for (col_idx, param) in range.clone().iter().enumerate() {
+                                col_values.push(transposed_values[row_idx][col_idx]);
                             }
-                            // let series = Series::from_iter(values);
-                            // let data: Vec<Option<Vec<f32>>> =
-                            //     vec![Some(vec![1.0, 2.0, 3.0]), None, Some(vec![4.0, 5.0, 6.0])];
-
-                            // let mut test2 = FixedSizeListNumericBuilder.
-
-                            // let result: ChunkedArray<ListType> = test.finish();
-                            // let test2: PrimitiveChunkedBuilder<Float32Type> =
-                            //     PrimitiveChunkedBuilder::new("testname".into(), 100_usize);
-                            // let array = new_empty_array(ArrowDataType::Float32);
-                            // // let chunk: ArrayRef = Box::new(array);
-                            // // let fdpta = FixedSizeListArray::
-                            // let test = ListPrimitiveChunkedBuilder::new(name, capacity, values_capacity, inner_type);
-                            let test: Vec<Option<f32>> = vec![Some(1.0), None, Some(3.0)];
-                            let test2 = <ChunkedArray<Float32Type> as NewChunkedArray<
-                                Float32Type,
-                                f32,
-                            >>::from_slice_options(
-                                "name".into(), &test
-                            );
-                            // let series = Series::from_chunk_and_dtype(
-                            //     "test3".into(),
-                            //     array,
-                            //     &DataType::Array(Box::new(DataType::Float32), *param as usize),
-                            // );
-                            // array.
-                            // unsafe {
-                            //     let series = Series::from_chunks_and_dtype_unchecked(
-                            //         self.name.into(),
-                            //         vec![array],
-                            //         &DataType::Float32,
-                            //     );
-                            // }
-                        }
-
-                        Ok(Some(Series::new_null(name.clone(), 0).into()))
+                            ca_builder.append_opt_slice(Some(&col_values));
+                        });
+                        let chunked_array: ChunkedArray<ListType> = ca_builder.finish();
+                        let list_series = chunked_array.into_series();
+                        Ok(Some(list_series.into()))
                     },
                     &[],
                     output_type,
                 )
-                .alias(self.name),
+                .alias(name),
         );
-
-        todo!()
-        //
-        // let cols = self.get_indicators_columns(symbols_pair, params);
-        // let (ema_fast_col, _) = cols
-        //     .first()
-        //     .expect("EMA indicator to have column at index 0");
-        // let fast_span_param = params
-        //     .get(&ParamId::FastSpan)
-        //     .expect("FastSpan param to be set at ParamsMap");
-        // let fast_span = if let Param::UInt32(value, _) = fast_span_param {
-        //     *value
-        // } else {
-        //     20
-        // };
-        // let (ema_slow_col, _) = cols
-        //     .get(1)
-        //     .expect("EMA indicator to have column at index 1");
-        // let slow_span_param = params
-        //     .get(&ParamId::SlowSpan)
-        //     .expect("SlowSpan param to be set at ParamsMap");
-        // let slow_span = if let Param::UInt32(value, _) = slow_span_param {
-        //     *value
-        // } else {
-        //     100
-        // };
-        //
-        // let fast_alpha = calculate_span_alpha(fast_span as f64)?;
-        // let slow_alpha = calculate_span_alpha(slow_span as f64)?;
-        // let fast_opts = EWMOptions {
-        //     alpha: fast_alpha,
-        //     adjust: false,
-        //     bias: false,
-        //     min_periods: 1,
-        //     ignore_nulls: false,
-        // };
-        // let slow_opts = EWMOptions {
-        //     alpha: slow_alpha,
-        //     adjust: false,
-        //     bias: false,
-        //     min_periods: 1,
-        //     ignore_nulls: false,
-        // };
-        //
-        // let lf = lf
-        //     .with_columns([
-        //         col(close_col).ewm_mean(slow_opts).alias(ema_slow_col),
-        //         col(close_col).ewm_mean(fast_opts).alias(ema_fast_col),
-        //     ]);
-        //     // .with_column(
-        //     //     when(col(ema_fast_col).is_null().or(col(ema_slow_col).is_null()))
-        //     //         .then(lit(NULL))
-        //     //         .otherwise(
-        //     //             when(col(ema_fast_col).gt(col(ema_slow_col)))
-        //     //                 .then(true)
-        //     //                 .otherwise(false),
-        //     //         )
-        //     //         .alias(format!("{}_{}_{}", TREND_COL_PREFIX, slow_span, fast_span)),
-        //     // );
-        //
-        // Ok(lf)
+        Ok(result_lf)
     }
 }
 
@@ -176,26 +90,80 @@ pub fn calculate_span_alpha(span: f32) -> Result<f32, GlowError> {
     Ok(2.0 / (span + 1.0))
 }
 
-pub fn ewma(data: &[f32], alpha: f32) -> Option<Vec<f32>> {
+pub fn ewma(data: &[f32], alpha: f32) -> Vec<f32> {
     if data.is_empty() {
-        return None;
+        return vec![];
     }
 
     let mut result = Vec::with_capacity(data.len());
     let mut prev = data[0];
+    result.push(prev);
 
-    for (i, &value) in data.iter().enumerate() {
-        if i == 0 {
-            prev = value;
-        } else {
-            prev = alpha * value + (1.0 - alpha) * prev;
-        }
-
-        result.push(prev);
+    for &x in &data[1..] {
+        let ewma = alpha * x + (1.0 - alpha) * prev;
+        result.push(ewma);
+        prev = ewma;
     }
 
-    Some(result)
+    result
 }
+
+// pub fn transpose(matrix: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
+//     if matrix.is_empty() {
+//         return vec![];
+//     }
+//
+//     let rows = matrix.len();
+//     let cols = matrix[0].len();
+//
+//     let mut transposed = vec![vec![0.0; rows]; cols];
+//
+//     for i in 0..rows {
+//         for j in 0..cols {
+//             transposed[j][i] = matrix[i][j];
+//         }
+//     }
+//
+//     transposed
+// }
+
+fn transpose(matrix: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
+    assert!(!matrix.is_empty(), "Matrix must have at least one row");
+    let row_len = matrix[0].len();
+
+    // Ensure all rows have the same length
+    for row in &matrix {
+        assert_eq!(row.len(), row_len, "All rows must have the same length");
+    }
+
+    let mut transposed = vec![Vec::with_capacity(matrix.len()); row_len];
+
+    for row in matrix {
+        for (j, val) in row.into_iter().enumerate() {
+            transposed[j].push(val);
+        }
+    }
+
+    transposed
+}
+
+// fn transpose<T: Clone>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
+//     if v.is_empty() || v[0].is_empty() {
+//         return vec![];
+//     }
+//
+//     let rows = v.len();
+//     let cols = v[0].len();
+//
+//     let mut transposed = vec![Vec::with_capacity(rows); cols];
+//     for row in v {
+//         for (j, item) in row.into_iter().enumerate() {
+//             transposed[j].push(item);
+//         }
+//     }
+//
+//     transposed
+// }
 
 #[test]
 fn test() {
@@ -223,4 +191,49 @@ fn test() {
     // }
 
     println!("stupid df {:?}", df);
+}
+
+#[test]
+fn test_ema_feature() -> Result<(), GlowError> {
+    use common::functions::csv::load_csv;
+    use std::path::PathBuf;
+
+    let name = "ema_20";
+    let param = OptimizableParam::new(name, 5, 1, 20);
+    let symbols = SymbolsPair::default();
+    let unique_symbols = symbols.get_unique_symbols();
+    let file_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("test_data.csv");
+    // let file_path = "optimization/data/test_data.csv";
+    let mut schema_fields = vec![Field::new(
+        "start_time".into(),
+        DataType::Datetime(TimeUnit::Milliseconds, None),
+    )];
+    for symbol in unique_symbols {
+        let (open_col, high_col, low_col, close_col) = symbol.get_ohlc_cols();
+        schema_fields.push(Field::new(open_col.into(), DataType::Float32));
+        schema_fields.push(Field::new(high_col.into(), DataType::Float32));
+        schema_fields.push(Field::new(low_col.into(), DataType::Float32));
+        schema_fields.push(Field::new(close_col.into(), DataType::Float32));
+    }
+    let default_schema = Schema::from_iter(schema_fields.clone());
+    let loaded_df = load_csv(file_path, &default_schema)?;
+    println!("@@@ LOADED DF {:?}", loaded_df);
+    let loaded_lf = loaded_df.lazy();
+    let ema_feature = EMAFeatureGenerator::new(name, param, symbols);
+    let test_lf = ema_feature.compute(&loaded_lf)?;
+    let result_df = test_lf.collect()?;
+    println!("@@@ RESULT DF {:?}", result_df);
+
+    Ok(())
+}
+
+#[test]
+fn test_windows() {
+    let vector = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+
+    for window in vector.windows(3) {
+        println!("THIS IS WINDOW {:?}", window);
+    }
 }

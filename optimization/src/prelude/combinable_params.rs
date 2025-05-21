@@ -89,7 +89,7 @@ impl<T> OptimizableParam<T> {
 impl OptimizableParam<u8> {
     pub fn new(name: &'static str, min: u8, step: u8, max: u8) -> Self {
         assert!(min < max, "min {} must be less than max {}", min, max);
-        assert!(step == 0, "step cannot be 0");
+        assert!(step != 0, "step cannot be 0");
         assert!(step < max, "step {} must be less than max {}", step, max);
         assert!(
             min + step <= max,

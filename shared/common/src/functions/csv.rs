@@ -152,7 +152,7 @@ pub fn load_interval_tick_dataframe(
     let symbol_tick_data_schema = symbol.derive_symbol_tick_data_schema();
 
     for date in days_between {
-        let path = get_tick_data_csv_path(date, data_provider_exchange_name, &symbol.name);
+        let path = get_tick_data_csv_path(date, data_provider_exchange_name, symbol.name);
         match load_csv(path, &symbol_tick_data_schema) {
             Ok(df) => {
                 if dataframe.is_none() {
