@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use super::combinable_params::{CombinableParam, FeatureGenerator, OptimizableParam};
+use chrono::DateTime;
 use common::structs::SymbolsPair;
 use glow_error::GlowError;
 use polars::prelude::*;
@@ -108,25 +111,6 @@ pub fn ewma(data: &[f32], alpha: f32) -> Vec<f32> {
     result
 }
 
-// pub fn transpose(matrix: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
-//     if matrix.is_empty() {
-//         return vec![];
-//     }
-//
-//     let rows = matrix.len();
-//     let cols = matrix[0].len();
-//
-//     let mut transposed = vec![vec![0.0; rows]; cols];
-//
-//     for i in 0..rows {
-//         for j in 0..cols {
-//             transposed[j][i] = matrix[i][j];
-//         }
-//     }
-//
-//     transposed
-// }
-
 fn transpose(matrix: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
     assert!(!matrix.is_empty(), "Matrix must have at least one row");
     let row_len = matrix[0].len();
@@ -147,24 +131,6 @@ fn transpose(matrix: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
     transposed
 }
 
-// fn transpose<T: Clone>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
-//     if v.is_empty() || v[0].is_empty() {
-//         return vec![];
-//     }
-//
-//     let rows = v.len();
-//     let cols = v[0].len();
-//
-//     let mut transposed = vec![Vec::with_capacity(rows); cols];
-//     for row in v {
-//         for (j, item) in row.into_iter().enumerate() {
-//             transposed[j].push(item);
-//         }
-//     }
-//
-//     transposed
-// }
-
 #[test]
 fn test() {
     let mut test: ListPrimitiveChunkedBuilder<Float32Type> = ListPrimitiveChunkedBuilder::new(
@@ -180,15 +146,6 @@ fn test() {
     let series: Series = result.into();
 
     let df = DataFrame::new(vec![series.into()]).unwrap();
-    // let test = FixedSizeListType::
-    // unsafe {
-    //     let builder = fixed_size_list::FixedSizeListNumericBuilder::new(
-    //         "test2".into(),
-    //         100_usize,
-    //         100_usize,
-    //         DataType::Float32,
-    //     );
-    // }
 
     println!("stupid df {:?}", df);
 }
@@ -198,7 +155,7 @@ fn test_ema_feature() -> Result<(), GlowError> {
     use common::functions::csv::load_csv;
     use std::path::PathBuf;
 
-    let name = "ema_20";
+    let name = "ewmas";
     let param = OptimizableParam::new(name, 5, 1, 20);
     let symbols = SymbolsPair::default();
     let unique_symbols = symbols.get_unique_symbols();
@@ -222,16 +179,74 @@ fn test_ema_feature() -> Result<(), GlowError> {
     println!("@@@ LOADED DF {:?}", loaded_df);
     let loaded_lf = loaded_df.lazy();
     let ema_feature = EMAFeatureGenerator::new(name, param, symbols);
-    let test_lf = ema_feature.compute(&loaded_lf)?;
-    let result_df = test_lf.collect()?;
-    println!("@@@ RESULT DF {:?}", result_df);
+    let mut result_lf = ema_feature.compute(&loaded_lf)?;
+    for param in ema_feature.param.range.iter() {
+        let alpha = calculate_span_alpha((*param).into())?;
+        let options = EWMOptions {
+            alpha: alpha.into(),
+            adjust: false,
+            bias: false,
+            min_periods: 1,
+            ignore_nulls: false,
+        };
+        let name = format!("ewma_{}", param);
+        result_lf = result_lf.with_columns([col("BTCUSDT_close").ewm_mean(options).alias(name)]);
+    }
+    let result_df = result_lf.collect()?;
+    let ewmas = result_df.column("ewmas")?;
+    let ewmas = ewmas.list()?;
+    let mut expected_values = HashMap::new();
+    for param in ema_feature.param.range.iter() {
+        let name = format!("ewma_{}", param);
+        let ewma_col = result_df.column(&name)?;
+        let ewma_col = ewma_col.f32()?;
+        let values = ewma_col.iter().map(|v| v.unwrap()).collect::<Vec<f32>>();
+        expected_values.insert(param, values);
+    }
+    let timestamps = result_df
+        .column("start_time")?
+        .datetime()?
+        .iter()
+        .collect::<Vec<_>>();
+    let mut values = HashMap::new();
+
+    for row_index in 0..result_df.height() {
+        let series = ewmas.get_as_series(row_index).unwrap();
+        let row_values = series
+            .f32()?
+            .iter()
+            .map(|v| v.unwrap())
+            .collect::<Vec<f32>>();
+
+        for (idx, param) in ema_feature.param.range.iter().enumerate() {
+            values.entry(param).or_insert(vec![]).push(row_values[idx]);
+        }
+    }
+
+    for param in ema_feature.param.range.clone() {
+        let found = values.get(&param).unwrap();
+        let expected = expected_values.get(&param).unwrap();
+        for row_index in 0..result_df.height() {
+            let diff = found[row_index] - expected[row_index];
+            assert!(
+                diff == 0.0,
+                "diff is not 0, IS {} at timestamp {:?}, param: {}",
+                diff,
+                DateTime::from_timestamp_millis(timestamps[row_index].unwrap())
+                    .unwrap()
+                    .to_rfc2822(),
+                param,
+            );
+        }
+    }
+    println!("Deu bom, obrigado meu Senhor e Meu Deus! Toda inteligência (e insistência de quebrar a cabeça até o código funcionar) que tenho, Vós que me destes. Tks, Carlo Acutis (rogai por nós), o código funciona!");
 
     Ok(())
 }
 
 #[test]
 fn test_windows() {
-    let vector = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+    let vector = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 
     for window in vector.windows(3) {
         println!("THIS IS WINDOW {:?}", window);
