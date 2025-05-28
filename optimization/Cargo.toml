@@ -21,6 +21,7 @@ polars = { workspace = true, features = [
   "dtype-u16",
 ] }
 polars-arrow = { workspace = true }
+rayon = { version = "1.10.0" }
 regex = { workspace = true }
 strategy = { workspace = true }
 tokio = { workspace = true }

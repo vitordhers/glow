@@ -1,25 +1,32 @@
-use std::collections::HashMap;
-
-use super::combinable_params::{CombinableParam, FeatureGenerator, OptimizableParam};
-use chrono::DateTime;
-use common::structs::SymbolsPair;
+use super::{
+    combinable_params::{CombinableParam, OptimizableParam},
+    strategy::FeaturesCacheStrategy,
+};
+use common::structs::Symbol;
 use glow_error::GlowError;
 use polars::prelude::*;
 
 pub struct EMAFeatureGenerator {
     pub name: &'static str,
     pub param: OptimizableParam<u8>,
-    pub symbols: SymbolsPair,
 }
 
 impl EMAFeatureGenerator {
-    pub fn new(name: &'static str, param: OptimizableParam<u8>, symbols: SymbolsPair) -> Self {
-        Self {
-            name,
-            param,
-            symbols,
-        }
+    pub fn new(name: &'static str, param: OptimizableParam<u8>) -> Self {
+        Self { name, param }
     }
+}
+
+pub trait FeatureGenerator: Sync + Send {
+    fn get_name(&self) -> &str;
+    fn get_param(&self) -> CombinableParam;
+    fn compute(
+        &self,
+        lf: &LazyFrame,
+        symbol: &Symbol,
+        cache: &FeaturesCacheStrategy,
+    ) -> Result<LazyFrame, GlowError>;
+    fn get_least_amount_of_rows(&self) -> Option<usize>;
 }
 
 impl FeatureGenerator for EMAFeatureGenerator {
@@ -31,16 +38,19 @@ impl FeatureGenerator for EMAFeatureGenerator {
         CombinableParam::Uint8(self.param.clone())
     }
 
-    fn compute(&self, lf: &LazyFrame) -> Result<LazyFrame, GlowError> {
+    fn compute(
+        &self,
+        lf: &LazyFrame,
+        symbol: &Symbol,
+        cache: &FeaturesCacheStrategy,
+    ) -> Result<LazyFrame, GlowError> {
         // firstly, get param range size
-        let param_size = self.param.range_size();
-        let close_col = self.symbols.quote.get_close_col();
+        let close_col = symbol.get_close_col();
         let mut result_lf = lf.clone();
         let output_type: SpecialEq<Arc<dyn FunctionOutputField>> =
             GetOutput::from_type(DataType::List(Box::new(DataType::Float32)));
         let range = self.param.range.clone();
         let name = PlSmallStr::from_static(self.name);
-        let name_ref = self.name.clone();
         result_lf = result_lf.with_column(
             col(close_col)
                 .apply_many(
@@ -68,7 +78,7 @@ impl FeatureGenerator for EMAFeatureGenerator {
                         let transposed_values = transpose(values);
                         (0..close_prices.len()).for_each(|row_idx| {
                             let mut col_values = vec![];
-                            for (col_idx, param) in range.clone().iter().enumerate() {
+                            for (col_idx, _param) in range.clone().iter().enumerate() {
                                 col_values.push(transposed_values[row_idx][col_idx]);
                             }
                             ca_builder.append_opt_slice(Some(&col_values));
@@ -83,6 +93,10 @@ impl FeatureGenerator for EMAFeatureGenerator {
                 .alias(name),
         );
         Ok(result_lf)
+    }
+
+    fn get_least_amount_of_rows(&self) -> Option<usize> {
+        self.param.get_least_amount_of_rows()
     }
 }
 
@@ -147,12 +161,15 @@ fn test() {
 
     let df = DataFrame::new(vec![series.into()]).unwrap();
 
-    println!("stupid df {:?}", df);
+    println!("df {:?}", df);
 }
 
 #[test]
 fn test_ema_feature() -> Result<(), GlowError> {
+    use chrono::DateTime;
     use common::functions::csv::load_csv;
+    use common::structs::{Symbol, SymbolsPair};
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     let name = "ewmas";
@@ -178,8 +195,9 @@ fn test_ema_feature() -> Result<(), GlowError> {
     let loaded_df = load_csv(file_path, &default_schema)?;
     println!("@@@ LOADED DF {:?}", loaded_df);
     let loaded_lf = loaded_df.lazy();
-    let ema_feature = EMAFeatureGenerator::new(name, param, symbols);
-    let mut result_lf = ema_feature.compute(&loaded_lf)?;
+    let ema_feature = EMAFeatureGenerator::new(name, param);
+    let mut result_lf =
+        ema_feature.compute(&loaded_lf, &symbols.quote, &FeaturesCacheStrategy::None)?;
     for param in ema_feature.param.range.iter() {
         let alpha = calculate_span_alpha((*param).into())?;
         let options = EWMOptions {

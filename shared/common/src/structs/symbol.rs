@@ -54,6 +54,14 @@ impl Symbol {
     }
 }
 
+impl Default for Symbol {
+    fn default() -> Self {
+        *SYMBOLS_MAP
+            .get(SymbolId::default().get_symbol_str())
+            .unwrap()
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct SymbolsPair {
     pub base: &'static Symbol,

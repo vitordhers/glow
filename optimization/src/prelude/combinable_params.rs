@@ -1,48 +1,4 @@
-use glow_error::GlowError;
-use polars::prelude::{DataType, LazyFrame, NamedFrom, Series};
-
-pub trait FeatureGenerator {
-    fn get_name(&self) -> &str;
-    fn get_param(&self) -> CombinableParam;
-    fn compute(&self, lf: &LazyFrame) -> Result<LazyFrame, GlowError>;
-}
-
-pub trait OptimizableStrategy<T> {
-    fn get_name(&self) -> &str;
-    fn get_indicators(&self) -> Vec<Box<dyn FeatureGenerator>>;
-    fn get_opening_indicators(&self) -> Vec<Box<dyn FeatureGenerator>>;
-    fn get_closing_indicators(&self) -> Vec<Box<dyn FeatureGenerator>>;
-
-    fn get_params(&self) -> Vec<CombinableParam> {
-        self.get_indicators()
-            .iter()
-            .map(|i| i.get_param())
-            .collect()
-    }
-    fn compute_opening_indicators(&self, lf: &LazyFrame) -> Result<LazyFrame, GlowError> {
-        let mut result_lf = lf.clone();
-        for indicator_generator in self.get_opening_indicators() {
-            result_lf = indicator_generator.compute(&result_lf)?;
-        }
-        Ok(result_lf)
-    }
-    fn compute_closing_indicators(&self, lf: &LazyFrame) -> Result<LazyFrame, GlowError> {
-        let mut result_lf = lf.clone();
-        for indicator_generator in self.get_closing_indicators() {
-            result_lf = indicator_generator.compute(&result_lf)?;
-        }
-        Ok(result_lf)
-    }
-    fn get_cartesian_product_len(&self) -> u32 {
-        self.get_params().iter().fold(0u32, |prev, p| {
-            let current_range_size: u32 = p.range_size().into();
-            if prev == 0 {
-                return current_range_size;
-            }
-            prev * current_range_size
-        })
-    }
-}
+use polars::prelude::*;
 
 #[derive(Debug, Clone)]
 pub enum CombinableParam {
@@ -108,5 +64,11 @@ impl OptimizableParam<u8> {
 
     pub fn get_range_as_series(&self) -> Series {
         Series::new(self.name.into(), self.range.clone())
+    }
+
+    pub fn get_least_amount_of_rows(&self) -> Option<usize> {
+        let last_param = self.range.last().expect("range to have last member");
+        let amount: usize = (last_param - 1).into();
+        Some(amount)
     }
 }

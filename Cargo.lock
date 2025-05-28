@@ -1704,6 +1704,7 @@ dependencies = [
  "num-traits",
  "polars",
  "polars-arrow",
+ "rayon",
  "regex",
  "strategy",
  "tokio",
