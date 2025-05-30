@@ -1,6 +1,6 @@
 use super::{cache::MaxReadsCache, features::FeatureGenerator, positions::PositionGenerator};
 use chrono::{DateTime, Utc};
-use common::structs::Symbol;
+use common::structs::{Symbol, SymbolsPair};
 use glow_error::GlowError;
 use polars::prelude::*;
 use std::{collections::HashMap, sync::LazyLock};
@@ -55,18 +55,19 @@ impl Strategy {
 }
 
 #[derive(Clone, Debug, Default)]
-pub enum FeaturesCacheStrategy {
+pub enum FeaturesCache {
     #[default]
     None,
-    Eager(HashMap<&'static str, HashMap<u32, Series>>),
-    LazyMaxReads(HashMap<&'static str, MaxReadsCache>),
+    List(Series),
+    Eager(HashMap<u32, Series>),
+    LazyMaxReads(MaxReadsCache),
 }
 
 // #[derive(Clone)]
 pub struct StrategyOptimizer {
     pub symbol: Symbol,
     pub period: BacktestPeriod,
-    pub features_cache: FeaturesCacheStrategy,
+    pub features_cache_map: HashMap<&'static str, FeaturesCache>,
     pub data: LazyFrame,
     pub strategy: &'static Strategy,
 }
@@ -74,9 +75,9 @@ pub struct StrategyOptimizer {
 impl StrategyOptimizer {
     pub fn new(period: BacktestPeriod, strategy_id: Option<OptimizableStrategyId>) -> Self {
         Self {
-            symbol: Symbol::default(),
+            symbol: *SymbolsPair::default().quote,
             period,
-            features_cache: FeaturesCacheStrategy::default(),
+            features_cache_map: HashMap::new(),
             data: DataFrame::empty().lazy(),
             strategy: STRATEGIES_MAP
                 .get(&strategy_id.unwrap_or_default())
@@ -92,7 +93,7 @@ impl StrategyOptimizer {
     pub fn compute_features(&mut self) -> Result<(), GlowError> {
         let mut data = self.data.clone();
         for feature_generator in self.strategy.indicators.iter().clone() {
-            data = feature_generator.compute(&data, &self.symbol, &self.features_cache)?;
+            data = feature_generator.compute(&data, &self.symbol, &mut self.features_cache_map)?;
         }
         Ok(())
     }

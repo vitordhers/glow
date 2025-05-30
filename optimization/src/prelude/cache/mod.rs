@@ -1,3 +1,4 @@
+use glow_error::GlowError;
 use polars::prelude::*;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, RwLock};
@@ -37,14 +38,16 @@ use std::sync::{Mutex, RwLock};
 
 #[derive(Clone, Debug)]
 pub struct MaxReadsCache {
+    pub feature_series: Series,
     pub cache: Arc<RwLock<HashMap<u32, Arc<Series>>>>,
     pub reads_count: Arc<Mutex<HashMap<u32, u32>>>,
     pub max_reads_before_eviction: u32,
 }
 
 impl MaxReadsCache {
-    pub fn new(max_reads_before_eviction: u32) -> Self {
+    pub fn new(feature_series: &Series, max_reads_before_eviction: u32) -> Self {
         Self {
+            feature_series: feature_series.clone(),
             cache: Arc::new(RwLock::new(HashMap::new())),
             reads_count: Arc::new(Mutex::new(HashMap::new())),
             max_reads_before_eviction,
@@ -72,11 +75,11 @@ impl MaxReadsCache {
         series.cloned()
     }
 
-    pub fn insert<'a>(&self, key: u32, series: &'a Series) -> &'a Series {
-        let mut cache = self.cache.write().unwrap();
-        cache.insert(key, Arc::new(series.clone()));
-        let mut counts_map = self.reads_count.lock().unwrap();
+    pub fn insert(&self, key: u32, series: &Arc<Series>) -> Result<(), GlowError> {
+        let mut cache = self.cache.write()?;
+        cache.insert(key, series.clone());
+        let mut counts_map = self.reads_count.lock()?;
         counts_map.insert(key, 1);
-        series
+        Ok(())
     }
 }

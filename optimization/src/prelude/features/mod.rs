@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use super::{
     combinable_params::{CombinableParam, OptimizableParam},
-    strategy::FeaturesCacheStrategy,
+    strategy::FeaturesCache,
 };
 use common::structs::Symbol;
 use glow_error::GlowError;
@@ -24,7 +26,7 @@ pub trait FeatureGenerator: Sync + Send {
         &self,
         lf: &LazyFrame,
         symbol: &Symbol,
-        cache: &FeaturesCacheStrategy,
+        features_cache: &mut HashMap<&str, FeaturesCache>,
     ) -> Result<LazyFrame, GlowError>;
     fn get_least_amount_of_rows(&self) -> Option<usize>;
 }
@@ -42,7 +44,7 @@ impl FeatureGenerator for EMAFeatureGenerator {
         &self,
         lf: &LazyFrame,
         symbol: &Symbol,
-        cache: &FeaturesCacheStrategy,
+        features_cache: &mut HashMap<&str, FeaturesCache>,
     ) -> Result<LazyFrame, GlowError> {
         // firstly, get param range size
         let close_col = symbol.get_close_col();
@@ -53,9 +55,9 @@ impl FeatureGenerator for EMAFeatureGenerator {
         let name = PlSmallStr::from_static(self.name);
         result_lf = result_lf.with_column(
             col(close_col)
-                .apply_many(
-                    move |columns| {
-                        let close_prices = columns[0].f32()?;
+                .map(
+                    move |column| {
+                        let close_prices = column.f32()?;
                         let close_prices: Vec<f32> = close_prices.into_no_null_iter().collect();
                         let series_len = close_prices.len();
                         let values_capacity = range.len() * series_len;
@@ -84,10 +86,10 @@ impl FeatureGenerator for EMAFeatureGenerator {
                             ca_builder.append_opt_slice(Some(&col_values));
                         });
                         let chunked_array: ChunkedArray<ListType> = ca_builder.finish();
+                        // Eager cache should happen here
                         let list_series = chunked_array.into_series();
                         Ok(Some(list_series.into()))
                     },
-                    &[],
                     output_type,
                 )
                 .alias(name),
@@ -168,7 +170,7 @@ fn test() {
 fn test_ema_feature() -> Result<(), GlowError> {
     use chrono::DateTime;
     use common::functions::csv::load_csv;
-    use common::structs::{Symbol, SymbolsPair};
+    use common::structs::SymbolsPair;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -196,8 +198,8 @@ fn test_ema_feature() -> Result<(), GlowError> {
     println!("@@@ LOADED DF {:?}", loaded_df);
     let loaded_lf = loaded_df.lazy();
     let ema_feature = EMAFeatureGenerator::new(name, param);
-    let mut result_lf =
-        ema_feature.compute(&loaded_lf, &symbols.quote, &FeaturesCacheStrategy::None)?;
+    let mut features_cache = HashMap::new();
+    let mut result_lf = ema_feature.compute(&loaded_lf, symbols.quote, &mut features_cache)?;
     for param in ema_feature.param.range.iter() {
         let alpha = calculate_span_alpha((*param).into())?;
         let options = EWMOptions {

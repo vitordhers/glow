@@ -10,6 +10,7 @@ use std::{
     io::Error as IoError,
     num::{ParseFloatError, ParseIntError},
     string::FromUtf8Error,
+    sync::PoisonError,
 };
 use tokio_tungstenite::tungstenite::Error as TugsteniteError;
 use url::ParseError as UrlParseError;
@@ -58,6 +59,12 @@ impl Error for GlowError {}
 impl From<VarError> for GlowError {
     fn from(error: VarError) -> Self {
         Self::new(String::from("Var Error"), error.to_string())
+    }
+}
+
+impl<T> From<PoisonError<T>> for GlowError {
+    fn from(error: PoisonError<T>) -> Self {
+        Self::new("Poison Error".to_string(), error.to_string())
     }
 }
 

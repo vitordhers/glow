@@ -12,8 +12,6 @@
 // use std::marker::Send;
 // use traits::{optimizable_indicator::OptimizableIndicator, optimizable_signal::OptimizableSignal};
 
-use std::task::Wake;
-
 use common::r#static::get_default_symbol;
 use polars::prelude::*;
 use strategy::schemas::StrategySchema;
@@ -90,12 +88,8 @@ fn main() -> PolarsResult<()> {
 
     // try to get value of col_3
     // let result = df.column("features2")?.struct_()?.field_by_name("col_3")?;
-    let binding = df
-        .column("features2")?
-        .struct_()?
-        .fields_as_series();
-    let result = binding
-        .get(0).unwrap();
+    let binding = df.column("features2")?.struct_()?.fields_as_series();
+    let result = binding.get(0).unwrap();
 
     println!("{:?}", df);
     println!("{:?}", result);
