@@ -15,3 +15,4 @@ pub mod trade_status;
 pub mod trading_data_update;
 pub mod granularity;
 pub mod symbol_id;
+pub mod trading_action;

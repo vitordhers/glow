@@ -1,9 +1,16 @@
-use super::{cache::MaxReadsCache, features::FeatureGenerator, positions::PositionGenerator};
+use super::{
+    cache::MaxReadsCache,
+    features::FeatureGenerator,
+    positions::{FeatureParam, PositionGenerator},
+};
 use chrono::{DateTime, Utc};
 use common::structs::{Symbol, SymbolsPair};
 use glow_error::GlowError;
 use polars::prelude::*;
-use std::{collections::HashMap, sync::LazyLock};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::LazyLock,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct BacktestPeriod {
@@ -97,6 +104,124 @@ impl StrategyOptimizer {
         }
         Ok(())
     }
+
+    fn select_features_for_param_combination(
+        &mut self,
+        param_combination: Vec<FeatureParam>,
+    ) -> Result<LazyFrame, GlowError> {
+        let mut features_lf = self.data.clone();
+        let mut cols_to_drop = HashSet::new();
+        for feature_param in param_combination {
+            let cache = self.features_cache_map.get_mut(feature_param.feature_name);
+            features_lf = append_feature_param_col(features_lf, feature_param, cache)?;
+            cols_to_drop.insert(feature_param.feature_name);
+        }
+        // drop params from lf
+        features_lf = features_lf.drop(cols_to_drop.iter().cloned().collect::<Vec<_>>());
+        Ok(features_lf)
+    }
+}
+
+fn set_series_as_lf_col(lf: LazyFrame, feature_param_name: &str, series: Series) -> LazyFrame {
+    // TODO: some sort of assertion would be nice here
+    lf.with_column(lit(series).alias(feature_param_name))
+}
+
+fn lazily_append_feature_index_to_lf(lf: LazyFrame, feature_param: FeatureParam) -> LazyFrame {
+    // TODO: both closure and output type of this depends on feature DType
+    let output_type: SpecialEq<Arc<dyn FunctionOutputField>> =
+        GetOutput::from_type(DataType::Float32);
+    let param_index = feature_param.param_index as usize;
+    lf.with_column(
+        col(feature_param.feature_name)
+            .map(
+                move |column| {
+                    let params = column.list()?;
+                    let mut outer = vec![];
+                    for series in params.into_no_null_iter() {
+                        let ca = series.f32()?;
+                        let inner: Vec<f32> = ca.into_no_null_iter().collect();
+                        outer.push(inner[param_index]);
+                    }
+                    let series = Series::new("".into(), outer);
+                    Ok(Some(series.into()))
+                },
+                output_type,
+            )
+            .alias(feature_param.feature_param_name),
+    )
+}
+
+fn with_list_series_get_features_at_param(
+    feature_series: &Series,
+    feature_param: FeatureParam,
+) -> Result<Series, GlowError> {
+    let features_list_ca = feature_series.list()?;
+    let mut features_list = Vec::new();
+    for opt_series in features_list_ca.amortized_iter() {
+        let inner_series = opt_series.expect("AmortSeries to be Some");
+        // TODO: this must be converted according to feature DType
+        let ca = inner_series.as_ref().f32()?;
+        let values: Vec<f32> = ca.into_no_null_iter().collect();
+        features_list.push(values[(feature_param.param_index) as usize])
+    }
+    Ok(Series::new(
+        feature_param.feature_param_name.into(),
+        features_list,
+    ))
+}
+
+fn with_series_append_feature_index_to_lf(
+    lf: LazyFrame,
+    feature_series: &Series,
+    feature_param: FeatureParam,
+) -> Result<LazyFrame, GlowError> {
+    let series = with_list_series_get_features_at_param(feature_series, feature_param)?;
+    Ok(set_series_as_lf_col(
+        lf,
+        feature_param.feature_param_name,
+        series,
+    ))
+}
+
+fn append_feature_param_to_lf_from_mrc(
+    lf: LazyFrame,
+    param_cache: &mut MaxReadsCache,
+    feature_param: FeatureParam,
+) -> Result<LazyFrame, GlowError> {
+    let series = param_cache
+        .get(&feature_param.param_index)
+        .unwrap_or_else(|| {
+            let series =
+                with_list_series_get_features_at_param(&param_cache.feature_series, feature_param)
+                    .expect("get_params_from_list_at_index to yield valid series");
+            Arc::new(series)
+        });
+    let _ = param_cache.insert(feature_param.param_index, &series);
+    let lf = set_series_as_lf_col(lf, feature_param.feature_param_name, (*series).clone());
+    Ok(lf)
+}
+
+fn append_feature_param_col(
+    lf: LazyFrame,
+    feature_param: FeatureParam,
+    cache: Option<&mut FeaturesCache>,
+) -> Result<LazyFrame, GlowError> {
+    let lf = match cache.unwrap_or(&mut FeaturesCache::None) {
+        FeaturesCache::None => lazily_append_feature_index_to_lf(lf, feature_param),
+        FeaturesCache::Eager(cache) => set_series_as_lf_col(
+            lf,
+            feature_param.feature_param_name,
+            cache.get(&feature_param.param_index).unwrap().clone(),
+        ),
+        FeaturesCache::List(feature_series) => {
+            with_series_append_feature_index_to_lf(lf, feature_series, feature_param)?
+        }
+        FeaturesCache::LazyMaxReads(cache) => {
+            append_feature_param_to_lf_from_mrc(lf, cache, feature_param)?
+        }
+    };
+    Ok(lf)
 }
 
 #[test]
