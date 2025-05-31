@@ -1,27 +1,22 @@
 use super::side::Side;
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy, Default)]
 pub enum SignalCategory {
+    #[default]
+    KeepPosition,
     GoShort,
     CloseShort,
     // RevertShort,
     GoLong,
     CloseLong,
     // RevertLong,
-    KeepPosition,
     ClosePosition,
     // RevertPosition,
     StopLoss,
     // TrailingStopLoss,
     TakeProfit,
     LeverageBankrupcty,
-}
-
-impl Default for SignalCategory {
-    fn default() -> Self {
-        SignalCategory::KeepPosition
-    }
 }
 
 impl SignalCategory {
