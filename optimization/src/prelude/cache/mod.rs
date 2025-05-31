@@ -1,40 +1,7 @@
 use glow_error::GlowError;
 use polars::prelude::*;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::{Mutex, RwLock};
-
-// pub struct FifoCache {
-//     map: HashMap<String, Series>,
-//     order: VecDeque<String>,
-//     capacity: usize,
-// }
-//
-// impl FifoCache {
-//     fn new(capacity: usize) -> Self {
-//         Self {
-//             map: HashMap::new(),
-//             order: VecDeque::new(),
-//             capacity,
-//         }
-//     }
-//
-//     fn insert(&mut self, key: String, value: Series) {
-//         if !self.map.contains_key(&key) {
-//             if self.order.len() == self.capacity {
-//                 // Evict the oldest
-//                 if let Some(old_key) = self.order.pop_front() {
-//                     self.map.remove(&old_key);
-//                 }
-//             }
-//             self.order.push_back(key.clone());
-//         }
-//         self.map.insert(key, value);
-//     }
-//
-//     fn get(&self, key: &str) -> Option<&Series> {
-//         self.map.get(key)
-//     }
-// }
 
 #[derive(Clone, Debug)]
 pub struct MaxReadsCache {
@@ -82,4 +49,13 @@ impl MaxReadsCache {
         counts_map.insert(key, 1);
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum FeaturesCache {
+    #[default]
+    None,
+    List(Series),
+    Eager(HashMap<u32, Series>),
+    LazyMaxReads(MaxReadsCache),
 }

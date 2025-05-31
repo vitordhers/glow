@@ -1,7 +1,7 @@
 use super::{
-    cache::MaxReadsCache,
+    cache::{FeaturesCache, MaxReadsCache},
     features::FeatureGenerator,
-    positions::{FeatureParam, PositionGenerator},
+    positions::PositionGenerator,
 };
 use chrono::{DateTime, Utc};
 use common::structs::{Symbol, SymbolsPair};
@@ -38,6 +38,13 @@ pub static STRATEGIES_MAP: LazyLock<HashMap<OptimizableStrategyId, Strategy>> =
         HashMap::new()
     });
 
+#[derive(Debug, Clone, Copy)]
+pub struct FeatureParam<'a> {
+    pub feature_name: &'static str,
+    pub feature_param_name: &'a str,
+    pub param_index: u32,
+}
+
 pub struct Strategy {
     pub name: &'static str,
     pub indicators: Vec<Box<dyn FeatureGenerator>>,
@@ -59,15 +66,6 @@ impl Strategy {
             close_signals,
         }
     }
-}
-
-#[derive(Clone, Debug, Default)]
-pub enum FeaturesCache {
-    #[default]
-    None,
-    List(Series),
-    Eager(HashMap<u32, Series>),
-    LazyMaxReads(MaxReadsCache),
 }
 
 // #[derive(Clone)]
@@ -117,7 +115,7 @@ impl StrategyOptimizer {
             cols_to_drop.insert(feature_param.feature_name);
         }
         // drop params from lf
-        features_lf = features_lf.drop(cols_to_drop.iter().cloned().collect::<Vec<_>>());
+        features_lf = features_lf.drop(cols_to_drop.iter().copied().collect::<Vec<_>>());
         Ok(features_lf)
     }
 }

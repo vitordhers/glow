@@ -1,52 +1,16 @@
-use super::{cache::MaxReadsCache, strategy::FeaturesCache};
-use common::structs::Symbol;
+use super::{cache::FeaturesCache, strategy::FeatureParam};
+use common::{
+    enums::trading_action::{Direction, SignalType},
+    structs::Symbol,
+};
 use glow_error::GlowError;
 use polars::prelude::*;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::LazyLock,
-};
-
-pub static POSITIONS_NAME_MAP: LazyLock<HashMap<Signal, &'static str>> = LazyLock::new(|| {
-    let mut positions_name_map = HashMap::new();
-    positions_name_map.insert(Signal::Open(OpenSignal::Short), "short");
-    positions_name_map.insert(Signal::Open(OpenSignal::Long), "long");
-    positions_name_map.insert(Signal::Close(CloseSignal::Short), "short_close");
-    positions_name_map.insert(Signal::Close(CloseSignal::Long), "short_close");
-    positions_name_map.insert(Signal::Close(CloseSignal::Close), "close");
-    positions_name_map
-});
-
-#[derive(Clone, Hash, Debug, PartialEq, Eq)]
-pub enum OpenSignal {
-    Short,
-    Long,
-}
-
-#[derive(Clone, Hash, Debug, PartialEq, Eq)]
-pub enum CloseSignal {
-    Short,
-    Long,
-    Close,
-}
-
-#[derive(Clone, Hash, Debug, PartialEq, Eq)]
-pub enum Signal {
-    Open(OpenSignal),
-    Close(CloseSignal),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct FeatureParam<'a> {
-    pub feature_name: &'static str,
-    pub feature_param_name: &'a str,
-    pub param_index: u32,
-}
+use std::collections::HashMap;
 
 pub trait PositionGenerator: Sync + Send {
-    fn get_signal(&self) -> Signal;
+    fn get_signal(&self) -> SignalType;
     fn get_position_name(&self) -> &'static str {
-        POSITIONS_NAME_MAP.get(&self.get_signal()).unwrap()
+        self.get_signal().as_str()
     }
     fn compute(
         &self,
@@ -60,8 +24,8 @@ pub trait PositionGenerator: Sync + Send {
 pub struct SimpleEmaShortGenerator {}
 
 impl PositionGenerator for SimpleEmaShortGenerator {
-    fn get_signal(&self) -> Signal {
-        Signal::Open(OpenSignal::Short)
+    fn get_signal(&self) -> SignalType {
+        SignalType::Open(Direction::Short)
     }
 
     fn compute(
@@ -71,7 +35,6 @@ impl PositionGenerator for SimpleEmaShortGenerator {
         param_combination: Vec<FeatureParam>,
         features_cache: &mut HashMap<&str, FeaturesCache>,
     ) -> Result<LazyFrame, GlowError> {
-        todo!();
         // let short_col = SignalCategory::GoShort.get_column();
         // let long_col = SignalCategory::GoLong.get_column();
         // let close_short_col = SignalCategory::CloseShort.get_column();
@@ -138,9 +101,7 @@ impl PositionGenerator for SimpleEmaShortGenerator {
         // let updated_lf = lf
         //     .clone()
         //     .left_join(features_lf, "start_time", "start_time");
-        // create new df from cache / features
-        // lazify if needed
-        // join lfs
+        todo!()
     }
 }
 //
@@ -183,4 +144,13 @@ fn test_col_replace() {
     let lf = lf.with_column(lit(new_col).alias("a")); // ✅ Replaces "a"
     let out = lf.collect().unwrap();
     println!("REPLACED DF {:?}", out);
+}
+
+#[test]
+fn test_bool_cols() -> Result<(), GlowError> {
+    let bools = Series::new("".into(), &[true, false, true, true]);
+    let column = Column::new("test_col".into(), bools.into_series());
+    let df = DataFrame::new(vec![column])?;
+    println!("{:?}", df);
+    Ok(())
 }

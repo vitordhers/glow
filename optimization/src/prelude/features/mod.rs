@@ -1,12 +1,11 @@
-use std::collections::HashMap;
-
 use super::{
+    cache::FeaturesCache,
     combinable_params::{CombinableParam, OptimizableParam},
-    strategy::FeaturesCache,
 };
 use common::structs::Symbol;
 use glow_error::GlowError;
 use polars::prelude::*;
+use std::collections::HashMap;
 
 pub struct EMAFeatureGenerator {
     pub name: &'static str,
