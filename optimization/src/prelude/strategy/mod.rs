@@ -1,7 +1,7 @@
 use super::{
     cache::{FeaturesCache, MaxReadsCache},
     features::FeatureGenerator,
-    positions::PositionGenerator,
+    positions::PositionsGenerator,
 };
 use chrono::{DateTime, Utc};
 use common::structs::{Symbol, SymbolsPair};
@@ -47,23 +47,20 @@ pub struct FeatureParam<'a> {
 
 pub struct Strategy {
     pub name: &'static str,
-    pub indicators: Vec<Box<dyn FeatureGenerator>>,
-    pub open_signals: Vec<Box<dyn PositionGenerator>>,
-    pub close_signals: Vec<Box<dyn PositionGenerator>>,
+    pub features_generators: Vec<Box<dyn FeatureGenerator>>,
+    pub positions_generators: Box<dyn PositionsGenerator>,
 }
 
 impl Strategy {
     pub fn new(
         name: &'static str,
-        indicators: Vec<Box<dyn FeatureGenerator>>,
-        open_signals: Vec<Box<dyn PositionGenerator>>,
-        close_signals: Vec<Box<dyn PositionGenerator>>,
+        features_generators: Vec<Box<dyn FeatureGenerator>>,
+        positions_generators: Box<dyn PositionsGenerator>,
     ) -> Self {
         Self {
             name,
-            indicators,
-            open_signals,
-            close_signals,
+            features_generators,
+            positions_generators,
         }
     }
 }
@@ -97,7 +94,7 @@ impl StrategyOptimizer {
 
     pub fn compute_features(&mut self) -> Result<(), GlowError> {
         let mut data = self.data.clone();
-        for feature_generator in self.strategy.indicators.iter().clone() {
+        for feature_generator in self.strategy.features_generators.iter().clone() {
             data = feature_generator.compute(&data, &self.symbol, &mut self.features_cache_map)?;
         }
         Ok(())

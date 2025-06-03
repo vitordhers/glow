@@ -1,33 +1,22 @@
 use super::{cache::FeaturesCache, strategy::FeatureParam};
 use common::{
-    enums::trading_action::{Direction, SignalType},
+    enums::trading_action::{Direction, SignalSide, SignalType},
     structs::Symbol,
 };
 use glow_error::GlowError;
 use polars::prelude::*;
 use std::collections::HashMap;
 
-pub trait PositionGenerator: Sync + Send {
-    fn get_signal(&self) -> SignalType;
-    fn get_position_name(&self) -> &'static str {
-        self.get_signal().as_str()
-    }
-    fn compute(
+type GetClosureFnResult =
+    Box<dyn Fn(&mut [Column]) -> PolarsResult<Option<Column>> + Send + Sync + 'static>;
+
+pub trait PositionsGenerator: Sync + Send {
+    fn generates_signals(&self) -> Vec<SignalType>;
+    fn get_closure(
         &self,
-        lf: &LazyFrame,
-        symbol: &Symbol,
         param_combination: Vec<FeatureParam>,
         features_cache: &mut HashMap<&str, FeaturesCache>,
-    ) -> Result<LazyFrame, GlowError>;
-}
-
-pub struct SimpleEmaShortGenerator {}
-
-impl PositionGenerator for SimpleEmaShortGenerator {
-    fn get_signal(&self) -> SignalType {
-        SignalType::Open(Direction::Short)
-    }
-
+    ) -> GetClosureFnResult;
     fn compute(
         &self,
         lf: &LazyFrame,
@@ -35,6 +24,103 @@ impl PositionGenerator for SimpleEmaShortGenerator {
         param_combination: Vec<FeatureParam>,
         features_cache: &mut HashMap<&str, FeaturesCache>,
     ) -> Result<LazyFrame, GlowError> {
+        let result_lf = lf.clone();
+        let close_price_col = symbol.get_close_col();
+        let output_type: SpecialEq<Arc<dyn FunctionOutputField>> =
+            GetOutput::from_type(DataType::UInt8);
+        let arguments: &[Expr] =
+            &param_combination
+                .iter()
+                .cloned()
+                .fold(Vec::new(), |mut acc, param| {
+                    acc.push(col(param.feature_param_name));
+                    acc
+                });
+        let closure = self.get_closure(param_combination, features_cache);
+        let result_lf = result_lf.with_column(
+            col(close_price_col)
+                .map_many(move |s| closure(s), arguments, output_type)
+                .alias("signals"),
+        );
+        Ok(result_lf)
+    }
+}
+
+pub struct SimpleEmaShortGenerator {}
+
+impl PositionsGenerator for SimpleEmaShortGenerator {
+    fn generates_signals(&self) -> Vec<SignalType> {
+        vec![
+            SignalType::Open(Direction::Short),
+            SignalType::Open(Direction::Long),
+            SignalType::Close(SignalSide::Side(Direction::Short)),
+            SignalType::Close(SignalSide::Side(Direction::Long)),
+        ]
+    }
+
+    fn get_closure(
+        &self,
+        param_combination: Vec<FeatureParam>,
+        features_cache: &mut HashMap<&str, FeaturesCache>,
+    ) -> GetClosureFnResult {
+        let param_combination = param_combination.clone();
+        let closure = move |cols: &mut [Column]| {
+            let close_prices: Vec<f32> = cols
+                .first()
+                .expect("columns to have at least one member")
+                .f32()
+                .expect("")
+                .into_no_null_iter()
+                .collect();
+            let fast_ewma_col = param_combination[0].feature_param_name;
+            let slow_ewma_col = param_combination[1].feature_param_name;
+            let fast_ewmas: Vec<f32> = cols
+                .get(1)
+                .expect("columns to have fast ewmas values")
+                .f32()
+                .expect("")
+                .into_no_null_iter()
+                .collect();
+            let slow_ewmas: Vec<f32> = cols
+                .get(2)
+                .expect("columns to have slow ewmas values")
+                .f32()
+                .expect("")
+                .into_no_null_iter()
+                .collect();
+            let min_window_to_calculate = usize::max(
+                param_combination[0].param_index as usize,
+                param_combination[1].param_index as usize,
+            );
+            let mut signals: Vec<Option<Vec<u8>>> = vec![None];
+            for (index, _) in close_prices.iter().enumerate() {
+                if index == 0 {
+                    continue;
+                }
+                if index < min_window_to_calculate {
+                    signals.push(None);
+                    continue;
+                }
+                let prev_fast_ewma = fast_ewmas[index - 1];
+                let curr_fast_ewma = fast_ewmas[index];
+                let prev_slow_ewma = slow_ewmas[index - 1];
+                let curr_slow_ewma = slow_ewmas[index];
+                let fast_ewma_lesser_than_slow_ewma = curr_fast_ewma < curr_slow_ewma;
+                let fast_ewma_greater_than_slow_ewma = curr_fast_ewma > curr_slow_ewma;
+                let prev_fast_ewma_lesser_than_prev_slow_ewma = prev_fast_ewma < prev_slow_ewma;
+                let prev_fast_ewma_greater_than_prev_slow_ewma = prev_fast_ewma > prev_slow_ewma;
+
+                if fast_ewma_greater_than_slow_ewma && prev_fast_ewma_lesser_than_prev_slow_ewma {
+                    signals.push(Some(vec![SignalType::Open(Direction::Long).into()]));
+                    continue;
+                }
+                if fast_ewma_lesser_than_slow_ewma && prev_fast_ewma_greater_than_prev_slow_ewma {
+                    signals.push(Some(vec![SignalType::Open(Direction::Short).into()]));
+                    continue;
+                }
+                signals.push(None);
+            }
+        };
         // let short_col = SignalCategory::GoShort.get_column();
         // let long_col = SignalCategory::GoLong.get_column();
         // let close_short_col = SignalCategory::CloseShort.get_column();
@@ -80,28 +166,7 @@ impl PositionGenerator for SimpleEmaShortGenerator {
         //         .otherwise(lit(0))
         //         .alias(close_long_col),
         // ]);
-        //
-        // Ok(signal_lf)
-        // let features_lf = match features_cache {
-        //     FeaturesCacheStrategy::None => todo!(),
-        //     FeaturesCacheStrategy::Eager(hash_map) => {
-        //         let mut df = DataFrame::empty();
-        //         let mut columns = vec![];
-        //         // add start_time series
-        //         for (param_name, param_index) in param_combination.iter() {
-        //             let param_cache = hash_map.get(param_name).expect("hashmap to contain param");
-        //             let column = get_param_from_cache(param_name, param_index, param_cache)?;
-        //             columns.push(column);
-        //         }
-        //         df = df.hstack(&columns)?;
-        //         df.lazy()
-        //     }
-        //     FeaturesCacheStrategy::LazyMaxReads(hash_map) => todo!(),
-        // };
-        // let updated_lf = lf
-        //     .clone()
-        //     .left_join(features_lf, "start_time", "start_time");
-        todo!()
+        Box::new(closure)
     }
 }
 //
