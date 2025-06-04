@@ -1,4 +1,4 @@
-use glow_error::GlowError;
+use glow_error::{poison, GlowError};
 use polars::prelude::*;
 use std::collections::HashMap;
 use std::sync::{Mutex, RwLock};
@@ -43,9 +43,9 @@ impl MaxReadsCache {
     }
 
     pub fn insert(&self, key: u32, series: &Arc<Series>) -> Result<(), GlowError> {
-        let mut cache = self.cache.write()?;
+        let mut cache = self.cache.write().map_err(poison)?;
         cache.insert(key, series.clone());
-        let mut counts_map = self.reads_count.lock()?;
+        let mut counts_map = self.reads_count.lock().map_err(poison)?;
         counts_map.insert(key, 1);
         Ok(())
     }

@@ -39,9 +39,9 @@ pub static STRATEGIES_MAP: LazyLock<HashMap<OptimizableStrategyId, Strategy>> =
     });
 
 #[derive(Debug, Clone, Copy)]
-pub struct FeatureParam<'a> {
+pub struct FeatureParam {
     pub feature_name: &'static str,
-    pub feature_param_name: &'a str,
+    pub feature_param_name: &'static str,
     pub param_index: u32,
 }
 

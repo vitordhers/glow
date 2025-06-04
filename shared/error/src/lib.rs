@@ -62,10 +62,8 @@ impl From<VarError> for GlowError {
     }
 }
 
-impl<T> From<PoisonError<T>> for GlowError {
-    fn from(error: PoisonError<T>) -> Self {
-        Self::new("Poison Error".to_string(), error.to_string())
-    }
+pub fn poison<T>(err: PoisonError<T>) -> GlowError {
+    GlowError::new("Poison Error".to_string(), err.to_string())
 }
 
 impl From<UrlParseError> for GlowError {

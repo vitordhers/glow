@@ -1,5 +1,4 @@
 use std::ops::Not;
-
 use super::side::Side;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -161,7 +160,7 @@ impl From<Option<u8>> for Action {
                         Action::Signal(signal)
                     }
                 }
-                252 | 253 | 254 | 255 => {
+                252..=255 => {
                     let result: Result<EventType, &'static str> = value.try_into();
                     if result.is_err() {
                         Action::KeepPosition
@@ -231,42 +230,34 @@ impl TradingState {
             (None, None) => prev_state,
             (None, Some(_)) => TradingState::Neutral,
             (Some(_), Some(_)) => TradingState::Neutral,
-            (Some(signals), None) => match (prev_state, signals.contains(&2)) {
-                (TradingState::Neutral, true) => TradingState::Long,
-                (TradingState::Neutral, _) => prev_state,
-                (TradingState::Short | TradingState::Long, SignalType::Open(_)) => prev_state,
-                (TradingState::Short, SignalType::Close(signal_side)) => match signal_side {
-                    SignalSide::Both => TradingState::Neutral,
-                    SignalSide::Side(direction) => match direction {
-                        Direction::Short => TradingState::Neutral,
-                        Direction::Long => prev_state,
-                    },
-                },
-                (TradingState::Short, SignalType::Revert(signal_side)) => match signal_side {
-                    SignalSide::Both => !prev_state,
-                    SignalSide::Side(direction) => match direction {
-                        Direction::Short => TradingState::Long,
-                        Direction::Long => prev_state,
-                    },
-                },
-                (TradingState::Long, SignalType::Close(signal_side)) => match signal_side {
-                    SignalSide::Both => TradingState::Neutral,
-                    SignalSide::Side(direction) => match direction {
-                        Direction::Short => prev_state,
-                        Direction::Long => TradingState::Neutral,
-                    },
-                },
-                (TradingState::Long, SignalType::Revert(signal_side)) => match signal_side {
-                    SignalSide::Both => !prev_state,
-                    SignalSide::Side(direction) => match direction {
-                        Direction::Short => prev_state,
-                        Direction::Long => TradingState::Short,
-                    },
-                },
-                (TradingState::Short, true) => todo!(),
-                (TradingState::Short, false) => todo!(),
-                (TradingState::Long, true) => todo!(),
-                (TradingState::Long, false) => todo!(),
+            (Some(signals), None) => match prev_state {
+                TradingState::Neutral => {
+                    if signals.contains(&2) {
+                        TradingState::Long
+                    } else if signals.contains(&1) {
+                        TradingState::Short
+                    } else {
+                        prev_state
+                    }
+                }
+                TradingState::Short => {
+                    if signals.contains(&21) || signals.contains(&23) {
+                        TradingState::Long
+                    } else if signals.contains(&11) || signals.contains(&13) {
+                        TradingState::Neutral
+                    } else {
+                        prev_state
+                    }
+                }
+                TradingState::Long => {
+                    if signals.contains(&22) || signals.contains(&23) {
+                        TradingState::Short
+                    } else if signals.contains(&12) || signals.contains(&13) {
+                        TradingState::Neutral
+                    } else {
+                        prev_state
+                    }
+                }
             },
         }
     }

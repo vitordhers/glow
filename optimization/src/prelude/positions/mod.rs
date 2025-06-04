@@ -1,33 +1,27 @@
-use super::{cache::FeaturesCache, strategy::FeatureParam};
+use super::strategy::FeatureParam;
 use common::{
-    enums::trading_action::{Direction, SignalSide, SignalType},
+    enums::trading_action::{Direction, SignalSide, SignalType, *},
     structs::Symbol,
 };
 use glow_error::GlowError;
 use polars::prelude::*;
-use std::collections::HashMap;
 
 type GetClosureFnResult =
     Box<dyn Fn(&mut [Column]) -> PolarsResult<Option<Column>> + Send + Sync + 'static>;
 
 pub trait PositionsGenerator: Sync + Send {
     fn generates_signals(&self) -> Vec<SignalType>;
-    fn get_closure(
-        &self,
-        param_combination: Vec<FeatureParam>,
-        features_cache: &mut HashMap<&str, FeaturesCache>,
-    ) -> GetClosureFnResult;
+    fn get_closure(&self, param_combination: &Vec<FeatureParam>) -> GetClosureFnResult;
     fn compute(
         &self,
         lf: &LazyFrame,
         symbol: &Symbol,
         param_combination: Vec<FeatureParam>,
-        features_cache: &mut HashMap<&str, FeaturesCache>,
     ) -> Result<LazyFrame, GlowError> {
         let result_lf = lf.clone();
         let close_price_col = symbol.get_close_col();
         let output_type: SpecialEq<Arc<dyn FunctionOutputField>> =
-            GetOutput::from_type(DataType::UInt8);
+            GetOutput::from_type(DataType::List(Box::new(DataType::UInt8)));
         let arguments: &[Expr] =
             &param_combination
                 .iter()
@@ -36,7 +30,7 @@ pub trait PositionsGenerator: Sync + Send {
                     acc.push(col(param.feature_param_name));
                     acc
                 });
-        let closure = self.get_closure(param_combination, features_cache);
+        let closure = self.get_closure(&param_combination);
         let result_lf = result_lf.with_column(
             col(close_price_col)
                 .map_many(move |s| closure(s), arguments, output_type)
@@ -58,11 +52,7 @@ impl PositionsGenerator for SimpleEmaShortGenerator {
         ]
     }
 
-    fn get_closure(
-        &self,
-        param_combination: Vec<FeatureParam>,
-        features_cache: &mut HashMap<&str, FeaturesCache>,
-    ) -> GetClosureFnResult {
+    fn get_closure(&self, param_combination: &Vec<FeatureParam>) -> GetClosureFnResult {
         let param_combination = param_combination.clone();
         let closure = move |cols: &mut [Column]| {
             let close_prices: Vec<f32> = cols
@@ -72,8 +62,8 @@ impl PositionsGenerator for SimpleEmaShortGenerator {
                 .expect("")
                 .into_no_null_iter()
                 .collect();
-            let fast_ewma_col = param_combination[0].feature_param_name;
-            let slow_ewma_col = param_combination[1].feature_param_name;
+            // let fast_ewma_col = param_combination[0].feature_param_name;
+            // let slow_ewma_col = param_combination[1].feature_param_name;
             let fast_ewmas: Vec<f32> = cols
                 .get(1)
                 .expect("columns to have fast ewmas values")
@@ -92,13 +82,27 @@ impl PositionsGenerator for SimpleEmaShortGenerator {
                 param_combination[0].param_index as usize,
                 param_combination[1].param_index as usize,
             );
-            let mut signals: Vec<Option<Vec<u8>>> = vec![None];
+            let mut ca_builder: ListPrimitiveChunkedBuilder<UInt8Type> =
+                ListPrimitiveChunkedBuilder::new(
+                    "".into(),
+                    close_prices.len(),
+                    2 * close_prices.len(),
+                    DataType::UInt8,
+                );
+            let open_long_signal: u8 = SignalType::Open(Direction::Long).try_into().unwrap();
+            let open_short_signal: u8 = SignalType::Open(Direction::Short).try_into().unwrap();
+            let close_long_signal: u8 = SignalType::Close(SignalSide::Side(Direction::Long))
+                .try_into()
+                .unwrap();
+            let close_short_signal: u8 = SignalType::Close(SignalSide::Side(Direction::Short))
+                .try_into()
+                .unwrap();
             for (index, _) in close_prices.iter().enumerate() {
                 if index == 0 {
                     continue;
                 }
                 if index < min_window_to_calculate {
-                    signals.push(None);
+                    ca_builder.append_opt_slice(None);
                     continue;
                 }
                 let prev_fast_ewma = fast_ewmas[index - 1];
@@ -109,63 +113,24 @@ impl PositionsGenerator for SimpleEmaShortGenerator {
                 let fast_ewma_greater_than_slow_ewma = curr_fast_ewma > curr_slow_ewma;
                 let prev_fast_ewma_lesser_than_prev_slow_ewma = prev_fast_ewma < prev_slow_ewma;
                 let prev_fast_ewma_greater_than_prev_slow_ewma = prev_fast_ewma > prev_slow_ewma;
-
+                // fast_ema_greater_than_slow_ema && prev_fast_ema_lesser_than_prev_slow_ema -> long
+                // fast_ema_greater_than_slow_ema && prev_fast_ema_lesser_than_prev_slow_ema -> close_short
                 if fast_ewma_greater_than_slow_ewma && prev_fast_ewma_lesser_than_prev_slow_ewma {
-                    signals.push(Some(vec![SignalType::Open(Direction::Long).into()]));
+                    ca_builder.append_opt_slice(Some(&vec![open_long_signal, close_short_signal]));
                     continue;
                 }
+                // fast_ema_lesser_than_slow_ema && prev_fast_ema_greater_than_prev_slow_ema -> short
+                // fast_ema_lesser_than_slow_ema && (prev_fast_ema_greater_than_prev_slow_ema -> close_long
                 if fast_ewma_lesser_than_slow_ewma && prev_fast_ewma_greater_than_prev_slow_ewma {
-                    signals.push(Some(vec![SignalType::Open(Direction::Short).into()]));
+                    ca_builder.append_opt_slice(Some(&vec![open_short_signal, close_long_signal]));
                     continue;
                 }
-                signals.push(None);
+                ca_builder.append_opt_slice(None);
             }
+            let chunked_array: ChunkedArray<ListType> = ca_builder.finish();
+            let list_series = chunked_array.into_series();
+            Ok(Some(list_series.into()))
         };
-        // let short_col = SignalCategory::GoShort.get_column();
-        // let long_col = SignalCategory::GoLong.get_column();
-        // let close_short_col = SignalCategory::CloseShort.get_column();
-        // let close_long_col = SignalCategory::CloseLong.get_column();
-        // // let select_columns = vec![col("start_time"), col(signal_col)];
-        //
-        // let fast_ema_col = format!("{}_fast_ema", &symbols_pair.quote.name);
-        // let slow_ema_col = format!("{}_slow_ema", &symbols_pair.quote.name);
-        //
-        // let fast_ema_lesser_than_slow_ema = col(&fast_ema_col).lt(col(&slow_ema_col));
-        // let fast_ema_greater_than_slow_ema = col(&fast_ema_col).gt(col(&slow_ema_col));
-        //
-        // let prev_fast_ema_lesser_than_prev_slow_ema = col(&fast_ema_col)
-        //     .shift_and_fill(lit(1), lit(NULL))
-        //     .lt(col(&slow_ema_col).shift_and_fill(lit(1), lit(NULL)));
-        // let prev_fast_ema_greater_than_prev_slow_ema = col(&fast_ema_col)
-        //     .shift_and_fill(lit(1), lit(NULL))
-        //     .gt(col(&slow_ema_col).shift_and_fill(lit(1), lit(NULL)));
-        //
-        // let signal_lf = lf.clone().with_columns([
-        //     when(
-        //         fast_ema_lesser_than_slow_ema
-        //             .clone()
-        //             .and(prev_fast_ema_greater_than_prev_slow_ema.clone()),
-        //     )
-        //     .then(lit(1))
-        //     .otherwise(lit(0))
-        //     .alias(short_col),
-        //     when(
-        //         fast_ema_greater_than_slow_ema
-        //             .clone()
-        //             .and(prev_fast_ema_lesser_than_prev_slow_ema.clone()),
-        //     )
-        //     .then(lit(1))
-        //     .otherwise(lit(0))
-        //     .alias(long_col),
-        //     when(fast_ema_greater_than_slow_ema.and(prev_fast_ema_lesser_than_prev_slow_ema))
-        //         .then(lit(1))
-        //         .otherwise(lit(0))
-        //         .alias(close_short_col),
-        //     when(fast_ema_lesser_than_slow_ema.and(prev_fast_ema_greater_than_prev_slow_ema))
-        //         .then(lit(1))
-        //         .otherwise(lit(0))
-        //         .alias(close_long_col),
-        // ]);
         Box::new(closure)
     }
 }
