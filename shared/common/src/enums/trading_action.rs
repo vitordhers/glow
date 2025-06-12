@@ -1,5 +1,5 @@
-use std::ops::Not;
 use super::side::Side;
+use std::ops::Not;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
@@ -204,6 +204,7 @@ impl Action {
 pub enum TradingState {
     #[default]
     Neutral,
+    Bankrupt,
     Short,
     Long,
 }
@@ -216,6 +217,7 @@ impl Not for TradingState {
             TradingState::Neutral => TradingState::Neutral,
             TradingState::Short => TradingState::Long,
             TradingState::Long => TradingState::Short,
+            TradingState::Bankrupt => TradingState::Neutral,
         }
     }
 }
@@ -229,7 +231,13 @@ impl TradingState {
         match (signals, event) {
             (None, None) => prev_state,
             (None, Some(_)) => TradingState::Neutral,
-            (Some(_), Some(_)) => TradingState::Neutral,
+            (Some(_), Some(event)) => {
+                if event == 255 {
+                    TradingState::Bankrupt
+                } else {
+                    TradingState::Neutral
+                }
+            }
             (Some(signals), None) => match prev_state {
                 TradingState::Neutral => {
                     if signals.contains(&2) {
@@ -258,6 +266,7 @@ impl TradingState {
                         prev_state
                     }
                 }
+                TradingState::Bankrupt => prev_state,
             },
         }
     }
@@ -305,6 +314,7 @@ impl TradingState {
                         Direction::Long => TradingState::Short,
                     },
                 },
+                (TradingState::Bankrupt, _) => TradingState::Bankrupt,
             },
         }
     }
@@ -366,6 +376,7 @@ impl TradingState {
                 },
                 Action::Event(_) => TradingState::Neutral,
             },
+            TradingState::Bankrupt => prev_state,
         }
     }
 }

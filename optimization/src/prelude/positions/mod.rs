@@ -116,13 +116,13 @@ impl PositionsGenerator for SimpleEmaShortGenerator {
                 // fast_ema_greater_than_slow_ema && prev_fast_ema_lesser_than_prev_slow_ema -> long
                 // fast_ema_greater_than_slow_ema && prev_fast_ema_lesser_than_prev_slow_ema -> close_short
                 if fast_ewma_greater_than_slow_ewma && prev_fast_ewma_lesser_than_prev_slow_ewma {
-                    ca_builder.append_opt_slice(Some(&vec![open_long_signal, close_short_signal]));
+                    ca_builder.append_opt_slice(Some(&[open_long_signal, close_short_signal]));
                     continue;
                 }
                 // fast_ema_lesser_than_slow_ema && prev_fast_ema_greater_than_prev_slow_ema -> short
                 // fast_ema_lesser_than_slow_ema && (prev_fast_ema_greater_than_prev_slow_ema -> close_long
                 if fast_ewma_lesser_than_slow_ewma && prev_fast_ewma_greater_than_prev_slow_ewma {
-                    ca_builder.append_opt_slice(Some(&vec![open_short_signal, close_long_signal]));
+                    ca_builder.append_opt_slice(Some(&[open_short_signal, close_long_signal]));
                     continue;
                 }
                 ca_builder.append_opt_slice(None);

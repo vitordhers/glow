@@ -115,6 +115,10 @@ impl StrategyOptimizer {
         features_lf = features_lf.drop(cols_to_drop.iter().copied().collect::<Vec<_>>());
         Ok(features_lf)
     }
+
+    pub fn optimize(&self) {
+        todo!()
+    }
 }
 
 fn set_series_as_lf_col(lf: LazyFrame, feature_param_name: &str, series: Series) -> LazyFrame {
